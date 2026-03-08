@@ -1,6 +1,5 @@
 import React from "react";
 import { Image, View } from "react-native";
-import { spacing } from "../theme";
 
 const sizeMap = { s: 40, m: 64, xl: 96 };
 
