@@ -1,0 +1,36 @@
+{
+  "name": "visual-regression",
+  "version": "1.0.0",
+  "description": "Projet indépendant de régression visuelle pour Storybook, réutilisable dans tout projet",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./components": "./src/components/index.ts"
+  },
+  "scripts": {},
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-native": "*",
+    "expo-clipboard": "*",
+    "react-native-gesture-handler": "*",
+    "react-native-reanimated": "*",
+    "react-native-svg": "*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^24.0.10",
+    "@types/pngjs": "^6.0.5",
+    "bun": "^1.3.2",
+    "cross-env": "^7.0.3",
+    "pixelmatch": "^7.1.0",
+    "playwright": "^1.54.2",
+    "pngjs": "^7.0.0",
+    "storybook": "^10.1.11",
+    "typescript": "~5.9.2"
+  },
+  "files": [
+    "src",
+    "scripts"
+  ]
+}

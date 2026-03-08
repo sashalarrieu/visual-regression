@@ -1,0 +1,108 @@
+import React from "react";
+import * as Clipboard from "expo-clipboard";
+import { getDeviceStyle } from "../utils/VisualRegression";
+import { ScreenshotDetails } from "./ScreenshotDetails";
+import type { Node } from "../types";
+import { Box } from "../primitives/Box";
+import { Button } from "../primitives/Button";
+import { ToggleField } from "../primitives/ToggleField";
+import { Typo } from "../primitives/Typo";
+import { spacing } from "../theme";
+
+export type { StoryScreenshotsPath } from "../types";
+
+export type VisualRegressionTopBarProps = {
+  currentStory?: Node;
+  treeType: "new" | "diff";
+  showHeatmap: boolean;
+  countPixelDiff?: number | null;
+  storyScreenshotsPath?: import("../types").StoryScreenshotsPath;
+  onPrev: () => void;
+  onNext: () => void;
+  onValid: () => void;
+  onDelete: () => void;
+  onShowDeleted: () => void;
+  onToggleHeatmap: (value: boolean) => void;
+  onOpenCompareModal: () => void;
+};
+
+const DIFF_SCREENSHOT_NAME = "__diff__";
+const NEW_SCREENSHOT_NAME = "__new__";
+
+export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
+  currentStory,
+  treeType,
+  showHeatmap,
+  countPixelDiff,
+  storyScreenshotsPath,
+  onPrev,
+  onNext,
+  onValid,
+  onDelete,
+  onShowDeleted,
+  onToggleHeatmap,
+  onOpenCompareModal,
+}) => {
+  const copyStoryPathToClipboard = () => {
+    const path = currentStory
+      ? currentStory.path.split(`/${treeType === "new" ? NEW_SCREENSHOT_NAME : DIFF_SCREENSHOT_NAME}`)[0]
+      : "";
+    Clipboard.setStringAsync(path);
+  };
+
+  return (
+    <Box>
+      <Box gap="m" height={40} flexDirection="row" alignItems="center" justifyContent="space-between">
+        <Box gap="m" flexDirection="row" alignItems="center" justifyContent="space-between">
+          <Button icon={{ name: "chevron-left" }} color="base" onPress={onPrev} />
+          <Button label="Valider" color="primary" width={80} onPress={onValid} />
+          <Button label="Refuser" color="danger" width={80} onPress={onDelete} />
+          <Button icon={{ name: "chevron-right" }} color="base" onPress={onNext} />
+          <Button icon={{ name: "clone" }} color="primary" onPress={copyStoryPathToClipboard} />
+          <Button icon={{ name: "arrows-retweet" }} color="primary" onPress={onOpenCompareModal} />
+          <Button icon={{ name: "clock-arrow-rotate" }} color="primary" onPress={onShowDeleted} />
+        </Box>
+        <ScreenshotDetails
+          deviceName={currentStory?.deviceName}
+          storyId={currentStory?.storyId || currentStory?.name}
+          countPixelDiff={showHeatmap && storyScreenshotsPath?.diff ? countPixelDiff : undefined}
+          showHeatmap={showHeatmap && !!storyScreenshotsPath?.diff}
+          getDeviceStyle={getDeviceStyle}
+        />
+        <Box
+          px="s"
+          width={142}
+          justifyContent="center"
+          alignItems="center"
+          borderRadius="base"
+          backgroundColor="newTheme_surface"
+          style={{ opacity: treeType === "new" ? 0.4 : 1 } as any}
+        >
+          <ToggleField
+            title={showHeatmap ? "Heatmap" : "Split view"}
+            value={showHeatmap}
+            onChange={v => onToggleHeatmap(v ?? false)}
+            disabled={treeType === "new"}
+          />
+        </Box>
+      </Box>
+      <Box gap="m" height={spacing.m} width="100%" flexDirection="row" alignItems="center" justifyContent="space-between">
+        {treeType === "diff" && !showHeatmap && (
+          <Typo variant="legend_regular" color="newTheme_textLegend" textTransform="uppercase">
+            Originale
+          </Typo>
+        )}
+        {((treeType === "diff" && !showHeatmap) || treeType === "new") && (
+          <Typo variant="legend_regular" color="newTheme_textLegend" textTransform="uppercase">
+            Nouvelle
+          </Typo>
+        )}
+        {treeType === "diff" && showHeatmap && (
+          <Typo variant="legend_regular" color="newTheme_textLegend" textTransform="uppercase">
+            Différence
+          </Typo>
+        )}
+      </Box>
+    </Box>
+  );
+};
