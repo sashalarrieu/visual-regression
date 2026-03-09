@@ -10,6 +10,7 @@ import { Typo } from "@atoms/Typo";
 import { CompareModal } from "@components/CompareModal";
 import { ContentPanel } from "@components/ContentPanel";
 import { DeletedItemRow } from "@components/DeletedItemRow";
+import { ErrorState } from "@components/ErrorState";
 import { TreePanel } from "@components/TreePanel";
 import { VisualRegressionTopBar } from "@components/VisualRegressionTopBar";
 import { VR_SERVER_URL } from "@constants/constants";
@@ -128,14 +129,28 @@ const useDevicesConfig = (devicesProp?: DeviceDisplayConfig[]) => {
     setError(null);
     fetch(`${VR_SERVER_URL}/regressions/config/devices`)
       .then(res => {
-        if (!res.ok) throw new Error("Failed to fetch devices config");
+        if (!res.ok) {
+          throw new Error(
+            `Le serveur VR a répondu avec un statut ${res.status} (${res.statusText || "inconnu"}) pour la config devices.`,
+          );
+        }
         return res.json();
       })
       .then(data => {
         if (!cancelled && Array.isArray(data?.devices)) setDevices(data.devices);
       })
       .catch(err => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) {
+          let message: string;
+          if (err instanceof TypeError || String(err).includes("Failed to fetch")) {
+            message = `Impossible de contacter le serveur VR (${VR_SERVER_URL}). Vérifie qu'il est bien démarré (script "vr:server") et accessible depuis ta machine.`;
+          } else if (err instanceof Error) {
+            message = err.message;
+          } else {
+            message = String(err);
+          }
+          setError(message);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -284,19 +299,11 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   }
   if (devicesError) {
     return (
-      <Box
-        flex={1}
-        justifyContent="center"
-        alignItems="center"
-        p="m"
-      >
-        <Typo
-          variant="paragraphe_regular"
-          color="newTheme_danger"
-        >
-          Erreur config devices : {devicesError}
-        </Typo>
-      </Box>
+      <ErrorState
+        title="Erreur de configuration des devices"
+        message={devicesError}
+        hint={`L'interface ne peut pas s'afficher tant que la configuration des devices n'est pas disponible. Vérifie que le serveur VR est démarré (script "vr:server") et que le fichier "vr-devices.config.cjs" existe à la racine de ton projet.`}
+      />
     );
   }
 

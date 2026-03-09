@@ -1,15 +1,36 @@
 # @setshao/visual-regression
 
-Interface de régression visuelle pour Storybook (React Native / Expo). Ce package fournit l’UI pour visualiser, valider ou refuser les screenshots de régression ; il est réutilisable dans tout projet qui utilise Storybook et un serveur de régression compatible.
+Solution de régression visuelle **clé en main** pour tout projet qui possède un **Storybook**, quelle que soit la techno.  
+Le package fournit une **app web de régression dédiée** (UI intégrée dans le package) pour parcourir les stories, visualiser les screenshots (NEW / DIFF), voir les heatmaps, naviguer entre devices et gérer l’historique des validations / refus.
+
+---
+
+## Objectif
+
+- **But principal**  
+  Fournir une solution complète de régression visuelle autour de Storybook, en prenant en charge **à la fois** l’interface web de validation et **toute la mécanique de capture/comparaison** (Playwright, serveur VR, orchestration).
+
+- **Ce que le package apporte**  
+  - **Interface web intégrée** : l’UI VisualRegressions est interne au package et exposée via l’app web servie par `visual-regression` (l’hôte n’a pas à importer de composants UI dans son app).
+  - **Logique complète de VR** : récupération des régressions, affichage des différences (NEW / DIFF), heatmap, historique des refusés, navigation entre stories et devices.
+  - **Scripts d’orchestration** : serveur VR, captures/comparaisons Playwright, launcher qui gèrent Storybook et la génération/lecture des screenshots sans que le projet hôte doive maintenir sa propre “infra VR”.
+  - **Gestion du dossier de screenshots** : le répertoire de screenshots (par défaut `public/`) est géré par `visual-regression` ; s’il n’existe pas, le package s’occupe de le créer et de l’utiliser pour stocker/servir les images.
+
+- **Rôle du projet hôte**  
+  - Posséder un **Storybook** (les stories sont la source de vérité pour les captures).
+  - Fournir une **configuration de devices** (`vr-devices.config.cjs` au format attendu).
+  - Lancer les scripts `visual-regression` depuis la **racine** du projet (ou via `VR_PROJECT_ROOT`).
+
+En résumé, `visual-regression` vise à **industrialiser la régression visuelle autour de Storybook**, avec un rôle minimal pour le projet hôte : configurer ses devices et lancer les scripts.
 
 ---
 
 ## Fonctionnement
 
-- **Ce package** : composants React (arbre des régressions, panneau de comparaison, modales de validation/refus), logique cliente (appels au serveur VR), **et les scripts** (serveur VR, launcher, comparaison Playwright). Tout tourne en autonomie : le package ne laisse rien à maintenir dans le projet hôte côté scripts.
-- **Le projet hôte** : à la racine, un fichier `vr-devices.config.cjs`, les dossiers `.storybook/` et `public/` pour les screenshots. On lance les commandes VR depuis la **racine du projet hôte** (ou avec `VR_PROJECT_ROOT` pointant vers cette racine) ; les scripts du package utilisent alors cette racine pour charger la config et servir les fichiers.
+- **Ce package** : app web de régression (UI intégrée), logique cliente (navigation dans les stories/devices, visualisation NEW / DIFF avec heatmap, validation/refus, historique), **et les scripts** (serveur VR, launcher, comparaison Playwright). Tout tourne en autonomie : le package ne laisse rien à maintenir dans le projet hôte côté scripts ou UI.
+- **Le projet hôte** : à la racine, un fichier `vr-devices.config.cjs` et un dossier `.storybook/` pour Storybook. Le répertoire de screenshots (par défaut `public/`) est automatiquement créé/utilisé par le package si nécessaire. On lance les commandes VR depuis la **racine du projet hôte** (ou avec `VR_PROJECT_ROOT` pointant vers cette racine) ; les scripts du package utilisent alors cette racine pour charger la config et servir les fichiers.
 
-**Prérequis côté projet hôte** : `vr-devices.config.cjs`, `.storybook/`, `public/`. Les **devices** se configurent en format **Playwright** (voir section suivante).
+**Prérequis côté projet hôte** : `vr-devices.config.cjs`, `.storybook/`. Les **devices** se configurent en format **Playwright** (voir section suivante). Le dossier `public/` est géré automatiquement par `visual-regression` (créé si absent).
 
 ---
 
@@ -72,22 +93,10 @@ yarn add @setshao/visual-regression
 
 ## Utilisation dans un projet hôte
 
-### 1. Afficher l’écran de régression
+Dans l’utilisation standard, tu **n’as rien à importer dans ton app** : tu lances les scripts depuis la racine du projet hôte et tu ouvres l’URL de l’app web de régression dans ton navigateur.  
+L’UI VisualRegressions est entièrement embarquée dans le package.
 
-Afficher l’UI à la place du reste de l’app (par exemple dans la racine de ton router ou via une route dédiée) :
-
-```tsx
-import { VisualRegressions, fromVRDeviceConfig } from "@setshao/visual-regression";
-
-const vrDevicesConfig = require("../vr-devices.config.cjs");
-const devices = fromVRDeviceConfig(vrDevicesConfig);
-
-return <VisualRegressions devices={devices} />;
-```
-
-La prop `devices` est **obligatoire** : elle doit contenir pour chaque device au moins `name`, `label`, `icon`, `color` (fournis par la config du projet hôte).
-
-### 2. Scripts fournis par le package (à appeler depuis le projet hôte)
+### 1. Scripts fournis par le package (à appeler depuis le projet hôte)
 
 Le package contient les scripts dans `scripts/`. Depuis le **projet hôte**, ajoute dans ton `package.json` des scripts qui pointent vers le package (en lançant depuis la racine du projet pour que `process.cwd()` soit la racine) :
 
@@ -112,7 +121,7 @@ Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du pr
 }
 ```
 
-### 3. Variables d’environnement
+### 2. Variables d’environnement
 
 | Variable           | Description |
 |--------------------|-------------|
