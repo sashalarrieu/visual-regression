@@ -1,6 +1,7 @@
 import React from "react";
-import { View, Text } from "react-native";
-import { colors, type ColorKey } from "../theme";
+import { Text, View } from "react-native";
+
+import { colors, type ColorKey } from "@themes/theme";
 
 export type BulletProps = {
   value: number;

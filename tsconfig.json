@@ -1,17 +1,41 @@
 {
   "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "noImplicitAny": false,
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "strict": true,
-    "skipLibCheck": true,
-    "jsx": "react-jsx",
     "declaration": true,
     "outDir": "dist",
     "rootDir": ".",
     "baseUrl": ".",
-    "paths": {}
+    "paths": {
+      "@atoms": ["./src/atoms"],
+      "@atoms/*": ["./src/atoms/*"],
+      "@constants": ["./src/constants"],
+      "@constants/*": ["./src/constants/*"],
+      "@components": ["./src/components"],
+      "@components/*": ["./src/components/*"],
+      "@hooks": ["./src/hooks"],
+      "@hooks/*": ["./src/hooks/*"],
+      "@locales": ["./src/locales"],
+      "@locales/*": ["./src/locales/*"],
+      "@providers": ["./src/providers"],
+      "@providers/*": ["./src/providers/*"],
+      "@scripts": ["./src/scripts"],
+      "@scripts/*": ["./src/scripts/*"],
+      "@themes": ["./src/themes"],
+      "@themes/*": ["./src/themes/*"],
+      "@app-types": ["./src/types"],
+      "@app-types/*": ["./src/types/*"],
+      "@utils": ["./src/utils"],
+      "@utils/*": ["./src/utils/*"],
+    }
   },
-  "include": ["src/**/*", "scripts/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"],
+  "extends": "expo/tsconfig.base"
 }

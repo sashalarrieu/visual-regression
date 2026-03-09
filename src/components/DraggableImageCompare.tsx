@@ -1,24 +1,17 @@
-import React, { useEffect, useState } from "react";
-import { Image, PanResponder, type LayoutChangeEvent } from "react-native";
-import { Box } from "../primitives/Box";
-import { colors } from "../theme";
+import { useEffect, useState } from "react";
+import { Image, PanResponder, type LayoutChangeEvent, type ViewStyle } from "react-native";
 
-const CONTAINER_BORDER_WIDTH = 1;
-const HITBOX_BORDER = 100;
-const TOTAL_CONTAINER_BORDER_WIDTH = CONTAINER_BORDER_WIDTH * 2;
-const SEPARATOR_CONTAINER_OFFSET = TOTAL_CONTAINER_BORDER_WIDTH / 2 + 1;
+import { Box } from "@atoms/Box";
+import { HITBOX_BORDER, SEPARATOR_CONTAINER_OFFSET, TOTAL_CONTAINER_BORDER_WIDTH } from "@constants/constants";
+import { colors } from "@themes/theme";
 
-type ImageCompareProps = {
+export type ImageCompareProps = {
   leftImage?: string;
   rightImage?: string;
   separatorWidth?: number;
 };
 
-export function DraggableImageCompare({
-  leftImage,
-  rightImage,
-  separatorWidth = 2,
-}: ImageCompareProps) {
+export const DraggableImageCompare = ({ leftImage, rightImage, separatorWidth = 2 }: ImageCompareProps) => {
   const [separatorX, setSeparatorX] = useState(500);
   const [containerWidth, setContainerWidth] = useState(0);
   const [containerHeight, setContainerHeight] = useState(0);
@@ -26,7 +19,11 @@ export function DraggableImageCompare({
   const [rightDims, setRightDims] = useState<{ w: number; h: number } | null>(null);
 
   const fetchImageSize = (uri: string, setDims: (d: { w: number; h: number }) => void) => {
-    Image.getSize(uri, (w, h) => setDims({ w, h }), () => console.warn("Impossible de charger l'image", uri));
+    Image.getSize(
+      uri,
+      (w, h) => setDims({ w, h }),
+      () => console.warn("Impossible de charger l'image", uri),
+    );
   };
 
   useEffect(() => {
@@ -115,7 +112,7 @@ export function DraggableImageCompare({
           top={0}
           left={0}
           height={containerHeight - TOTAL_CONTAINER_BORDER_WIDTH}
-          style={{ width: Math.min(separatorX, containerWidth - SEPARATOR_CONTAINER_OFFSET) } as any}
+          style={{ width: Math.min(separatorX, containerWidth - SEPARATOR_CONTAINER_OFFSET) } as ViewStyle}
         >
           <Image
             key={leftImage}
@@ -131,22 +128,30 @@ export function DraggableImageCompare({
         </Box>
       )}
       <Box
-        {...(panResponder.panHandlers as any)}
+        {...(panResponder.panHandlers as Record<string, unknown>)}
         position="absolute"
         top={0}
         bottom={0}
         zIndex={10}
-        style={{
-          left: separatorX - separatorWidth / 2 - HITBOX_BORDER / 2,
-          width: HITBOX_BORDER,
-          cursor: "ew-resize",
-        } as any}
+        style={
+          {
+            left: separatorX - separatorWidth / 2 - HITBOX_BORDER / 2,
+            width: HITBOX_BORDER,
+            cursor: "ew-resize",
+          } as unknown as ViewStyle
+        }
       >
         <Box
           flex={1}
-          style={{ left: HITBOX_BORDER / 2, width: separatorWidth, backgroundColor: colors.newTheme_danger } as any}
+          style={
+            {
+              left: HITBOX_BORDER / 2,
+              width: separatorWidth,
+              backgroundColor: colors.newTheme_danger,
+            } as ViewStyle
+          }
         />
       </Box>
     </Box>
   );
-}
+};

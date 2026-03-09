@@ -1,3 +1,9 @@
+/**
+ * Point d'entrée du package @setshao/visual-regression (API consommée par les projets hôtes).
+ * L'app Expo standalone utilise src/index.tsx ; ce fichier est utilisé pour les imports
+ * du type : import { VisualRegressions, fromVRDeviceConfig } from "@setshao/visual-regression"
+ */
 export { VisualRegressions } from "./VisualRegressions";
-export { createVisualRegressionActions, VR_SERVER_URL, DeviceName } from "./utils/VisualRegression";
-export type { Node, StoryScreenshotsPath } from "./types";
+export type { VisualRegressionsProps } from "./VisualRegressions";
+export type { DeviceDisplayConfig, DeviceStyle } from "./types/types";
+export { createVisualRegressionActions, fromVRDeviceConfig } from "./utils";

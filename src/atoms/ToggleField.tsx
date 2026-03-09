@@ -1,6 +1,7 @@
 import React from "react";
-import { View, Text, Switch } from "react-native";
-import { spacing } from "../theme";
+import { Switch, Text, View } from "react-native";
+
+import { spacing } from "@themes/theme";
 
 export type ToggleFieldProps = {
   title: string;
@@ -12,6 +13,10 @@ export type ToggleFieldProps = {
 export const ToggleField: React.FC<ToggleFieldProps> = ({ title, value, onChange, disabled }) => (
   <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.s }}>
     <Text style={{ fontSize: 14 }}>{title}</Text>
-    <Switch value={value} onValueChange={onChange} disabled={disabled} />
+    <Switch
+      value={value}
+      onValueChange={onChange}
+      disabled={disabled}
+    />
   </View>
 );

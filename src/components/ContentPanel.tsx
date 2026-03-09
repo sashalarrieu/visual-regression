@@ -1,29 +1,25 @@
 import React, { useMemo } from "react";
 import { ActivityIndicator, Image } from "react-native";
-import { AnimatedLoader } from "./AnimatedLoader";
-import { ScreenshotDetails } from "./ScreenshotDetails";
-import { Box } from "../primitives/Box";
-import { Typo } from "../primitives/Typo";
-import { DraggableImageCompare } from "./DraggableImageCompare";
-import { addCacheBusting, getDeviceStyle, type DeviceName } from "../utils/VisualRegression";
-import { colors } from "../theme";
 
-export type ImageUrls = {
-  original?: string;
-  temp?: string;
-  diff?: string;
-  new?: string;
-};
+import type { StoryScreenshotsPath } from "@app-types/types";
+import { Box } from "@atoms/Box";
+import { Typo } from "@atoms/Typo";
+import { AnimatedLoader } from "@components/AnimatedLoader";
+import { DraggableImageCompare } from "@components/DraggableImageCompare";
+import { ScreenshotDetails } from "@components/ScreenshotDetails";
+import { useDeviceConfig } from "@providers/DeviceConfigProvider";
+import { colors } from "@themes/theme";
+import { addCacheBusting } from "@utils";
 
 export type ContentPanelProps = {
   tree: unknown;
   treeType: "new" | "diff";
   showHeatmap: boolean;
-  imageUrls: ImageUrls;
+  imageUrls: StoryScreenshotsPath;
   isRegenerating?: boolean;
   imageCacheKey?: number;
   storyId?: string;
-  deviceName?: DeviceName;
+  deviceName?: string;
 };
 
 export const ContentPanel: React.FC<ContentPanelProps> = ({
@@ -36,6 +32,7 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
   storyId,
   deviceName,
 }) => {
+  const { getDeviceStyle } = useDeviceConfig();
   const cachedImageUrls = useMemo(
     () => ({
       original: addCacheBusting(imageUrls.original, imageCacheKey),
@@ -65,7 +62,9 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
   }
 
   if (isRegenerating) {
-    const deviceColor = deviceName ? colors[getDeviceStyle(deviceName).color as keyof typeof colors] : colors.newTheme_fantasy;
+    const deviceColor = deviceName
+      ? colors[getDeviceStyle(deviceName).color as keyof typeof colors]
+      : colors.newTheme_fantasy;
     return (
       <Box
         flex={1}
@@ -78,10 +77,17 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
         borderColor="newTheme_border"
       >
         <AnimatedLoader />
-        <ActivityIndicator size="large" color={deviceColor} />
+        <ActivityIndicator
+          size="large"
+          color={deviceColor}
+        />
         <Box gap="s">
           <Typo variant="paragraphe_regular">Régénération de l'image en cours...</Typo>
-          <ScreenshotDetails deviceName={deviceName} storyId={storyId} getDeviceStyle={getDeviceStyle} bold />
+          <ScreenshotDetails
+            deviceName={deviceName}
+            storyId={storyId}
+            bold
+          />
         </Box>
       </Box>
     );
@@ -97,9 +103,13 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
           borderRadius="base"
           borderWidth={1}
           borderColor="newTheme_border"
-          style={{ padding: 2 } as any}
+          style={{ padding: 2 }}
         >
-          <Box flex={1} alignItems="center" justifyContent="center">
+          <Box
+            flex={1}
+            alignItems="center"
+            justifyContent="center"
+          >
             <Image
               key={cachedImageUrls.new}
               source={{ uri: cachedImageUrls.new }}
@@ -116,9 +126,13 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
           borderRadius="base"
           borderWidth={1}
           borderColor="newTheme_border"
-          style={{ padding: 2 } as any}
+          style={{ padding: 2 }}
         >
-          <Box flex={1} alignItems="center" justifyContent="center">
+          <Box
+            flex={1}
+            alignItems="center"
+            justifyContent="center"
+          >
             <Image
               key={cachedImageUrls.diff}
               source={{ uri: cachedImageUrls.diff }}
@@ -135,13 +149,14 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
           borderRadius="base"
           borderWidth={1}
           borderColor="newTheme_border"
-          style={{ padding: 2 } as any}
+          style={{ padding: 2 }}
         >
-          <DraggableImageCompare
-            key={`${cachedImageUrls.original || ""}-${cachedImageUrls.temp || ""}-${imageCacheKey || 0}`}
-            leftImage={cachedImageUrls.original}
-            rightImage={cachedImageUrls.temp}
-          />
+          <React.Fragment key={`${cachedImageUrls.original || ""}-${cachedImageUrls.temp || ""}-${imageCacheKey || 0}`}>
+            <DraggableImageCompare
+              leftImage={cachedImageUrls.original}
+              rightImage={cachedImageUrls.temp}
+            />
+          </React.Fragment>
         </Box>
       )}
     </>

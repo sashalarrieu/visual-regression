@@ -1,18 +1,28 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList } from "react-native";
-import { createVisualRegressionActions, VR_SERVER_URL } from "./utils/VisualRegression";
-import { CompareModal } from "./components/CompareModal";
-import { ContentPanel, type ImageUrls } from "./components/ContentPanel";
-import { DeletedItemRow, type DeletedItem } from "./components/DeletedItemRow";
-import { TreePanel, type Node } from "./components/TreePanel";
-import { VisualRegressionTopBar, type StoryScreenshotsPath } from "./components/VisualRegressionTopBar";
-import { Box } from "./primitives/Box";
-import { Divider } from "./primitives/Divider";
-import { EndOfList } from "./primitives/EndOfList";
-import { Modal } from "./primitives/Modal";
-import { spacing } from "./theme";
 
-function useServerEvents(onEvent: () => void) {
+import type { DeletedItem, DeviceDisplayConfig, Node, StoryScreenshotsPath } from "@app-types/types";
+import { Box } from "@atoms/Box";
+import { Divider } from "@atoms/Divider";
+import { EndOfList } from "@atoms/EndOfList";
+import { Modal } from "@atoms/Modal";
+import { Typo } from "@atoms/Typo";
+import { CompareModal } from "@components/CompareModal";
+import { ContentPanel } from "@components/ContentPanel";
+import { DeletedItemRow } from "@components/DeletedItemRow";
+import { TreePanel } from "@components/TreePanel";
+import { VisualRegressionTopBar } from "@components/VisualRegressionTopBar";
+import { VR_SERVER_URL } from "@constants/constants";
+import { DeviceConfigProvider } from "@providers/DeviceConfigProvider";
+import { spacing } from "@themes/theme";
+import { createVisualRegressionActions } from "@utils";
+
+export type VisualRegressionsProps = {
+  /** Config d'affichage des devices (label, icon, color). Optionnel : si absent, récupérée depuis le serveur VR (GET /regressions/config/devices, depuis vr-devices.config.cjs). */
+  devices?: DeviceDisplayConfig[];
+};
+
+const useServerEvents = (onEvent: () => void) => {
   const onEventRef = useRef(onEvent);
   useEffect(() => {
     onEventRef.current = onEvent;
@@ -27,7 +37,9 @@ function useServerEvents(onEvent: () => void) {
           const data = JSON.parse(event.data);
           if (data.type === "cache-updated") onEventRef.current();
           else if (data.type === "connected" && data.lastUpdate) onEventRef.current();
-        } catch {}
+        } catch {
+          /* ignore parse errors */
+        }
       };
       eventSource.onerror = () => {
         if (eventSource?.readyState === EventSource.CLOSED) setTimeout(() => eventSource?.close(), 2000);
@@ -39,9 +51,9 @@ function useServerEvents(onEvent: () => void) {
       eventSource?.close();
     };
   }, []);
-}
+};
 
-function useRegressionTrees() {
+const useRegressionTrees = () => {
   const [data, setData] = useState<{ tree: Node | null; lastUpdate: number }>({ tree: null, lastUpdate: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -73,9 +85,9 @@ function useRegressionTrees() {
   useServerEvents(handleServerEvent);
 
   return { ...data, loading, error, refresh: fetchTrees };
-}
+};
 
-function useDeletedRegressions() {
+const useDeletedRegressions = () => {
   const [deletedList, setDeletedList] = useState<DeletedItem[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -96,14 +108,53 @@ function useDeletedRegressions() {
   useServerEvents(fetchDeleted);
 
   return { deletedList, loading, refresh: fetchDeleted };
-}
+};
 
-export const VisualRegressions = () => {
+const useDevicesConfig = (devicesProp?: DeviceDisplayConfig[]) => {
+  const hasProp = Boolean(devicesProp && devicesProp.length > 0);
+  const [devices, setDevices] = useState<DeviceDisplayConfig[]>(devicesProp ?? []);
+  const [loading, setLoading] = useState(!hasProp);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (devicesProp?.length) {
+      setDevices(devicesProp);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetch(`${VR_SERVER_URL}/regressions/config/devices`)
+      .then(res => {
+        if (!res.ok) throw new Error("Failed to fetch devices config");
+        return res.json();
+      })
+      .then(data => {
+        if (!cancelled && Array.isArray(data?.devices)) setDevices(data.devices);
+      })
+      .catch(err => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [devicesProp]);
+
+  return { devices, loading, error };
+};
+
+export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsProps) => {
   const [showDeleted, setShowDeleted] = useState(false);
   const [showCompareModal, setShowCompareModal] = useState(false);
   const [showHeatmap, setShowHeatmap] = useState(false);
   const [currentStory, setCurrentStory] = useState<Node | undefined>();
 
+  const { devices, loading: devicesLoading, error: devicesError } = useDevicesConfig(devicesProp);
   const { tree, loading, refresh } = useRegressionTrees();
   const { deletedList, refresh: refreshDeleted } = useDeletedRegressions();
 
@@ -112,12 +163,15 @@ export const VisualRegressions = () => {
     return currentStory.storyType;
   }, [currentStory]);
 
-  const imageUrls = useMemo<ImageUrls>(
+  const imageUrls = useMemo<StoryScreenshotsPath>(
     () => currentStory?.imageUrls || { original: undefined, temp: undefined, diff: undefined, new: undefined },
     [currentStory],
   );
 
-  const storyScreenshotsPath = useMemo<StoryScreenshotsPath | undefined>(() => currentStory?.imagePaths, [currentStory]);
+  const storyScreenshotsPath = useMemo<StoryScreenshotsPath | undefined>(
+    () => currentStory?.imagePaths,
+    [currentStory],
+  );
 
   const flattenTree = useCallback((node: Node | null): Node[] => {
     if (!node) return [];
@@ -216,75 +270,119 @@ export const VisualRegressions = () => {
     }
   }, [currentStory, regeneratingPaths]);
 
-  return (
-    <>
-      <Box flex={1} flexDirection="row" backgroundColor="newTheme_background">
-        <TreePanel
-          tree={tree}
-          loading={loading}
-          onRefresh={refresh}
-          onNodeClick={goTo}
-          currentStory={currentStory}
-          onCompareStoryNode={handleCompareStoryFromTree}
-          regeneratingPaths={regeneratingPaths}
-        />
-        <Divider orientation="vertical" />
-        <Box flex={1} p="m">
-          <VisualRegressionTopBar
-            currentStory={currentStory}
-            treeType={treeType}
-            showHeatmap={showHeatmap}
-            countPixelDiff={showHeatmap && storyScreenshotsPath?.diff ? currentStory?.countPixelDiff : undefined}
-            storyScreenshotsPath={storyScreenshotsPath}
-            onPrev={goPrev}
-            onNext={goNext}
-            onValid={() => handleValid(storyScreenshotsPath)}
-            onDelete={() => handleDelete(storyScreenshotsPath)}
-            onShowDeleted={() => setShowDeleted(true)}
-            onToggleHeatmap={setShowHeatmap}
-            onOpenCompareModal={() => setShowCompareModal(true)}
-          />
-          <ContentPanel
-            tree={tree}
-            treeType={treeType}
-            showHeatmap={showHeatmap}
-            imageUrls={imageUrls}
-            isRegenerating={currentStory ? regeneratingPaths.has(currentStory.path) : false}
-            imageCacheKey={imageCacheKey}
-            storyId={currentStory?.storyId}
-            deviceName={currentStory?.deviceName}
-          />
-        </Box>
+  if (devicesLoading) {
+    return (
+      <Box
+        flex={1}
+        justifyContent="center"
+        alignItems="center"
+        p="m"
+      >
+        <Typo variant="paragraphe_regular">Chargement de la config devices…</Typo>
       </Box>
-      <Modal
-        isOpen={showDeleted}
-        onClose={() => setShowDeleted(false)}
-        header={{
-          title: { text: "Historique des refusés" },
-          subtitle:
-            "Les régressions visuelles (DIFF) refusées seront ignorées lors de la prochaine génération de VR. Les nouvelles screenshots (NEW) qui ont été refusées seront, quand à elles, regénénées",
-        }}
-        content={
-          <FlatList
-            data={deletedList}
-            contentContainerStyle={{ flex: 1, gap: spacing.m, paddingBottom: 50 }}
-            keyExtractor={item => item.fullPath}
-            showsVerticalScrollIndicator
-            renderItem={({ item }) => <DeletedItemRow item={item} onRestore={handleRestore} />}
-            ListEmptyComponent={<EndOfList emptyText="Aucune screenshot refusée" />}
+    );
+  }
+  if (devicesError) {
+    return (
+      <Box
+        flex={1}
+        justifyContent="center"
+        alignItems="center"
+        p="m"
+      >
+        <Typo
+          variant="paragraphe_regular"
+          color="newTheme_danger"
+        >
+          Erreur config devices : {devicesError}
+        </Typo>
+      </Box>
+    );
+  }
+
+  return (
+    <DeviceConfigProvider deviceConfigs={devices}>
+      <>
+        <Box
+          flex={1}
+          flexDirection="row"
+          backgroundColor="newTheme_background"
+        >
+          <TreePanel
+            tree={tree}
+            loading={loading}
+            onRefresh={refresh}
+            onNodeClick={goTo}
+            currentStory={currentStory}
+            onCompareStoryNode={handleCompareStoryFromTree}
+            regeneratingPaths={regeneratingPaths}
           />
-        }
-      />
-      <CompareModal
-        visible={showCompareModal}
-        onClose={() => setShowCompareModal(false)}
-        deletedList={deletedList}
-        allList={allList}
-        onCompareSelected={handleCompareSelected}
-        onCompareStory={handleCompareStory}
-        onCompareByType={handleCompareByType}
-        onCompareAllStories={handleCompareAllStories}
-      />
-    </>
+          <Divider orientation="vertical" />
+          <Box
+            flex={1}
+            p="m"
+          >
+            <VisualRegressionTopBar
+              currentStory={currentStory}
+              treeType={treeType}
+              showHeatmap={showHeatmap}
+              countPixelDiff={showHeatmap && storyScreenshotsPath?.diff ? currentStory?.countPixelDiff : undefined}
+              storyScreenshotsPath={storyScreenshotsPath}
+              onPrev={goPrev}
+              onNext={goNext}
+              onValid={() => handleValid(storyScreenshotsPath)}
+              onDelete={() => handleDelete(storyScreenshotsPath)}
+              onShowDeleted={() => setShowDeleted(true)}
+              onToggleHeatmap={setShowHeatmap}
+              onOpenCompareModal={() => setShowCompareModal(true)}
+            />
+            <ContentPanel
+              tree={tree}
+              treeType={treeType}
+              showHeatmap={showHeatmap}
+              imageUrls={imageUrls}
+              isRegenerating={currentStory ? regeneratingPaths.has(currentStory.path) : false}
+              imageCacheKey={imageCacheKey}
+              storyId={currentStory?.storyId}
+              deviceName={currentStory?.deviceName}
+            />
+          </Box>
+        </Box>
+        <Modal
+          isOpen={showDeleted}
+          onClose={() => setShowDeleted(false)}
+          header={{
+            title: { text: "Historique des refusés" },
+            subtitle:
+              "Les régressions visuelles (DIFF) refusées seront ignorées lors de la prochaine génération de VR. Les nouvelles screenshots (NEW) qui ont été refusées seront, quand à elles, regénénées",
+          }}
+          content={
+            <FlatList
+              data={deletedList}
+              contentContainerStyle={{ flex: 1, gap: spacing.m, paddingBottom: 50 }}
+              keyExtractor={item => item.fullPath}
+              showsVerticalScrollIndicator
+              renderItem={({ item }) => (
+                <DeletedItemRow
+                  item={item}
+                  onRestore={handleRestore}
+                />
+              )}
+              ListEmptyComponent={<EndOfList emptyText="Aucune screenshot refusée" />}
+            />
+          }
+        />
+        <CompareModal
+          visible={showCompareModal}
+          onClose={() => setShowCompareModal(false)}
+          deletedList={deletedList}
+          allList={allList}
+          onCompareSelected={handleCompareSelected}
+          onCompareStory={handleCompareStory}
+          onCompareByType={handleCompareByType}
+          onCompareAllStories={handleCompareAllStories}
+        />
+      </>
+    </DeviceConfigProvider>
   );
 };

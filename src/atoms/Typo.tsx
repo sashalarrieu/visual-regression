@@ -1,6 +1,7 @@
 import React from "react";
-import { Text, type TextProps, type StyleProp, type TextStyle } from "react-native";
-import { colors, type ColorKey } from "../theme";
+import { Text, type StyleProp, type TextProps, type TextStyle } from "react-native";
+
+import { colors, type ColorKey } from "@themes/theme";
 
 const variantStyles: Record<string, TextStyle> = {
   h2_semiBold: { fontSize: 20, fontWeight: "600" },
@@ -38,7 +39,11 @@ export const Typo: React.FC<TypoProps> = ({
     ...(textAlign && { textAlign }),
   };
   return (
-    <Text numberOfLines={numberOfLines} style={[composed, style]} {...rest}>
+    <Text
+      numberOfLines={numberOfLines}
+      style={[composed, style]}
+      {...rest}
+    >
       {children}
     </Text>
   );

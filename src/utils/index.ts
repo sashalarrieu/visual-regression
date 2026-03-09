@@ -1,11 +1,31 @@
-import type { Node, StoryScreenshotsPath } from "../types";
-import { DeviceName } from "../types";
-import { capitalizeAll } from "./capitalizeAll";
+import type { DeviceDisplayConfig, DeviceStyle, Node, StoryScreenshotsPath, VRDeviceConfig } from "@app-types/types";
+import { UNKNOWN_DEVICE_STYLE, VR_SERVER_URL } from "@constants/constants";
 
-export const VR_SERVER_URL = "http://localhost:2805";
-export { DeviceName } from "../types";
+/**
+ * Utilitaires partagés (app React + scripts). Code Node-only (import.meta, createRequire) dans ./node.ts.
+ */
 
-export type DeviceStyle = { icon: string; color: string };
+export const capitalizeAll = (str: string, locale: string = "fr-FR"): string => {
+  if (!str) return str;
+  const normalized = str.normalize("NFC");
+  const wordRe = /[\p{L}]+(?:[''][\p{L}]+)*/gu;
+  return normalized.replace(wordRe, word => {
+    const [first, ...rest] = [...word];
+    return first.toLocaleUpperCase(locale) + rest.join("").toLocaleLowerCase(locale);
+  });
+};
+
+/**
+ * Construit la liste d'affichage (DeviceDisplayConfig[]) à partir de la config devices du projet hôte.
+ * La config (vr-devices.config.cjs) doit impérativement définir pour chaque device : name, viewport, icon, color, label.
+ */
+export const fromVRDeviceConfig = (devices: VRDeviceConfig[]): DeviceDisplayConfig[] =>
+  devices.map(d => ({
+    name: d.name,
+    label: d.label,
+    icon: d.icon,
+    color: d.color,
+  }));
 
 export const createVisualRegressionActions = (
   onNext: () => void,
@@ -45,7 +65,7 @@ export const createVisualRegressionActions = (
     }
   };
 
-  const handleCompareStory = async (storyId?: string, deviceName?: DeviceName) => {
+  const handleCompareStory = async (storyId?: string, deviceName?: string) => {
     if (!storyId || !deviceName) return;
     try {
       const res = await fetch(`${serverUrl}/compare/single`, {
@@ -97,7 +117,7 @@ export const createVisualRegressionActions = (
     }
   };
 
-  const handleCompareSelected = async (stories: { storyId: string; deviceName: DeviceName }[]) => {
+  const handleCompareSelected = async (stories: { storyId: string; deviceName: string }[]) => {
     if (!stories.length) return;
     try {
       const res = await fetch(`${serverUrl}/compare/selected`, {
@@ -115,9 +135,9 @@ export const createVisualRegressionActions = (
     }
   };
 
-  const handleCompareByType = async (type: "new" | "diff" | "rejected", deviceName?: DeviceName) => {
+  const handleCompareByType = async (type: "new" | "diff" | "rejected", deviceName?: string) => {
     try {
-      const body: { type: "new" | "diff" | "rejected"; deviceName?: DeviceName } = { type };
+      const body: { type: "new" | "diff" | "rejected"; deviceName?: string } = { type };
       if (deviceName) body.deviceName = deviceName;
       const res = await fetch(`${serverUrl}/compare/by-type`, {
         method: "POST",
@@ -133,9 +153,9 @@ export const createVisualRegressionActions = (
     }
   };
 
-  const handleCompareAllStories = async (deviceName?: DeviceName) => {
+  const handleCompareAllStories = async (deviceName?: string) => {
     try {
-      const body: { deviceName?: DeviceName } = {};
+      const body: { deviceName?: string } = {};
       if (deviceName) body.deviceName = deviceName;
       const res = await fetch(`${serverUrl}/compare/all-stories`, {
         method: "POST",
@@ -163,20 +183,25 @@ export const createVisualRegressionActions = (
   };
 };
 
-export const getDeviceStyle = (deviceName?: DeviceName): DeviceStyle => {
-  if (deviceName === DeviceName.iPhone16) return { icon: "mobile", color: "newTheme_fantasy" };
-  if (deviceName === DeviceName.IPadA16Portrait) return { icon: "tablet-portrait", color: "newTheme_warning" };
-  if (deviceName === DeviceName.IPadA16Landscape) return { icon: "tablet-landscape", color: "newTheme_info" };
-  if (deviceName === DeviceName.DesktopFHD) return { icon: "laptop", color: "newTheme_primary" };
-  return { icon: "hint", color: "newTheme_danger" };
+/**
+ * Retourne le style (icône, couleur) pour l'affichage d'un device.
+ * Les devices sont définis par le projet hôte (prop devices) ; aucun défaut côté package.
+ */
+export const getDeviceStyle = (deviceName?: string, deviceConfigs?: DeviceDisplayConfig[]): DeviceStyle => {
+  if (!deviceName || !deviceConfigs?.length) return UNKNOWN_DEVICE_STYLE;
+  const c = deviceConfigs.find(d => d.name === deviceName);
+  return c ? { icon: c.icon, color: c.color } : UNKNOWN_DEVICE_STYLE;
 };
 
-export const getDeviceDisplayName = (deviceName: DeviceName): string => {
-  if (deviceName === DeviceName.iPhone16) return "iPhone 16";
-  if (deviceName === DeviceName.IPadA16Portrait) return "iPad A16 Portrait";
-  if (deviceName === DeviceName.IPadA16Landscape) return "iPad A16 Paysage";
-  if (deviceName === DeviceName.DesktopFHD) return "Desktop FHD";
-  return deviceName;
+/**
+ * Retourne le nom d'affichage d'un device (défini dans la config du projet hôte).
+ */
+export const getDeviceDisplayName = (deviceName: string, deviceConfigs?: DeviceDisplayConfig[]): string => {
+  if (deviceConfigs?.length) {
+    const c = deviceConfigs.find(d => d.name === deviceName);
+    if (c) return c.label;
+  }
+  return capitalizeAll(deviceName.replace(/-/g, " "));
 };
 
 export const findFirstFile = (node: Node | null): Node | null => {

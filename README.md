@@ -1,37 +1,167 @@
-# visual-regression
+# @setshao/visual-regression
 
-Projet indépendant de régression visuelle pour Storybook. Réutilisable dans tout projet (Expo, React Native Web, etc.).
+Interface de régression visuelle pour Storybook (React Native / Expo). Ce package fournit l’UI pour visualiser, valider ou refuser les screenshots de régression ; il est réutilisable dans tout projet qui utilise Storybook et un serveur de régression compatible.
 
-## Utilisation dans un projet hôte (ex: EIWIE_PRO_FRONTEND)
+---
 
-1. **Installation** (workspace ou npm)
-   ```json
-   "dependencies": {
-     "visual-regression": "file:../visual-regression"
-   }
-   ```
+## Fonctionnement
 
-2. **Afficher l’UI de régression** quand la variable d’environnement est définie :
-   ```tsx
-   import { VisualRegressions } from "visual-regression";
+- **Ce package** : composants React (arbre des régressions, panneau de comparaison, modales de validation/refus), logique cliente (appels au serveur VR), **et les scripts** (serveur VR, launcher, comparaison Playwright). Tout tourne en autonomie : le package ne laisse rien à maintenir dans le projet hôte côté scripts.
+- **Le projet hôte** : à la racine, un fichier `vr-devices.config.cjs`, les dossiers `.storybook/` et `public/` pour les screenshots. On lance les commandes VR depuis la **racine du projet hôte** (ou avec `VR_PROJECT_ROOT` pointant vers cette racine) ; les scripts du package utilisent alors cette racine pour charger la config et servir les fichiers.
 
-   if (process.env.VISUAL_REGRESSIONS === "true") {
-     return <VisualRegressions />;
-   }
-   ```
+**Prérequis côté projet hôte** : `vr-devices.config.cjs`, `.storybook/`, `public/`. Les **devices** se configurent en format **Playwright** (voir section suivante).
 
-3. **Scripts** : les commandes de régression (serveur VR, launcher, comparaison Playwright/Loki) restent dans le projet hôte, car elles dépendent de la config Storybook et Loki du projet. Exemple dans le projet hôte :
-   - `vr` : lance l’environnement complet (serveur VR + Storybook + Expo)
-   - `vr:server` : lance uniquement le serveur VR
-   - `vr:app` : lance l’app Expo en mode régression (port 2804)
+---
 
-Le projet hôte doit avoir à la racine :
-- `.storybook/` (config Storybook)
-- `loki.config.cjs` (configurations des devices)
-- `public/` (dossier où seront écrits les screenshots)
+## Devices (obligatoire)
 
-## Variables d’environnement
+L’utilisation de `@setshao/visual-regression` impose de **définir des devices** dans le projet hôte (ex. `vr-devices.config.cjs`). Chaque device doit inclure les champs viewport (pour les scripts de capture) **et** la personnalisation d’affichage (label, icon, color) pour l’UI :
 
-- `VR_PROJECT_ROOT` : racine du projet hôte (défaut : `process.cwd()`).
-- `VISUAL_REGRESSIONS` : `"true"` pour afficher l’écran de régression dans l’app.
-- `VR_COMPARE_LOKI` : `"true"` pour utiliser Loki au lieu de Playwright pour la comparaison.
+```js
+module.exports = [
+  {
+    name: "desktop-fhd",
+    viewport: { width: 1920, height: 1080 },
+    deviceScaleFactor: 1,
+    isMobile: false,
+    label: "Desktop FHD",
+    icon: "laptop",
+    color: "newTheme_primary",
+  },
+  {
+    name: "iphone16",
+    viewport: { width: 393, height: 852 },
+    deviceScaleFactor: 3,
+    isMobile: true,
+    label: "iPhone 16",
+    icon: "mobile",
+    color: "newTheme_fantasy",
+  },
+];
+```
+
+- **label** : texte affiché dans l’UI.
+- **icon** : nom de l’icône (ex. `"laptop"`, `"mobile"`, `"tablet-portrait"`, `"tablet-landscape"`).
+- **color** : clé de couleur du thème (ex. `"newTheme_primary"`, `"newTheme_danger"`).
+
+Les scripts (serveur VR, comparaison Playwright) utilisent `name`, `viewport`, `deviceScaleFactor`, `isMobile`. L’UI utilise `name`, `label`, `icon`, `color` via la prop **obligatoire** `devices`, construite avec `fromVRDeviceConfig(config)`.
+
+---
+
+## Installation
+
+**Via npm :**
+
+```bash
+npm install @setshao/visual-regression
+# ou
+yarn add @setshao/visual-regression
+```
+
+**En local (développement, lien vers le dossier du package) :**
+
+```json
+{
+  "dependencies": {
+    "@setshao/visual-regression": "file:../visual-regression"
+  }
+}
+```
+
+---
+
+## Utilisation dans un projet hôte
+
+### 1. Afficher l’écran de régression
+
+Afficher l’UI à la place du reste de l’app (par exemple dans la racine de ton router ou via une route dédiée) :
+
+```tsx
+import { VisualRegressions, fromVRDeviceConfig } from "@setshao/visual-regression";
+
+const vrDevicesConfig = require("../vr-devices.config.cjs");
+const devices = fromVRDeviceConfig(vrDevicesConfig);
+
+return <VisualRegressions devices={devices} />;
+```
+
+La prop `devices` est **obligatoire** : elle doit contenir pour chaque device au moins `name`, `label`, `icon`, `color` (fournis par la config du projet hôte).
+
+### 2. Scripts fournis par le package (à appeler depuis le projet hôte)
+
+Le package contient les scripts dans `scripts/`. Depuis le **projet hôte**, ajoute dans ton `package.json` des scripts qui pointent vers le package (en lançant depuis la racine du projet pour que `process.cwd()` soit la racine) :
+
+| Script       | Rôle |
+|-------------|------|
+| `vr`        | Lance tout : serveur VR + Storybook + Expo en mode VR + comparaison initiale |
+| `vr:server` | Lance uniquement le serveur VR (port 2805) |
+| `vr:compare`| Lance la comparaison Playwright (régénération des screenshots) |
+| `vr:app`    | Lance l’app Expo en mode régression (port 2804) |
+| `vr:kill-ports` | Libère les ports 2804 et 2805 |
+
+Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du projet) :
+
+```json
+{
+  "scripts": {
+    "vr": "bun node_modules/@setshao/visual-regression/scripts/vr-launcher.ts",
+    "vr:server": "bun node_modules/@setshao/visual-regression/scripts/vr-server.ts",
+    "vr:compare": "bun node_modules/@setshao/visual-regression/scripts/compare-visual-regressions.ts",
+    "vr:app": "node node_modules/@setshao/visual-regression/bin/visual-regression.mjs app"
+  }
+}
+```
+
+### 3. Variables d’environnement
+
+| Variable           | Description |
+|--------------------|-------------|
+| `VR_PROJECT_ROOT`  | Racine du projet hôte (défaut : `process.cwd()`) |
+
+---
+
+## Tester que tout fonctionne
+
+### Test rapide (uniquement l’interface)
+
+1. Dans le projet hôte : `yarn` (ou `npm install`) pour installer le lien vers `visual-regression` si tu es en local.
+2. **Terminal 1** : `yarn vr:server` → serveur sur http://localhost:2805
+3. **Terminal 2** : `yarn vr:app` → app sur http://localhost:2804
+4. Ouvre http://localhost:2804 : tu dois voir l’interface (panneau « Régressions visuelles », zone de contenu). Au début, le message « Aucune regression détectée, ni nouvelle screenshot » est normal.
+
+### Test complet (avec Storybook et comparaison)
+
+Dans le projet hôte :
+
+```bash
+yarn vr
+```
+
+Puis ouvre http://localhost:2804 : après la comparaison, l’arbre des régressions et les screenshots doivent apparaître.
+
+---
+
+## Publier une nouvelle version sur npm
+
+1. Se connecter : `npm login` (username, password, email, OTP si 2FA).
+2. Vérifier le contenu publié : `npm pack --dry-run`.
+3. Première publication (package scopé public) : `npm publish --access public`.
+4. Versions suivantes : incrémenter `version` dans `package.json`, puis `npm publish`.
+
+Pour utiliser la version npm dans un projet : `yarn add @setshao/visual-regression` et garder l’import `import { VisualRegressions } from "@setshao/visual-regression";`.
+
+---
+
+## Dépannage
+
+- **« Cannot find module '@setshao/visual-regression' »**  
+  Vérifier que `yarn` / `npm install` a bien été exécuté et que `node_modules/@setshao/visual-regression` existe (ou le lien `file:../visual-regression`).
+
+- **Interface blanche ou crash**  
+  Ouvrir la console du navigateur (F12). Si le serveur VR n’est pas démarré, l’app peut afficher « Aucune regression détectée » ; lancer le serveur VR dans un autre terminal.
+
+- **Port déjà utilisé**  
+  Utiliser la commande du projet hôte pour libérer les ports (ex. `yarn vr:kill-ports`), puis relancer.
+
+- **« Module not found » pour les scripts VR**  
+  Si `node_modules/@setshao/visual-regression/scripts/` n’existe pas, réinstalle la dépendance (ex. supprimer `node_modules/@setshao/visual-regression` puis `yarn install`, ou `yarn add file:../visual-regression` depuis la racine du monorepo) pour que le dossier `scripts` soit bien présent.

@@ -1,15 +1,16 @@
 import React from "react";
 import {
   Modal as RNModal,
-  View,
+  ScrollView,
   Text,
   TouchableOpacity,
-  ScrollView,
+  View,
   type ModalProps as RNModalProps,
 } from "react-native";
-import { Box } from "./Box";
-import { Typo } from "./Typo";
-import { spacing, colors } from "../theme";
+
+import { Box } from "@atoms/Box";
+import { Typo } from "@atoms/Typo";
+import { colors, spacing } from "@themes/theme";
 
 export type ModalProps = RNModalProps & {
   isOpen: boolean;
@@ -28,15 +29,14 @@ export type ModalProps = RNModalProps & {
   };
 };
 
-export const Modal: React.FC<ModalProps> = ({
-  isOpen,
-  onClose,
-  header,
-  content,
-  footer,
-}) => {
+export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, header, content, footer }) => {
   return (
-    <RNModal visible={isOpen} transparent animationType="fade">
+    <RNModal
+      visible={isOpen}
+      onDismiss={onClose}
+      transparent
+      animationType="fade"
+    >
       <View
         style={{
           flex: 1,
@@ -56,10 +56,17 @@ export const Modal: React.FC<ModalProps> = ({
           }}
         >
           {header && (
-            <Box p="m" pb="s">
+            <Box
+              p="m"
+              pb="s"
+            >
               {header.title && <Typo variant="h2_semiBold">{header.title.text}</Typo>}
               {header.subtitle && (
-                <Typo variant="paragraphe_regular" color="newTheme_textLegend" style={{ marginTop: spacing.xs }}>
+                <Typo
+                  variant="paragraphe_regular"
+                  color="newTheme_textLegend"
+                  style={{ marginTop: spacing.xs }}
+                >
                   {header.subtitle}
                 </Typo>
               )}
@@ -67,7 +74,10 @@ export const Modal: React.FC<ModalProps> = ({
             </Box>
           )}
           {content && (
-            <ScrollView style={{ maxHeight: 400 }} contentContainerStyle={{ padding: spacing.m }}>
+            <ScrollView
+              style={{ maxHeight: 400 }}
+              contentContainerStyle={{ padding: spacing.m }}
+            >
               {content}
             </ScrollView>
           )}

@@ -1,10 +1,11 @@
 import React from "react";
-import { View, type ViewProps, type StyleProp, type ViewStyle } from "react-native";
-import { spacing, colors, type SpacingKey, type ColorKey } from "../theme";
+import { View, type DimensionValue, type StyleProp, type ViewProps, type ViewStyle } from "react-native";
+
+import { colors, spacing, type ColorKey, type SpacingKey } from "@themes/theme";
 
 type Spacing = SpacingKey | number;
 
-const resolveSpacing = (s: Spacing): number => (typeof s === "string" ? spacing[s] ?? 0 : s);
+const resolveSpacing = (s: Spacing): number => (typeof s === "string" ? (spacing[s] ?? 0) : s);
 
 export type BoxProps = ViewProps & {
   flex?: number;
@@ -75,8 +76,8 @@ export const Box: React.FC<BoxProps> = ({
     ...(px !== undefined && { paddingHorizontal: resolveSpacing(px) }),
     ...(py !== undefined && { paddingVertical: resolveSpacing(py) }),
     ...(pb !== undefined && { paddingBottom: resolveSpacing(pb) }),
-    ...(width !== undefined && { width: typeof width === "string" ? width : width }),
-    ...(height !== undefined && { height: typeof height === "string" ? height : height }),
+    ...(width !== undefined && { width: width as DimensionValue }),
+    ...(height !== undefined && { height: height as DimensionValue }),
     ...(minHeight !== undefined && { minHeight }),
     ...(alignItems && { alignItems }),
     ...(justifyContent && { justifyContent }),
@@ -94,7 +95,10 @@ export const Box: React.FC<BoxProps> = ({
   };
 
   return (
-    <View style={[composedStyle, style as ViewStyle]} {...rest}>
+    <View
+      style={[composedStyle, style as ViewStyle]}
+      {...rest}
+    >
       {children}
     </View>
   );

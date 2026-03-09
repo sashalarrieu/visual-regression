@@ -1,7 +1,7 @@
 import React from "react";
 import { Text, type TextStyle } from "react-native";
-import { colors, type ColorKey } from "../theme";
-import { spacing } from "../theme";
+
+import { colors, spacing, type ColorKey } from "@themes/theme";
 
 const iconMap: Record<string, string> = {
   mobile: "📱",

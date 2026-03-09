@@ -1,31 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList } from "react-native";
-import {
-  DeviceName,
-  formatStoryIdForDisplay,
-  getDeviceDisplayName,
-  getDeviceStyle,
-} from "../utils/VisualRegression";
-import type { DeletedItem } from "./DeletedItemRow";
-import { DeletedItemRow } from "./DeletedItemRow";
-import type { Node } from "./TreePanel";
-import { Box } from "../primitives/Box";
-import { Button } from "../primitives/Button";
-import { EndOfList } from "../primitives/EndOfList";
-import { Modal } from "../primitives/Modal";
-import { TabBar } from "../primitives/TabBar";
-import { Typo } from "../primitives/Typo";
-import { spacing } from "../theme";
+
+import type { DeletedItem, Node, StoryDevicePair } from "@app-types/types";
+import { Box } from "@atoms/Box";
+import { Button } from "@atoms/Button";
+import { EndOfList } from "@atoms/EndOfList";
+import { Modal } from "@atoms/Modal";
+import { TabBar } from "@atoms/TabBar";
+import { Typo } from "@atoms/Typo";
+import { DeletedItemRow } from "@components/DeletedItemRow";
+import { useDeviceConfig } from "@providers/DeviceConfigProvider";
+import { spacing } from "@themes/theme";
+import { formatStoryIdForDisplay } from "@utils";
 
 export type CompareModalProps = {
   visible: boolean;
   onClose: () => void;
   deletedList: DeletedItem[];
   allList: Node[];
-  onCompareSelected: (stories: { storyId: string; deviceName: DeviceName }[]) => void;
-  onCompareStory?: (storyId: string, deviceName: DeviceName) => void;
-  onCompareByType: (type: "new" | "diff" | "rejected", deviceName?: DeviceName) => Promise<void>;
-  onCompareAllStories: (deviceName?: DeviceName) => Promise<void>;
+  onCompareSelected: (stories: StoryDevicePair[]) => void;
+  onCompareStory?: (storyId: string, deviceName: string) => void;
+  onCompareByType: (type: "new" | "diff" | "rejected", deviceName?: string) => Promise<void>;
+  onCompareAllStories: (deviceName?: string) => Promise<void>;
   loading?: boolean;
 };
 
@@ -40,27 +36,27 @@ export const CompareModal: React.FC<CompareModalProps> = ({
   onCompareAllStories,
   loading = false,
 }) => {
+  const { getDeviceStyle, getDeviceDisplayName } = useDeviceConfig();
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
-  const [selectedDevice, setSelectedDevice] = useState<DeviceName | "all">("all");
+  const [selectedDevice, setSelectedDevice] = useState<string | "all">("all");
 
   useEffect(() => {
     if (visible) setSelectedItems(new Set());
   }, [visible, selectedDevice]);
 
-  const availableDevices = useMemo<DeviceName[]>(() => {
-    const deviceSet = new Set<DeviceName>();
-    const validSet = new Set<DeviceName>(Object.values(DeviceName));
+  const availableDevices = useMemo<string[]>(() => {
+    const deviceSet = new Set<string>();
     allList.forEach(node => {
-      if (node.deviceName && validSet.has(node.deviceName)) deviceSet.add(node.deviceName);
+      if (node.deviceName) deviceSet.add(node.deviceName);
     });
     deletedList.forEach(item => {
-      if (item.deviceName && validSet.has(item.deviceName as DeviceName)) deviceSet.add(item.deviceName as DeviceName);
+      if (item.deviceName) deviceSet.add(item.deviceName);
     });
     return Array.from(deviceSet).sort();
   }, [allList, deletedList]);
 
   const deviceCounts = useMemo(() => {
-    const counts = new Map<DeviceName | "all", number>();
+    const counts = new Map<string | "all", number>();
     counts.set("all", deletedList.filter(item => item.storyId && item.deviceName).length);
     availableDevices.forEach(device => {
       counts.set(device, deletedList.filter(item => item.deviceName === device && item.storyId).length);
@@ -70,7 +66,12 @@ export const CompareModal: React.FC<CompareModalProps> = ({
 
   const deviceTabs = useMemo(() => {
     return [
-      { key: "all" as const, title: "Tous", icon: { name: "squares-group" }, alertTextInfo: deviceCounts.get("all") || 0 },
+      {
+        key: "all" as const,
+        title: "Tous",
+        icon: { name: "squares-group" },
+        alertTextInfo: deviceCounts.get("all") || 0,
+      },
       ...availableDevices.map(device => {
         const deviceStyle = getDeviceStyle(device);
         return {
@@ -81,7 +82,7 @@ export const CompareModal: React.FC<CompareModalProps> = ({
         };
       }),
     ];
-  }, [availableDevices, deviceCounts]);
+  }, [availableDevices, deviceCounts, getDeviceStyle, getDeviceDisplayName]);
 
   const filteredDeletedList = useMemo(() => {
     if (selectedDevice === "all") return deletedList;
@@ -117,7 +118,10 @@ export const CompareModal: React.FC<CompareModalProps> = ({
     });
   }, []);
 
-  const selectAll = useCallback(() => setSelectedItems(new Set(validStories.map(item => item.fullPath))), [validStories]);
+  const selectAll = useCallback(
+    () => setSelectedItems(new Set(validStories.map(item => item.fullPath))),
+    [validStories],
+  );
   const deselectAll = useCallback(() => setSelectedItems(new Set()), []);
 
   const allSelected = useMemo(
@@ -175,10 +179,31 @@ export const CompareModal: React.FC<CompareModalProps> = ({
 
   const compareButtons = useMemo(
     () => [
-      { label: "Tous", onPress: handleCompareAllForDevice, icon: { name: "squares-group" }, number: storyCountsByType.all, color: "danger" as const },
-      { label: "New", onPress: () => handleCompareByTypeForDevice("new"), icon: { name: "plus" }, number: storyCountsByType.new },
-      { label: "Diff", onPress: () => handleCompareByTypeForDevice("diff"), icon: { name: "triangle-exclamation" }, number: storyCountsByType.diff },
-      { label: "Refusé", onPress: () => handleCompareByTypeForDevice("rejected"), icon: { name: "trash" }, number: storyCountsByType.rejected },
+      {
+        label: "Tous",
+        onPress: handleCompareAllForDevice,
+        icon: { name: "squares-group" },
+        number: storyCountsByType.all,
+        color: "danger" as const,
+      },
+      {
+        label: "New",
+        onPress: () => handleCompareByTypeForDevice("new"),
+        icon: { name: "plus" },
+        number: storyCountsByType.new,
+      },
+      {
+        label: "Diff",
+        onPress: () => handleCompareByTypeForDevice("diff"),
+        icon: { name: "triangle-exclamation" },
+        number: storyCountsByType.diff,
+      },
+      {
+        label: "Refusé",
+        onPress: () => handleCompareByTypeForDevice("rejected"),
+        icon: { name: "trash" },
+        number: storyCountsByType.rejected,
+      },
     ],
     [handleCompareAllForDevice, handleCompareByTypeForDevice, storyCountsByType],
   );
@@ -192,19 +217,29 @@ export const CompareModal: React.FC<CompareModalProps> = ({
         subtitle:
           "Sélectionnez les stories refusées à régénérer ou choisissez un device et régénérez les nouvelles, les différences, les refusés ou toutes les stories pour ce device.",
         children: availableDevices.length > 0 && (
-          <Box gap="m" pb="m">
+          <Box
+            gap="m"
+            pb="m"
+          >
             <Box gap="s">
-              <Typo variant="paragraphe_semiBold" color="newTheme_textOnSurface">
+              <Typo
+                variant="paragraphe_semiBold"
+                color="newTheme_textOnSurface"
+              >
                 Régénérer par device
               </Typo>
               <TabBar
                 tabs={deviceTabs}
                 selectedTabKey={selectedDevice}
-                onSelectedTabKey={key => setSelectedDevice(key as DeviceName | "all")}
+                onSelectedTabKey={key => setSelectedDevice(key as string | "all")}
                 compressed
                 onBackground
               />
-              <Box gap="s" flexDirection="row" style={{ flexWrap: "wrap" } as any}>
+              <Box
+                gap="s"
+                flexDirection="row"
+                style={{ flexWrap: "wrap" }}
+              >
                 {compareButtons.map(({ label, onPress, icon, number, color }) => (
                   <Button
                     key={label}
@@ -219,8 +254,16 @@ export const CompareModal: React.FC<CompareModalProps> = ({
                 ))}
               </Box>
             </Box>
-            <Box gap="s" flexDirection="row" alignItems="center" justifyContent="space-between">
-              <Typo variant="legend_regular" color="newTheme_textLegend">
+            <Box
+              gap="s"
+              flexDirection="row"
+              alignItems="center"
+              justifyContent="space-between"
+            >
+              <Typo
+                variant="legend_regular"
+                color="newTheme_textLegend"
+              >
                 {selectedItems.size}/{validStories.length} sélectionnée{selectedItems.size > 1 ? "s" : ""}
               </Typo>
               <Button
@@ -254,7 +297,10 @@ export const CompareModal: React.FC<CompareModalProps> = ({
               showsVerticalScrollIndicator
               renderItem={({ item: group }) => (
                 <Box gap="s">
-                  <Typo variant="paragraphe_semiBold" color="newTheme_textOnSurface">
+                  <Typo
+                    variant="paragraphe_semiBold"
+                    color="newTheme_textOnSurface"
+                  >
                     {group.storyName}
                   </Typo>
                   <Box gap="xs">

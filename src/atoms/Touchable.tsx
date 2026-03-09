@@ -6,7 +6,11 @@ export type TouchableProps = TouchableOpacityProps & {
 };
 
 export const Touchable: React.FC<TouchableProps> = ({ notPressable, onPress, children, ...rest }) => (
-  <TouchableOpacity onPress={notPressable ? undefined : onPress} activeOpacity={0.7} {...rest}>
+  <TouchableOpacity
+    onPress={notPressable ? undefined : onPress}
+    activeOpacity={0.7}
+    {...rest}
+  >
     {children}
   </TouchableOpacity>
 );

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { LayoutRectangle } from "react-native";
 import Animated, {
   Easing,
@@ -10,11 +10,20 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import Svg, { Circle } from "react-native-svg";
-import { Box } from "../primitives/Box";
+
+import { Box } from "@atoms/Box";
 
 const PARTICLE_COLORS = [
-  "#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A", "#98D8C8",
-  "#F7DC6F", "#BB8FCE", "#85C1E2", "#F8B739", "#52BE80",
+  "#FF6B6B",
+  "#4ECDC4",
+  "#45B7D1",
+  "#FFA07A",
+  "#98D8C8",
+  "#F7DC6F",
+  "#BB8FCE",
+  "#85C1E2",
+  "#F8B739",
+  "#52BE80",
 ];
 const NUM_PARTICLES = 100;
 
@@ -44,7 +53,13 @@ export const AnimatedLoader = () => {
   }, [layout]);
 
   return (
-    <Box position="absolute" top={0} left={0} right={0} bottom={0}>
+    <Box
+      position="absolute"
+      top={0}
+      left={0}
+      right={0}
+      bottom={0}
+    >
       <Box
         flex={1}
         minHeight={300}
@@ -56,8 +71,15 @@ export const AnimatedLoader = () => {
           if (newLayout.width > 0 && newLayout.height > 0) setLayout(newLayout);
         }}
       >
-        {layout && layout.width > 0 && layout.height > 0 &&
-          particles.map(p => <ParticleComponent key={p.id} particle={p} />)}
+        {layout &&
+          layout.width > 0 &&
+          layout.height > 0 &&
+          particles.map(p => (
+            <ParticleComponent
+              key={p.id}
+              particle={p}
+            />
+          ))}
       </Box>
     </Box>
   );
@@ -72,27 +94,53 @@ const ParticleComponent = ({ particle }: { particle: Particle }) => {
   useEffect(() => {
     translateY.value = withRepeat(
       withSequence(
-        withDelay(particle.delay, withTiming(particle.y - 50 - Math.random() * 100, { duration: particle.duration, easing: Easing.inOut(Easing.ease) })),
-        withTiming(particle.y + 50 + Math.random() * 100, { duration: particle.duration, easing: Easing.inOut(Easing.ease) }),
-      ), -1, true
+        withDelay(
+          particle.delay,
+          withTiming(particle.y - 50 - Math.random() * 100, {
+            duration: particle.duration,
+            easing: Easing.inOut(Easing.ease),
+          }),
+        ),
+        withTiming(particle.y + 50 + Math.random() * 100, {
+          duration: particle.duration,
+          easing: Easing.inOut(Easing.ease),
+        }),
+      ),
+      -1,
+      true,
     );
     translateX.value = withRepeat(
       withSequence(
-        withDelay(particle.delay, withTiming(particle.x - 20 - Math.random() * 40, { duration: particle.duration * 1.3, easing: Easing.inOut(Easing.ease) })),
-        withTiming(particle.x + 20 + Math.random() * 40, { duration: particle.duration * 1.3, easing: Easing.inOut(Easing.ease) }),
-      ), -1, true
+        withDelay(
+          particle.delay,
+          withTiming(particle.x - 20 - Math.random() * 40, {
+            duration: particle.duration * 1.3,
+            easing: Easing.inOut(Easing.ease),
+          }),
+        ),
+        withTiming(particle.x + 20 + Math.random() * 40, {
+          duration: particle.duration * 1.3,
+          easing: Easing.inOut(Easing.ease),
+        }),
+      ),
+      -1,
+      true,
     );
     opacity.value = withRepeat(
       withSequence(
         withDelay(particle.delay, withTiming(0.8, { duration: particle.duration / 2 })),
         withTiming(0.3, { duration: particle.duration / 2 }),
-      ), -1, true
+      ),
+      -1,
+      true,
     );
     scale.value = withRepeat(
       withSequence(
         withDelay(particle.delay, withTiming(1, { duration: particle.duration / 2 })),
         withTiming(0.7, { duration: particle.duration / 2 }),
-      ), -1, true
+      ),
+      -1,
+      true,
     );
   }, [particle, translateY, translateX, opacity, scale]);
 
@@ -103,8 +151,17 @@ const ParticleComponent = ({ particle }: { particle: Particle }) => {
 
   return (
     <Animated.View style={[{ position: "absolute", width: particle.size, height: particle.size }, animatedStyle]}>
-      <Svg width={particle.size} height={particle.size} viewBox="0 0 10 10">
-        <Circle cx={5} cy={5} r={4} fill={particle.color} />
+      <Svg
+        width={particle.size}
+        height={particle.size}
+        viewBox="0 0 10 10"
+      >
+        <Circle
+          cx={5}
+          cy={5}
+          r={4}
+          fill={particle.color}
+        />
       </Svg>
     </Animated.View>
   );

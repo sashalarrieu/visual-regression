@@ -1,24 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import { View } from "react-native";
 import { ScrollView } from "react-native-gesture-handler";
-import {
-  calculateFolderDepth,
-  findFirstFile,
-  formatStoryName,
-  getDeviceDisplayName,
-  getDeviceStyle,
-  getStoryNameFromId,
-} from "../utils/VisualRegression";
-import type { DeviceName } from "../types";
-import type { Node } from "../types";
-import { Accordion } from "../primitives/Accordion";
-import { Box } from "../primitives/Box";
-import { Bullet } from "../primitives/Bullet";
-import { Button } from "../primitives/Button";
-import { Typo } from "../primitives/Typo";
-import { spacing } from "../theme";
 
-export type { Node } from "../types";
+import type { Node } from "@app-types/types";
+import { Accordion } from "@atoms/Accordion";
+import { Box } from "@atoms/Box";
+import { Bullet } from "@atoms/Bullet";
+import { Button } from "@atoms/Button";
+import { Typo } from "@atoms/Typo";
+import { useDeviceConfig } from "@providers/DeviceConfigProvider";
+import { colors, spacing } from "@themes/theme";
+import { calculateFolderDepth, findFirstFile, formatStoryName, getStoryNameFromId } from "@utils";
 
 export type TreePanelProps = {
   tree: Node | null;
@@ -39,6 +31,7 @@ export const TreePanel: React.FC<TreePanelProps> = ({
   onCompareStoryNode,
   regeneratingPaths = new Set(),
 }) => {
+  const { getDeviceStyle, getDeviceDisplayName } = useDeviceConfig();
   const scrollViewRef = useRef<ScrollView>(null);
   const scrollContentRef = useRef<View>(null);
   const nodeRefs = useRef<Map<string, View>>(new Map());
@@ -77,22 +70,31 @@ export const TreePanel: React.FC<TreePanelProps> = ({
     const deviceName = fileNode.deviceName;
     const deviceStyle = getDeviceStyle(deviceName);
     const isCurrentStory = currentStory?.path === fileNode.path;
-    const deviceDisplayName = deviceName ? getDeviceDisplayName(deviceName as DeviceName) : fileNode.name;
+    const deviceDisplayName = deviceName ? getDeviceDisplayName(deviceName) : fileNode.name;
 
     return (
       <View ref={setNodeRef(fileNode.path)}>
-        <Box gap="xs" flexDirection="row" alignItems="center" style={{ paddingRight: spacing.m - spacing.s + 1 } as any}>
+        <Box
+          gap="xs"
+          flexDirection="row"
+          alignItems="center"
+          style={{ paddingRight: spacing.m - spacing.s + 1 }}
+        >
           <Button
             label={deviceDisplayName}
             color={isCurrentStory ? "primary" : "base"}
             onPress={() => onNodeClick(fileNode)}
             leftIcon={{
               name: deviceStyle.icon,
-              fill: (isCurrentStory ? "newTheme_textOnPrimary" : deviceStyle.color) as any,
+              fill: (isCurrentStory ? "newTheme_textOnPrimary" : deviceStyle.color) as keyof typeof colors,
             }}
             rightIcon={{
               name: isNew ? "plus" : "triangle-exclamation",
-              fill: (isCurrentStory ? "newTheme_textOnPrimary" : isNew ? "newTheme_primary" : "newTheme_danger") as any,
+              fill: (isCurrentStory
+                ? "newTheme_textOnPrimary"
+                : isNew
+                  ? "newTheme_primary"
+                  : "newTheme_danger") as keyof typeof colors,
             }}
             flex={1}
             justifyContent="space-between"
@@ -134,9 +136,21 @@ export const TreePanel: React.FC<TreePanelProps> = ({
         key={node.name}
         label={{ text: node.name }}
         tags={[
-          <Bullet key="new" value={newCount} color="newTheme_primary80" />,
-          <Bullet key="diff" value={diffCount} color="newTheme_danger" />,
-          <Bullet key="total" value={totalCount} color="newTheme_base10" />,
+          <Bullet
+            key="new"
+            value={newCount}
+            color="newTheme_primary80"
+          />,
+          <Bullet
+            key="diff"
+            value={diffCount}
+            color="newTheme_danger"
+          />,
+          <Bullet
+            key="total"
+            value={totalCount}
+            color="newTheme_base10"
+          />,
         ]}
         defaultOpened
         style={{ paddingBottom: 0 }}
@@ -146,7 +160,7 @@ export const TreePanel: React.FC<TreePanelProps> = ({
             key={child.name}
             p="xs"
             pb={index === folders.length - 1 && filesByStoryId.size === 0 ? "s" : "none"}
-            style={{ right: -spacing.xs - 1, bottom: -1 } as any}
+            style={{ right: -spacing.xs - 1, bottom: -1 }}
           >
             {renderTree(child)}
           </Box>
@@ -156,14 +170,28 @@ export const TreePanel: React.FC<TreePanelProps> = ({
           const storyName = formatStoryName(rawStoryName);
           const isLastStory = storyIndex === filesByStoryId.size - 1;
           return (
-            <Box key={storyId} pb={isLastStory ? "s" : "m"} style={{ right: -spacing.xs - 1, bottom: -1 } as any}>
-              <Box pb="xs" px="xs">
-                <Typo variant="paragraphe_semiBold" color="newTheme_textOnSurface">
+            <Box
+              key={storyId}
+              pb={isLastStory ? "s" : "m"}
+              style={{ right: -spacing.xs - 1, bottom: -1 }}
+            >
+              <Box
+                pb="xs"
+                px="xs"
+              >
+                <Typo
+                  variant="paragraphe_semiBold"
+                  color="newTheme_textOnSurface"
+                >
                   {storyName}
                 </Typo>
               </Box>
               {storyFiles.map((file, fileIndex) => (
-                <Box key={file.path} pb={fileIndex === storyFiles.length - 1 ? "none" : "xs"} px="xs">
+                <Box
+                  key={file.path}
+                  pb={fileIndex === storyFiles.length - 1 ? "none" : "xs"}
+                  px="xs"
+                >
                   {renderFile(file)}
                 </Box>
               ))}
@@ -175,16 +203,35 @@ export const TreePanel: React.FC<TreePanelProps> = ({
   };
 
   return (
-    <Box width={300} p="m">
-      <Box flexDirection="row" alignItems="center" justifyContent="space-between" pb="s">
-        <Typo variant="h2_semiBold" style={{ flex: 1, textAlign: "center", paddingVertical: spacing.s } as any}>
+    <Box
+      width={300}
+      p="m"
+    >
+      <Box
+        flexDirection="row"
+        alignItems="center"
+        justifyContent="space-between"
+        pb="s"
+      >
+        <Typo
+          variant="h2_semiBold"
+          style={{ flex: 1, textAlign: "center", paddingVertical: spacing.s }}
+        >
           Régressions visuelles
         </Typo>
         <Box>
-          <Button icon={{ name: "arrows-revert" }} color="primary" onPress={onRefresh} loading={loading} />
+          <Button
+            icon={{ name: "arrows-revert" }}
+            color="primary"
+            onPress={onRefresh}
+            loading={loading}
+          />
         </Box>
       </Box>
-      <ScrollView ref={scrollViewRef} style={{ marginHorizontal: -spacing.m }}>
+      <ScrollView
+        ref={scrollViewRef}
+        style={{ marginHorizontal: -spacing.m }}
+      >
         <View ref={scrollContentRef}>
           <Box px="m">{renderTree(tree)}</Box>
         </View>

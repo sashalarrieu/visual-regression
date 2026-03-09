@@ -1,25 +1,14 @@
 import React from "react";
-import { getDeviceStyle, type DeviceName } from "../utils/VisualRegression";
-import { ScreenshotDetails } from "./ScreenshotDetails";
-import { Box } from "../primitives/Box";
-import { Button } from "../primitives/Button";
-import { Picture } from "../primitives/Picture";
-import { Tag } from "../primitives/Tag";
-import { TagNew } from "../primitives/TagNew";
-import { Touchable } from "../primitives/Touchable";
 
-export type DeletedItem = {
-  isDiff: boolean;
-  fullPath: string;
-  imagePath: string;
-  imageUrl?: string;
-  folders: string[];
-  fileName: string;
-  label: string;
-  deviceName?: DeviceName;
-  storyId?: string;
-  countPixelDiff?: number | null;
-};
+import type { DeletedItem } from "@app-types/types";
+import { Box } from "@atoms/Box";
+import { Button } from "@atoms/Button";
+import { Picture } from "@atoms/Picture";
+import { Tag } from "@atoms/Tag";
+import { TagNew } from "@atoms/TagNew";
+import { Touchable } from "@atoms/Touchable";
+import { ScreenshotDetails } from "@components/ScreenshotDetails";
+import { useDeviceConfig } from "@providers/DeviceConfigProvider";
 
 export type DeletedItemRowProps = {
   item: DeletedItem;
@@ -36,13 +25,17 @@ export const DeletedItemRow: React.FC<DeletedItemRowProps> = ({
   onSelect,
   disabled = false,
 }) => {
+  useDeviceConfig();
   const handlePress = () => {
     if (!disabled && onSelect) onSelect(item.fullPath);
   };
   const handleRestorePress = () => onRestore(item.fullPath, item.isDiff);
 
   return (
-    <Touchable onPress={handlePress} notPressable={!onSelect || disabled}>
+    <Touchable
+      onPress={handlePress}
+      notPressable={!onSelect || disabled}
+    >
       <Box
         flex={1}
         backgroundColor={selected ? "newTheme_primary10" : "newTheme_surface"}
@@ -55,17 +48,29 @@ export const DeletedItemRow: React.FC<DeletedItemRowProps> = ({
         p="m"
         borderRadius="base"
       >
-        <Picture source={item.imageUrl ? { uri: item.imageUrl } : undefined} size="xl" contentFit="contain" />
+        <Picture
+          source={item.imageUrl ? { uri: item.imageUrl } : undefined}
+          size="xl"
+          contentFit="contain"
+        />
         <ScreenshotDetails
           deviceName={item.deviceName}
           storyId={item.storyId || item.label}
           countPixelDiff={item.isDiff ? item.countPixelDiff : undefined}
           showHeatmap={item.isDiff && item.countPixelDiff != null}
-          getDeviceStyle={getDeviceStyle}
         />
-        <Box flexShrink={1} flexDirection="row" alignItems="center" justifyContent="space-between" gap="m">
+        <Box
+          flexShrink={1}
+          flexDirection="row"
+          alignItems="center"
+          justifyContent="space-between"
+          gap="m"
+        >
           {item.isDiff ? (
-            <Tag label={{ text: "DIFF" }} color="newTheme_danger" />
+            <Tag
+              label={{ text: "DIFF" }}
+              color="newTheme_danger"
+            />
           ) : (
             <TagNew />
           )}
