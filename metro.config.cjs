@@ -1,7 +1,6 @@
 /**
  * Config Metro pour l'app standalone VR (expo start --web).
- * Metro est le bundler par défaut pour le web depuis Expo SDK 50+ (remplace Webpack).
- * Les alias (@atoms, @components, etc.) sont gérés par babel.config.cjs (module-resolver).
+ * .cjs pour éviter sur Windows l'erreur ESM "Received protocol 'c:'" au chargement du config.
  */
 const { getDefaultConfig } = require("expo/metro-config");
 

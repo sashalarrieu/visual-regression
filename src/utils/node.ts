@@ -16,6 +16,23 @@ const VR_DEVICES_CONFIG_FILENAME = "vr-devices.config.cjs";
 export const getProjectRoot = (): string => path.resolve(process.env.VR_PROJECT_ROOT || process.cwd());
 
 /**
+ * Chemin vers l'exécutable Bun, pour spawn() depuis le projet hôte.
+ * Sur Windows, si Bun est installé via yarn/npm (node_modules/.bin), "bun" seul peut échouer (ENOENT).
+ */
+export const getBunExecutablePath = (): string => {
+  const root = getProjectRoot();
+  const isWin = process.platform === "win32";
+  const binBun = path.join(root, "node_modules", ".bin", isWin ? "bun.cmd" : "bun");
+  if (existsSync(binBun)) return binBun;
+  if (
+    typeof process.execPath === "string" &&
+    (process.execPath.includes("bun") || process.execPath.endsWith("bun.exe"))
+  )
+    return process.execPath;
+  return "bun";
+};
+
+/**
  * Répertoire du script appelant (Bun: import.meta.dirname, Node: fileURLToPath(import.meta.url)).
  */
 export const getScriptDir = (meta: { dirname?: string; url: string }): string =>

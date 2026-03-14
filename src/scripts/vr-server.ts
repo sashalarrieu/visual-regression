@@ -18,6 +18,7 @@ import {
   VR_SERVER_URL,
 } from "@constants/constants";
 import {
+  getBunExecutablePath,
   getDevicesDisplayConfig,
   getDevicesNames,
   getProjectPaths,
@@ -918,7 +919,7 @@ serve({
         const compareScript = path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
         console.log("🔍 Lancement comparaison VR");
 
-        const compareProcess = spawn("bun", [compareScript], {
+        const compareProcess = spawn(getBunExecutablePath(), [compareScript], {
           env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
           stdio: "inherit",
         });

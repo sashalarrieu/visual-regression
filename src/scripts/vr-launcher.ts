@@ -12,7 +12,7 @@ import {
   VR_SERVER_PORT,
   VR_SERVER_URL,
 } from "@constants/constants";
-import { assertVrDevicesConfig, getProjectRoot, getScriptDir } from "@utils/node";
+import { assertVrDevicesConfig, getBunExecutablePath, getProjectRoot, getScriptDir } from "@utils/node";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
 const PACKAGE_ROOT = path.join(SCRIPT_DIR, "..", "..");
@@ -89,8 +89,9 @@ const main = async () => {
 
   log("blue", "🔧", "Démarrage du serveur VR");
 
+  const bunExe = getBunExecutablePath();
   const vrServerScript = path.join(SCRIPT_DIR, "vr-server.ts");
-  const vrServer = spawn("bun", [vrServerScript], {
+  const vrServer = spawn(bunExe, [vrServerScript], {
     stdio: "inherit",
     cwd: PROJECT_ROOT,
     env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
@@ -178,7 +179,7 @@ const main = async () => {
   const compareScript = path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
   log("blue", "🔍", "Lancement de la comparaison initiale");
 
-  const compare = spawn("bun", [compareScript], {
+  const compare = spawn(bunExe, [compareScript], {
     stdio: "inherit",
     cwd: PROJECT_ROOT,
     env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },

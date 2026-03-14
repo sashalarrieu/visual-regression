@@ -13,7 +13,7 @@
     "src",
     "scripts",
     "app.config.js",
-    "metro.config.js",
+    "metro.config.cjs",
     "README.md"
   ],
   "keywords": [
