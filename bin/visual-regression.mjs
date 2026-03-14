@@ -33,30 +33,46 @@ if (!existsSync(configPath)) {
 const subcommand = process.argv[2];
 const EXPO_PORT = 2804;
 const env = { ...process.env, VR_PROJECT_ROOT: hostRoot };
+const isWin = process.platform === "win32";
+const npxRunner = isWin ? "npx.cmd" : "npx";
+/** Sur Windows, Node 20.12+ exige shell: true pour spawn des .cmd (EINVAL sinon). */
+const spawnOpts = (cwd, envOverrides = {}) => ({
+  cwd,
+  env: { ...env, ...envOverrides },
+  stdio: "inherit",
+  ...(isWin && { shell: true }),
+});
 
-let scriptArgs;
+/** Chemin vers le CLI tsx (évite "tsx non reconnu" avec npx + shell sur Windows). */
+function getTsxCliPath() {
+  const candidates = [
+    path.join(packageRootReal, "node_modules", "tsx", "dist", "cli.mjs"),
+    path.join(packageRoot, "node_modules", "tsx", "dist", "cli.mjs"),
+    path.join(hostRoot, "node_modules", "tsx", "dist", "cli.mjs"),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+let scriptPath;
 switch (subcommand) {
   case "server": {
-    scriptArgs = ["run", path.join(packageRoot, "src", "scripts", "vr-server.ts")];
+    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-server.ts");
     break;
   }
   case "compare": {
-    scriptArgs = ["run", path.join(packageRoot, "src", "scripts", "compare-visual-regressions.ts")];
+    scriptPath = path.join(packageRootReal, "src", "scripts", "compare-visual-regressions.ts");
     break;
   }
   case "app": {
     // Ouvre l'interface web de régression visuelle (composant VisualRegressions, src/index.tsx)
     // cwd = racine réelle du package pour que le projet ne soit pas sous node_modules → pas d'exclusion Babel
-    const isWin = process.platform === "win32";
-    const runner = isWin ? "npx.cmd" : "npx";
     const child = spawn(
-      runner,
+      npxRunner,
       ["expo", "start", "--web", "--clear", "--port", String(EXPO_PORT)],
-      {
-        cwd: packageRootReal,
-        env,
-        stdio: "inherit",
-      },
+      spawnOpts(packageRootReal),
     );
     child.on("error", err => {
       console.error("❌ Impossible de lancer l'interface VR:", err.message);
@@ -67,20 +83,35 @@ switch (subcommand) {
   }
   default: {
     // pas d'argument ou "start" → launcher complet
-    scriptArgs = ["run", path.join(packageRoot, "src", "scripts", "vr-launcher.ts")];
+    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-launcher.ts");
     break;
   }
 }
 
-if (scriptArgs) {
-  const child = spawn("bun", scriptArgs, {
-    cwd: packageRootReal,
-    env,
-    stdio: "inherit",
-  });
+if (scriptPath) {
+  const tsxCli = getTsxCliPath();
+  const useNpxFallback = !tsxCli;
+  // compare (et server) doivent s'exécuter avec cwd = racine du projet hôte pour que
+  // Storybook buildIndex() résolve correctement les stories (configDir + glob ../src/...).
+  const cwd = subcommand === "compare" || subcommand === "server" ? hostRoot : packageRootReal;
+  const child = tsxCli
+    ? spawn("node", [tsxCli, scriptPath], {
+        ...spawnOpts(cwd),
+        shell: false,
+      })
+    : spawn(
+        npxRunner,
+        ["tsx", scriptPath],
+        spawnOpts(hostRoot),
+      );
   child.on("error", err => {
     console.error("❌ Impossible de lancer visual-regression:", err.message);
-    console.error("   Vérifiez que Bun est installé (https://bun.sh)");
+    if (useNpxFallback) {
+      console.error(
+        "   Ajoutez tsx au projet hôte: yarn add -D tsx (dans vow-frontend)\n" +
+          "   ou installez dans le package: cd visual-regression && yarn install",
+      );
+    }
     process.exit(1);
   });
   child.on("exit", code => process.exit(code ?? 0));

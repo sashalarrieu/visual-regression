@@ -89,6 +89,19 @@ yarn add @setshao/visual-regression
 }
 ```
 
+### Prérequis : navigateurs Playwright (Windows / nouvelle machine)
+
+La comparaison visuelle utilise **Playwright** pour lancer Chromium. Les binaires ne sont **pas** inclus dans le package : ils doivent être installés **sur chaque machine** (et par OS).
+
+**Sur Windows**, ou après un premier clone sur une nouvelle machine, exécute **une fois** à la racine du projet hôte :
+
+```bash
+cd <projet-hôte>   # ex. vow-frontend
+npx playwright install chromium
+```
+
+Sans cela, la comparaison peut échouer avec un `TimeoutError: launch: Timeout 180000ms exceeded`. En cas de timeout persistant, le script utilise désormais un timeout plus long et des options adaptées à Windows.
+
 ---
 
 ## Utilisation dans un projet hôte

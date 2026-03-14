@@ -35,11 +35,12 @@
   },
   "homepage": "https://github.com/setshao/visual-regression#readme",
   "scripts": {
-    "vr": "bun run src/scripts/vr-launcher.ts",
-    "vr:server": "bun run src/scripts/vr-server.ts",
-    "vr:compare": "bun run src/scripts/compare-visual-regressions.ts",
+    "sync-vr": "node ../scripts/sync-vr-and-start.mjs",
+    "vr": "node bin/visual-regression.mjs",
+    "vr:server": "node bin/visual-regression.mjs server",
+    "vr:compare": "node bin/visual-regression.mjs compare",
     "vr:app": "node bin/visual-regression.mjs app",
-    "vr:kill-ports": "lsof -ti :2804 | xargs kill -9 && lsof -ti :2805 | xargs kill -9",
+    "vr:kill-ports": "npx kill-port 2804 2805",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -94,6 +95,7 @@
     "expo": "~54.0.0",
     "expo-clipboard": "~8.0.8",
     "expo-updates": "~29.0.16",
+    "kill-port": "^2.0.1",
     "lint-staged": "^16.3.2",
     "pixelmatch": "^7.1.0",
     "playwright": "^1.54.2",
@@ -109,6 +111,7 @@
     "react-native-web": "^0.21.0",
     "react-native-worklets": "0.5.1",
     "storybook": "^10.1.11",
+    "tsx": "^4.7.0",
     "typescript": "~5.9.2"
   }
 }

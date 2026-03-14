@@ -18,7 +18,7 @@ import { PNG } from "pngjs";
 import { buildIndex } from "storybook/internal/core-server";
 import type { StoryIndexEntry } from "storybook/internal/types";
 
-import type { DeviceConfig, LogsType } from "@app-types/types";
+import type { DeviceConfig, LogsType } from "../types/types";
 import {
   DIFF_SCREENSHOT_NAME,
   FORCE_VR_TAG,
@@ -31,13 +31,58 @@ import {
   STORY_BASE_URI,
   TEMP_SCREENSHOT_NAME,
   THRESHOLD,
-} from "@constants/constants";
-import { getDevicesConfig, getProjectPaths, getProjectRoot, loadVrDevicesConfig } from "@utils/node";
+} from "../constants/constants";
+import { getDevicesConfig, getProjectPaths, getProjectRoot, loadVrDevicesConfig } from "../utils/node";
 
 const PROJECT_ROOT = getProjectRoot();
 const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR, storybookConfigDir: STORYBOOK_CONFIG_DIR } =
   getProjectPaths(PROJECT_ROOT);
 const DEVICES = getDevicesConfig(loadVrDevicesConfig(PROJECT_ROOT));
+
+/** Options de lancement Chromium : timeout augmenté et args Windows. */
+const CHROMIUM_LAUNCH_OPTIONS = {
+  timeout: 300_000,
+  headless: true,
+  ...(process.platform === "win32" && {
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+  }),
+};
+
+/** Options communes pour Chrome/Edge sur Windows (lancement parfois lent : AV, premier démarrage). */
+const WINDOWS_CHANNEL_LAUNCH = {
+  headless: true,
+  timeout: 180_000,
+  args: [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-software-rasterizer",
+    "--disable-background-networking",
+  ],
+};
+
+/**
+ * Lance un navigateur pour les captures. Sur Windows, on évite chromium_headless_shell (timeouts)
+ * en utilisant Chrome ou Edge système avec timeout long, sinon Chromium bundlé.
+ */
+async function launchBrowser(): Promise<Browser> {
+  if (process.platform === "win32") {
+    const channels: ("chrome" | "msedge")[] = ["msedge", "chrome"];
+    for (const channel of channels) {
+      try {
+        return await chromium.launch({
+          channel,
+          ...WINDOWS_CHANNEL_LAUNCH,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`Navigateur ${channel} non disponible (${msg.slice(0, 80)}…), tentative suivante.`);
+      }
+    }
+    console.warn("Chrome/Edge non utilisables, lancement de Chromium bundlé (peut être lent sur Windows).");
+  }
+  return await chromium.launch(CHROMIUM_LAUNCH_OPTIONS);
+}
 
 const addLogs = ({ log, type = "error", logs }: { log: string; type?: "error" | "vr" | "new"; logs: LogsType }) => {
   if (type === "new") {
@@ -128,14 +173,51 @@ const shouldIncludeStoryForVisualRegression = (entry: StoryIndexEntry): boolean 
 };
 
 // 1. Trouver tous les dossiers contenant un fichier .stories.tsx
+// buildIndex résout les stories (glob dans main.ts) par rapport à process.cwd() dans certaines versions.
+// On s'assure donc d'être dans la racine du projet pour que ../src/**/*.stories soit correct.
 const getAllStories = async (): Promise<StoryIndexEntry[]> => {
-  const index = await buildIndex({
-    configDir: STORYBOOK_CONFIG_DIR,
-  });
-
-  return Object.values(index.entries).filter((entry): entry is StoryIndexEntry => {
-    return entry.type === "story" && shouldIncludeStoryForVisualRegression(entry);
-  });
+  // #region agent log
+  fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
+    body: JSON.stringify({
+      sessionId: "bd8ea2",
+      location: "compare-visual-regressions.ts:getAllStories entry",
+      message: "getAllStories called",
+      data: { PROJECT_ROOT, STORYBOOK_CONFIG_DIR, cwd: process.cwd() },
+      timestamp: Date.now(),
+      hypothesisId: "A",
+    }),
+  }).catch(() => {});
+  // #endregion
+  const previousCwd = process.cwd();
+  try {
+    process.chdir(PROJECT_ROOT);
+    const index = await buildIndex({
+      configDir: STORYBOOK_CONFIG_DIR,
+    });
+    const entriesCount = Object.keys(index.entries).length;
+    const filtered = Object.values(index.entries).filter((entry): entry is StoryIndexEntry => {
+      return entry.type === "story" && shouldIncludeStoryForVisualRegression(entry);
+    });
+    // #region agent log
+    fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
+      body: JSON.stringify({
+        sessionId: "bd8ea2",
+        location: "compare-visual-regressions.ts:getAllStories after buildIndex",
+        message: "getAllStories result",
+        data: { entriesCount, storiesCount: filtered.length, sampleIds: filtered.slice(0, 3).map(s => s.id) },
+        timestamp: Date.now(),
+        hypothesisId: "A",
+      }),
+    }).catch(() => {});
+    // #endregion
+    return filtered;
+  } finally {
+    process.chdir(previousCwd);
+  }
 };
 
 const captureScreenshotWithPlaywright = async ({
@@ -267,7 +349,7 @@ export const compareSelectedStories = async (
   };
   const storiesWithDiff: string[] = [];
 
-  const browser = await chromium.launch();
+  const browser = await launchBrowser();
 
   try {
     const stories = await getAllStories();
@@ -429,6 +511,20 @@ const extractDeviceAndStoryIdFromDeletedFile = (
  * qui ne régénère que celles qui sont dans le dossier deleted/
  */
 export const compareAllStories = async (deviceName?: string): Promise<{ success: boolean; error?: string }> => {
+  // #region agent log
+  fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
+    body: JSON.stringify({
+      sessionId: "bd8ea2",
+      location: "compare-visual-regressions.ts:compareAllStories entry",
+      message: "compareAllStories called",
+      data: { deviceName, DEVICESCount: Object.keys(DEVICES).length },
+      timestamp: Date.now(),
+      hypothesisId: "C_D",
+    }),
+  }).catch(() => {});
+  // #endregion
   const logs: LogsType = {
     errors: [],
     vrs: [],
@@ -436,11 +532,25 @@ export const compareAllStories = async (deviceName?: string): Promise<{ success:
   };
   const storiesWithDiff: string[] = [];
 
-  const browser = await chromium.launch();
+  const browser = await launchBrowser();
 
   try {
     const stories = await getAllStories();
     const allDevices = Object.keys(DEVICES);
+    // #region agent log
+    fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
+      body: JSON.stringify({
+        sessionId: "bd8ea2",
+        location: "compare-visual-regressions.ts:compareAllStories after getAllStories",
+        message: "stories and devices",
+        data: { storiesCount: stories.length, allDevicesCount: allDevices.length, allDevices },
+        timestamp: Date.now(),
+        hypothesisId: "A_D",
+      }),
+    }).catch(() => {});
+    // #endregion
 
     // Structure pour stocker les fichiers à régénérer: Map<deviceName, Map<storyId, { componentDir }>>
     type FileToRegenerate = {
@@ -576,7 +686,7 @@ export const compareByType = async (
   };
   const storiesWithDiff: string[] = [];
 
-  const browser = await chromium.launch();
+  const browser = await launchBrowser();
 
   try {
     const stories = await getAllStories();
@@ -762,6 +872,20 @@ export const compareByType = async (
 };
 
 const compareVisualRegressions = async () => {
+  // #region agent log
+  fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
+    body: JSON.stringify({
+      sessionId: "bd8ea2",
+      location: "compare-visual-regressions.ts:compareVisualRegressions entry",
+      message: "compareVisualRegressions (script main) called",
+      data: {},
+      timestamp: Date.now(),
+      hypothesisId: "E",
+    }),
+  }).catch(() => {});
+  // #endregion
   const logs: LogsType = {
     errors: [],
     vrs: [],
@@ -769,11 +893,24 @@ const compareVisualRegressions = async () => {
   };
   const storiesWithDiff: string[] = [];
 
-  const browser = await chromium.launch();
+  const browser = await launchBrowser();
 
   try {
     const stories = await getAllStories();
-
+    // #region agent log
+    fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
+      body: JSON.stringify({
+        sessionId: "bd8ea2",
+        location: "compare-visual-regressions.ts:compareVisualRegressions after getAllStories",
+        message: "script main getAllStories result",
+        data: { storiesCount: stories.length },
+        timestamp: Date.now(),
+        hypothesisId: "A_E",
+      }),
+    }).catch(() => {});
+    // #endregion
     if (stories.length === 0) {
       addLogs({ log: `🚫 No stories found`, logs });
     } else {

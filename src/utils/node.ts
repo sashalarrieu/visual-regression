@@ -7,8 +7,8 @@ import { createRequire } from "module";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import type { DeviceConfig, DeviceDisplayConfig, VRDeviceConfigItem } from "@app-types/types";
-import { SCREENSHOTS_DIR } from "@constants/constants";
+import type { DeviceConfig, DeviceDisplayConfig, VRDeviceConfigItem } from "../types/types";
+import { SCREENSHOTS_DIR } from "../constants/constants";
 
 const _require = createRequire(import.meta.url);
 const VR_DEVICES_CONFIG_FILENAME = "vr-devices.config.cjs";
@@ -16,21 +16,17 @@ const VR_DEVICES_CONFIG_FILENAME = "vr-devices.config.cjs";
 export const getProjectRoot = (): string => path.resolve(process.env.VR_PROJECT_ROOT || process.cwd());
 
 /**
- * Chemin vers l'exécutable Bun, pour spawn() depuis le projet hôte.
- * Sur Windows, si Bun est installé via yarn/npm (node_modules/.bin), "bun" seul peut échouer (ENOENT).
+ * Commande et arguments pour lancer un script .ts avec Node + tsx (cross-platform: Windows, Mac, Linux).
  */
-export const getBunExecutablePath = (): string => {
-  const root = getProjectRoot();
-  const isWin = process.platform === "win32";
-  const binBun = path.join(root, "node_modules", ".bin", isWin ? "bun.cmd" : "bun");
-  if (existsSync(binBun)) return binBun;
-  if (
-    typeof process.execPath === "string" &&
-    (process.execPath.includes("bun") || process.execPath.endsWith("bun.exe"))
-  )
-    return process.execPath;
-  return "bun";
-};
+export const getNodeTsxArgs = (scriptPath: string): { command: string; args: string[] } => ({
+  command: process.platform === "win32" ? "npx.cmd" : "npx",
+  args: ["tsx", scriptPath],
+});
+
+/**
+ * À passer dans les options de spawn sur Windows (Node 20.12+) pour éviter EINVAL avec .cmd.
+ */
+export const spawnShellOption = process.platform === "win32" ? { shell: true as const } : {};
 
 /**
  * Répertoire du script appelant (Bun: import.meta.dirname, Node: fileURLToPath(import.meta.url)).

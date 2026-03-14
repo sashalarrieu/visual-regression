@@ -11,8 +11,8 @@ import {
   STORYBOOK_URL,
   VR_SERVER_PORT,
   VR_SERVER_URL,
-} from "@constants/constants";
-import { assertVrDevicesConfig, getBunExecutablePath, getProjectRoot, getScriptDir } from "@utils/node";
+} from "../constants/constants";
+import { assertVrDevicesConfig, getNodeTsxArgs, getProjectRoot, getScriptDir, spawnShellOption } from "../utils/node";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
 const PACKAGE_ROOT = path.join(SCRIPT_DIR, "..", "..");
@@ -89,12 +89,12 @@ const main = async () => {
 
   log("blue", "🔧", "Démarrage du serveur VR");
 
-  const bunExe = getBunExecutablePath();
-  const vrServerScript = path.join(SCRIPT_DIR, "vr-server.ts");
-  const vrServer = spawn(bunExe, [vrServerScript], {
+  const { command: nodeTsxCommand, args: nodeTsxArgs } = getNodeTsxArgs(path.join(SCRIPT_DIR, "vr-server.ts"));
+  const vrServer = spawn(nodeTsxCommand, nodeTsxArgs, {
     stdio: "inherit",
     cwd: PROJECT_ROOT,
     env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
+    ...spawnShellOption,
   });
 
   vrServer.on("error", err => {
@@ -179,10 +179,12 @@ const main = async () => {
   const compareScript = path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
   log("blue", "🔍", "Lancement de la comparaison initiale");
 
-  const compare = spawn(bunExe, [compareScript], {
+  const { command: compareCommand, args: compareArgs } = getNodeTsxArgs(compareScript);
+  const compare = spawn(compareCommand, compareArgs, {
     stdio: "inherit",
     cwd: PROJECT_ROOT,
     env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
+    ...spawnShellOption,
   });
 
   compare.on("close", code => {

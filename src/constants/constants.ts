@@ -3,7 +3,7 @@
  * Partagées entre l'UI (src) et les scripts (scripts/).
  */
 
-import type { DeviceStyle } from "@app-types/types";
+import type { DeviceStyle } from "../types/types";
 
 // --- Ports (launcher, serveur, Storybook, Expo) ---
 

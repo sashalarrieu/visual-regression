@@ -1,14 +1,27 @@
 // scripts/vr-server.ts (package @setshao/visual-regression)
 import { spawn } from "child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch } from "fs";
+import {
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  watch,
+} from "fs";
+import type { IncomingMessage, ServerResponse } from "http";
+import { createServer } from "http";
 import path from "path";
 
-import { serve } from "bun";
 import { PNG } from "pngjs";
 
-import type { CacheData, DeletedItem, Node, ParsedPath, SSEClient, StoryScreenshotsPath } from "@app-types/types";
+import type { CacheData, DeletedItem, Node, ParsedPath, StoryScreenshotsPath } from "../types/types";
 import {
   DIFF_SCREENSHOT_NAME,
+  EXPO_PORT,
+  LOCAL_URL,
   NEW_SCREENSHOT_NAME,
   SCREENSHOT_EXTENSION,
   SCREENSHOTS_DIR,
@@ -16,16 +29,17 @@ import {
   TREE_BASE_FOLDER,
   VR_SERVER_PORT,
   VR_SERVER_URL,
-} from "@constants/constants";
+} from "../constants/constants";
 import {
-  getBunExecutablePath,
   getDevicesDisplayConfig,
   getDevicesNames,
+  getNodeTsxArgs,
   getProjectPaths,
   getProjectRoot,
   getScriptDir,
   loadVrDevicesConfig,
-} from "@utils/node";
+  spawnShellOption,
+} from "../utils/node";
 
 const PROJECT_ROOT = getProjectRoot();
 const {
@@ -507,38 +521,45 @@ const parseDeleted = (filePath: string): DeletedItem | null => {
 // HELPERS HTTP
 // ============================================
 
-const corsHeaders = {
+const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-const jsonResponse = (data: unknown, status = 200) =>
-  new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json", ...corsHeaders },
+const sendJson = (res: ServerResponse, data: unknown, status = 200) => {
+  res.writeHead(status, { "Content-Type": "application/json", ...corsHeaders });
+  res.end(JSON.stringify(data));
+};
+
+const readBody = (req: IncomingMessage): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
   });
 
 // ============================================
-// SYSTÈME DE NOTIFICATIONS SSE
+// SYSTÈME DE NOTIFICATIONS SSE (Node)
 // ============================================
 
-const sseClients = new Set<SSEClient>();
+type NodeSSEClient = { id: string; res: ServerResponse };
+const sseClients = new Set<NodeSSEClient>();
 
 const notifyAllClients = () => {
   const message = JSON.stringify({ type: "cache-updated", timestamp: Date.now() });
-  const toRemove: SSEClient[] = [];
+  const toRemove: NodeSSEClient[] = [];
 
   for (const client of sseClients) {
     try {
-      client.controller.enqueue(`data: ${message}\n\n`);
+      client.res.write(`data: ${message}\n\n`);
     } catch (err) {
       console.warn("⚠️  Error sending SSE to client, removing:", err);
       toRemove.push(client);
     }
   }
 
-  // Nettoyer les clients déconnectés
   toRemove.forEach(client => sseClients.delete(client));
 };
 
@@ -682,561 +703,522 @@ cache = refreshCache(cache, false);
 watchDeletedDirectory();
 
 // ============================================
-// SERVEUR HTTP
+// SERVEUR HTTP (Node)
 // ============================================
 
-serve({
-  port: VR_SERVER_PORT,
-  async fetch(req: { url: string | URL; method: string; json: () => unknown }) {
-    const url = new URL(req.url);
+const handler = async (req: IncomingMessage, res: ServerResponse) => {
+  const url = new URL(req.url || "/", VR_SERVER_URL);
 
-    // ✅ Préflight CORS
-    if (req.method === "OPTIONS") {
-      return new Response("OK", { headers: corsHeaders });
-    }
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, corsHeaders);
+    res.end();
+    return;
+  }
 
-    // ============================================
-    // ROUTES DE LECTURE
-    // ============================================
+  // ============================================
+  // ROUTES DE LECTURE
+  // ============================================
 
-    // 📖 GET /regressions - Récupérer tous les chemins
-    if (req.method === "GET" && url.pathname === "/regressions") {
-      try {
-        return jsonResponse({
-          diff: cache.diffPaths,
-          new: cache.newPaths,
-          deleted: cache.deletedPaths,
-          lastUpdate: cache.lastUpdate,
-        });
-      } catch (err) {
-        console.error("❌ Error fetching regressions:", err);
-        return jsonResponse({ error: String(err) }, 500);
-      }
-    }
-
-    // 📖 GET /regressions/tree - Récupérer l'arborescence des régressions
-    if (req.method === "GET" && url.pathname === "/regressions/tree") {
-      try {
-        const allPaths = [...cache.diffPaths, ...cache.newPaths];
-        const rawTree = allPaths.length ? buildTree(allPaths, TREE_BASE_FOLDER) : null;
-        const tree = rawTree ? sortTree(rawTree) : null;
-
-        return jsonResponse({
-          tree,
-          lastUpdate: cache.lastUpdate,
-        });
-      } catch (err) {
-        console.error("❌ Error building tree:", err);
-        return jsonResponse({ error: String(err) }, 500);
-      }
-    }
-
-    // 📖 GET /regressions/config/devices - Config d'affichage des devices (pour l'UI, depuis vr-devices.config.cjs)
-    if (req.method === "GET" && url.pathname === "/regressions/config/devices") {
-      try {
-        const devices = getDevicesDisplayConfig(PROJECT_ROOT);
-        return jsonResponse({ devices });
-      } catch (err) {
-        console.error("❌ Error fetching devices config:", err);
-        return jsonResponse({ error: String(err) }, 500);
-      }
-    }
-
-    // 📖 GET /regressions/deleted - Récupérer les suppressions
-    if (req.method === "GET" && url.pathname === "/regressions/deleted") {
-      try {
-        // Filtrer uniquement les fichiers __diff__ et __new__
-        const deletedList = cache.deletedPaths
-          .filter(path => path.includes(DIFF_SCREENSHOT_NAME) || path.includes(NEW_SCREENSHOT_NAME))
-          .map(parseDeleted)
-          .filter(Boolean) as DeletedItem[];
-
-        return jsonResponse({
-          deleted: deletedList,
-          lastUpdate: cache.lastUpdate,
-        });
-      } catch (err) {
-        console.error("❌ Error fetching deleted:", err);
-        return jsonResponse({ error: String(err) }, 500);
-      }
-    }
-
-    // 📡 GET /events - Server-Sent Events pour les notifications en temps réel
-    if (req.method === "GET" && url.pathname === "/events") {
-      let clientRef: SSEClient | null = null;
-      let pingIntervalRef: NodeJS.Timeout | null = null;
-
-      const stream = new ReadableStream({
-        start(controller) {
-          const clientId = `client-${Date.now()}-${Math.random()}`;
-          const client: SSEClient = { id: clientId, controller };
-          clientRef = client;
-          sseClients.add(client);
-
-          // Envoyer un message de connexion initial avec la dernière mise à jour du cache
-          controller.enqueue(
-            `data: ${JSON.stringify({ type: "connected", clientId, lastUpdate: cache.lastUpdate })}\n\n`,
-          );
-
-          // Envoyer un ping périodique pour maintenir la connexion
-          pingIntervalRef = setInterval(() => {
-            try {
-              controller.enqueue(`: ping\n\n`);
-            } catch {
-              // Si on ne peut pas envoyer, la connexion est fermée
-              if (pingIntervalRef) {
-                clearInterval(pingIntervalRef);
-                pingIntervalRef = null;
-              }
-              if (clientRef) {
-                sseClients.delete(clientRef);
-                console.log(
-                  `📡 Client SSE déconnecté (ping failed): ${clientId} (${sseClients.size} clients restants)`,
-                );
-                clientRef = null;
-              }
-            }
-          }, 30000); // Ping toutes les 30 secondes
-        },
-        cancel() {
-          // Nettoyer le client spécifique de ce stream
-          if (pingIntervalRef) {
-            clearInterval(pingIntervalRef);
-            pingIntervalRef = null;
-          }
-          if (clientRef) {
-            sseClients.delete(clientRef);
-            clientRef = null;
-          }
-        },
+  if (req.method === "GET" && url.pathname === "/regressions") {
+    try {
+      sendJson(res, {
+        diff: cache.diffPaths,
+        new: cache.newPaths,
+        deleted: cache.deletedPaths,
+        lastUpdate: cache.lastUpdate,
       });
-
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-          ...corsHeaders,
-        },
-      });
+    } catch (err) {
+      console.error("❌ Error fetching regressions:", err);
+      sendJson(res, { error: String(err) }, 500);
     }
+    return;
+  }
 
-    // ============================================
-    // ROUTES D'ÉCRITURE
-    // ============================================
+  // 📖 GET /regressions/tree - Récupérer l'arborescence des régressions
+  if (req.method === "GET" && url.pathname === "/regressions/tree") {
+    try {
+      const allPaths = [...cache.diffPaths, ...cache.newPaths];
+      const rawTree = allPaths.length ? buildTree(allPaths, TREE_BASE_FOLDER) : null;
+      const tree = rawTree ? sortTree(rawTree) : null;
+      sendJson(res, { tree, lastUpdate: cache.lastUpdate });
+    } catch (err) {
+      console.error("❌ Error building tree:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
 
-    // ✅ POST /validate - Valider une régression
-    if (req.method === "POST" && url.pathname === "/validate") {
-      const body = (await req.json()) as StoryScreenshotsPath;
+  // 📖 GET /regressions/config/devices - Config d'affichage des devices (pour l'UI, depuis vr-devices.config.cjs)
+  if (req.method === "GET" && url.pathname === "/regressions/config/devices") {
+    try {
+      const devices = getDevicesDisplayConfig(PROJECT_ROOT);
+      sendJson(res, { devices });
+    } catch (err) {
+      console.error("❌ Error fetching devices config:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  // 📖 GET /regressions/deleted - Récupérer les suppressions
+  if (req.method === "GET" && url.pathname === "/regressions/deleted") {
+    try {
+      const deletedList = cache.deletedPaths
+        .filter(p => p.includes(DIFF_SCREENSHOT_NAME) || p.includes(NEW_SCREENSHOT_NAME))
+        .map(parseDeleted)
+        .filter(Boolean) as DeletedItem[];
+      sendJson(res, { deleted: deletedList, lastUpdate: cache.lastUpdate });
+    } catch (err) {
+      console.error("❌ Error fetching deleted:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  // 📡 GET /events - Server-Sent Events pour les notifications en temps réel
+  if (req.method === "GET" && url.pathname === "/events") {
+    const clientId = `client-${Date.now()}-${Math.random()}`;
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      ...corsHeaders,
+    });
+    const client: NodeSSEClient = { id: clientId, res };
+    sseClients.add(client);
+    res.write(`data: ${JSON.stringify({ type: "connected", clientId, lastUpdate: cache.lastUpdate })}\n\n`);
+
+    const pingIntervalRef = setInterval(() => {
+      try {
+        res.write(": ping\n\n");
+      } catch {
+        clearInterval(pingIntervalRef);
+        sseClients.delete(client);
+        console.log(`📡 Client SSE déconnecté (ping failed): ${clientId} (${sseClients.size} clients restants)`);
+      }
+    }, 30000);
+
+    const cleanup = () => {
+      clearInterval(pingIntervalRef);
+      sseClients.delete(client);
+    };
+    res.on("close", cleanup);
+    res.on("error", cleanup);
+    return;
+  }
+
+  // ============================================
+  // ROUTES D'ÉCRITURE
+  // ============================================
+
+  // ✅ POST /validate - Valider une régression
+  if (req.method === "POST" && url.pathname === "/validate") {
+    try {
+      const body = JSON.parse(await readBody(req)) as StoryScreenshotsPath;
       const { temp, diff, new: newPath, original } = body || {};
 
-      try {
-        // Déterminer si c'est un cas diff (présence de diff et temp) ou new (présence de new)
-        const isDiffCase = diff && temp;
-        const isNewCase = newPath && !diff;
+      // Déterminer si c'est un cas diff (présence de diff et temp) ou new (présence de new)
+      const isDiffCase = diff && temp;
+      const isNewCase = newPath && !diff;
 
-        if (!isDiffCase && !isNewCase) {
-          throw new Error("Invalid validation: must have either (diff + temp) or (new)");
+      if (!isDiffCase && !isNewCase) {
+        throw new Error("Invalid validation: must have either (diff + temp) or (new)");
+      }
+
+      // Pour diff : on garde temp et on supprime diff + original
+      // Pour new : on garde new
+      const source = isDiffCase ? temp : newPath;
+      if (!source) {
+        throw new Error("Missing source path");
+      }
+
+      // Le chemin source est de la forme: Screenshots/src/atoms/Alert/__temp__fichier.png ou __new__fichier.png
+      // On veut construire: src/atoms/Alert/Screenshots/fichier.png
+      const parts = source.split("/");
+
+      // Retirer "Screenshots" du début
+      if (parts[0] !== SCREENSHOTS_DIR) {
+        throw new Error(`Invalid path format: expected to start with ${SCREENSHOTS_DIR}`);
+      }
+
+      // Retirer "Screenshots" du début et extraire le reste
+      const pathWithoutScreenshots = parts.slice(1);
+      const fileName = pathWithoutScreenshots[pathWithoutScreenshots.length - 1];
+      const componentPath = pathWithoutScreenshots.slice(0, -1);
+
+      // Retirer le préfixe __temp__ ou __new__ du nom de fichier uniquement
+      const cleanFileName = fileName.replace(
+        new RegExp(
+          `^${TEMP_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}|^${NEW_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+        ),
+        "",
+      );
+
+      // Construire le chemin cible: src/atoms/Alert/Screenshots/fichier.png
+      const target = [...componentPath, SCREENSHOTS_DIR, cleanFileName].join("/");
+
+      const absSource = join(PUBLIC_DIR, source);
+      const absTarget = join(".", target); // Chemin relatif depuis la racine du projet
+      mkdirSync(dirname(absTarget), { recursive: true });
+
+      // Déplacer le fichier source vers le dossier Screenshots/ à côté de la story
+      renameSync(absSource, absTarget);
+
+      // Suppression des fichiers associés selon le cas
+      if (isDiffCase) {
+        // Pour diff : supprimer diff et original (temp a déjà été déplacé)
+        if (diff) {
+          try {
+            const absDiff = join(PUBLIC_DIR, diff);
+            rmSync(absDiff, { force: true });
+          } catch (err) {
+            console.warn(`⚠️  Failed to delete diff ${diff}`, err);
+          }
         }
-
-        // Pour diff : on garde temp et on supprime diff + original
-        // Pour new : on garde new
-        const source = isDiffCase ? temp : newPath;
-        if (!source) {
-          throw new Error("Missing source path");
+        if (original) {
+          try {
+            const absOriginal = join(PUBLIC_DIR, original);
+            rmSync(absOriginal, { force: true });
+          } catch (err) {
+            console.warn(`⚠️  Failed to delete original ${original}`, err);
+          }
         }
+      } else if (isNewCase) {
+        // Pour new : le fichier new a déjà été déplacé via renameSync
+        // Il n'y a rien d'autre à supprimer car c'est une nouvelle image
+      }
 
-        // Le chemin source est de la forme: Screenshots/src/atoms/Alert/__temp__fichier.png ou __new__fichier.png
-        // On veut construire: src/atoms/Alert/Screenshots/fichier.png
-        const parts = source.split("/");
+      // Rafraîchir le cache et notifier les clients
+      cache = refreshCache(cache, true);
 
-        // Retirer "Screenshots" du début
-        if (parts[0] !== SCREENSHOTS_DIR) {
-          throw new Error(`Invalid path format: expected to start with ${SCREENSHOTS_DIR}`);
-        }
+      console.log(`✅ Validated (${isDiffCase ? "diff" : "new"}): ${target}`);
+      sendJson(res, { success: true });
+    } catch (err) {
+      console.error("❌ Validate error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
 
-        // Retirer "Screenshots" du début et extraire le reste
-        const pathWithoutScreenshots = parts.slice(1);
-        const fileName = pathWithoutScreenshots[pathWithoutScreenshots.length - 1];
-        const componentPath = pathWithoutScreenshots.slice(0, -1);
+  // 🔍 POST /compare - Lancer la comparaison
+  if (req.method === "POST" && url.pathname === "/compare") {
+    // #region agent log
+    fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
+      body: JSON.stringify({
+        sessionId: "bd8ea2",
+        location: "vr-server.ts:POST /compare",
+        message: "Endpoint POST /compare hit",
+        data: { pathname: url.pathname },
+        timestamp: Date.now(),
+        hypothesisId: "B_E",
+      }),
+    }).catch(() => {});
+    // #endregion
+    try {
+      const compareScript = path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
+      console.log("🔍 Lancement comparaison VR");
+      const { command, args } = getNodeTsxArgs(compareScript);
+      const compareProcess = spawn(command, args, {
+        env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
+        stdio: "inherit",
+        ...spawnShellOption,
+      });
+      // Rafraîchir le cache après la comparaison et notifier les clients
+      compareProcess.on("close", (code: number) => {
+        console.log(`✅ Comparaison terminée (code: ${code})`);
+        cache = refreshCache(cache, true);
+      });
+      sendJson(res, { success: true, message: "Comparaison lancée" });
+    } catch (err) {
+      console.error("❌ Compare error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
 
-        // Retirer le préfixe __temp__ ou __new__ du nom de fichier uniquement
-        const cleanFileName = fileName.replace(
-          new RegExp(
-            `^${TEMP_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}|^${NEW_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
-          ),
-          "",
+  // 🔍 POST /compare/single - Lancer la comparaison pour une story spécifique
+  if (req.method === "POST" && url.pathname === "/compare/single") {
+    try {
+      const body = JSON.parse(await readBody(req)) as { storyId: string; deviceName: string };
+      const { storyId, deviceName } = body || {};
+      if (!storyId || !deviceName) {
+        sendJson(res, { success: false, error: "Missing storyId or deviceName" }, 400);
+        return;
+      }
+      // Importer et appeler la fonction de comparaison pour une story spécifique
+      const { compareSingleStory } = await import(path.join(SCRIPT_DIR, "compare-visual-regressions.ts"));
+      const result = await compareSingleStory(storyId, deviceName);
+      if (result.success) {
+        // Rafraîchir le cache après la comparaison et notifier les clients
+        cache = refreshCache(cache, true);
+        sendJson(res, { success: true, message: "Comparaison lancée" });
+      } else {
+        sendJson(res, { success: false, error: result.error || "Unknown error" }, 500);
+      }
+    } catch (err) {
+      console.error("❌ Compare single error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  // 🔍 POST /compare/by-type - Lancer la comparaison par type (new, diff, rejected) et optionnellement par device
+  if (req.method === "POST" && url.pathname === "/compare/by-type") {
+    try {
+      const body = JSON.parse(await readBody(req)) as { type: "new" | "diff" | "rejected"; deviceName?: string };
+      const { type, deviceName } = body || {};
+      if (!type || !["new", "diff", "rejected"].includes(type)) {
+        sendJson(res, { success: false, error: "Missing or invalid type (must be 'new', 'diff', or 'rejected')" }, 400);
+        return;
+      }
+      // Importer et appeler la fonction de comparaison par type
+      const { compareByType } = await import(path.join(SCRIPT_DIR, "compare-visual-regressions.ts"));
+      const result = await compareByType(type, deviceName);
+      if (result.success) {
+        // Rafraîchir le cache après la comparaison et notifier les clients
+        cache = refreshCache(cache, true);
+        sendJson(res, {
+          success: true,
+          message: `Comparaison lancée pour le type ${type}${deviceName ? ` sur ${deviceName}` : ""}`,
+        });
+      } else {
+        sendJson(res, { success: false, error: result.error || "Unknown error" }, 500);
+      }
+    } catch (err) {
+      console.error("❌ Compare by type error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  // 🔍 POST /compare/all-stories - Régénérer toutes les stories pour un device (ou tous les devices si non spécifié)
+  if (req.method === "POST" && url.pathname === "/compare/all-stories") {
+    // #region agent log
+    fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
+      body: JSON.stringify({
+        sessionId: "bd8ea2",
+        location: "vr-server.ts:POST /compare/all-stories",
+        message: "Endpoint POST /compare/all-stories hit",
+        data: { pathname: url.pathname },
+        timestamp: Date.now(),
+        hypothesisId: "B",
+      }),
+    }).catch(() => {});
+    // #endregion
+    try {
+      const body = JSON.parse(await readBody(req)) as { deviceName?: string };
+      const { deviceName } = body || {};
+      // Importer et appeler la fonction de comparaison pour toutes les stories
+      const { compareAllStories } = await import(path.join(SCRIPT_DIR, "compare-visual-regressions.ts"));
+      const result = await compareAllStories(deviceName);
+      if (result.success) {
+        // Rafraîchir le cache après la comparaison et notifier les clients
+        cache = refreshCache(cache, true);
+        sendJson(res, {
+          success: true,
+          message: `Régénération lancée pour toutes les stories${deviceName ? ` sur ${deviceName}` : " (tous les devices)"}`,
+        });
+      } else {
+        sendJson(res, { success: false, error: result.error || "Unknown error" }, 500);
+      }
+    } catch (err) {
+      console.error("❌ Compare all stories error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  // 🔍 POST /compare/selected - Régénérer une sélection de stories (même flux que by-type / all-stories)
+  if (req.method === "POST" && url.pathname === "/compare/selected") {
+    try {
+      const body = JSON.parse(await readBody(req)) as { stories: { storyId: string; deviceName: string }[] };
+      const { stories } = body || {};
+      if (!Array.isArray(stories) || stories.length === 0) {
+        sendJson(
+          res,
+          { success: false, error: "Missing or empty stories array (expected { storyId, deviceName }[])" },
+          400,
         );
+        return;
+      }
 
-        // Construire le chemin cible: src/atoms/Alert/Screenshots/fichier.png
-        const target = [...componentPath, SCREENSHOTS_DIR, cleanFileName].join("/");
+      const { compareSelectedStories } = await import(path.join(SCRIPT_DIR, "compare-visual-regressions.ts"));
+      const result = await compareSelectedStories(stories);
+      if (result.success) {
+        cache = refreshCache(cache, true);
+        sendJson(res, {
+          success: true,
+          message: `Régénération lancée pour ${stories.length} comparaison${stories.length > 1 ? "s" : ""}`,
+        });
+      } else {
+        sendJson(res, { success: false, error: result.error || "Unknown error" }, 500);
+      }
+    } catch (err) {
+      console.error("❌ Compare selected error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
 
-        const absSource = join(PUBLIC_DIR, source);
-        const absTarget = join(".", target); // Chemin relatif depuis la racine du projet
+  if (req.method === "POST" && url.pathname === "/delete") {
+    try {
+      const body = JSON.parse(await readBody(req)) as StoryScreenshotsPath;
+      const { temp, diff, new: newPath, original } = body || {};
+
+      const files = [original, temp, diff, newPath].filter(Boolean);
+
+      if (!files.length) {
+        throw new Error("Missing paths");
+      }
+
+      for (const p of files) {
+        const absSource = join(PUBLIC_DIR, p!);
+        if (!existsSync(absSource)) {
+          // console.warn(`⚠️  File not found: ${absSource}`);
+          continue;
+        }
+
+        // Retirer "Screenshots/" du début si présent pour éviter la duplication
+        const cleanPath = p!.replace(/^Screenshots\//, "");
+        const absTarget = join(DELETED_DIR, cleanPath);
+
         mkdirSync(dirname(absTarget), { recursive: true });
 
-        // Déplacer le fichier source vers le dossier Screenshots/ à côté de la story
         renameSync(absSource, absTarget);
-
-        // Suppression des fichiers associés selon le cas
-        if (isDiffCase) {
-          // Pour diff : supprimer diff et original (temp a déjà été déplacé)
-          if (diff) {
-            try {
-              const absDiff = join(PUBLIC_DIR, diff);
-              rmSync(absDiff, { force: true });
-            } catch (err) {
-              console.warn(`⚠️  Failed to delete diff ${diff}`, err);
-            }
-          }
-          if (original) {
-            try {
-              const absOriginal = join(PUBLIC_DIR, original);
-              rmSync(absOriginal, { force: true });
-            } catch (err) {
-              console.warn(`⚠️  Failed to delete original ${original}`, err);
-            }
-          }
-        } else if (isNewCase) {
-          // Pour new : le fichier new a déjà été déplacé via renameSync
-          // Il n'y a rien d'autre à supprimer car c'est une nouvelle image
-        }
-
-        // Rafraîchir le cache et notifier les clients
-        cache = refreshCache(cache, true);
-
-        console.log(`✅ Validated (${isDiffCase ? "diff" : "new"}): ${target}`);
-        return jsonResponse({ success: true });
-      } catch (err) {
-        console.error("❌ Validate error:", err);
-        return jsonResponse({ error: String(err) }, 500);
+        console.log(`🗃️  Moved to deleted/: ${cleanPath}`);
       }
+
+      ignoreWatchTemporarily();
+      cache = refreshCache(cache, true);
+      sendJson(res, { success: true });
+    } catch (err) {
+      console.error("❌ Delete error:", err);
+      sendJson(res, { error: String(err) }, 500);
     }
+    return;
+  }
 
-    // 🔍 POST /compare - Lancer la comparaison
-    if (req.method === "POST" && url.pathname === "/compare") {
-      try {
-        const compareScript = path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
-        console.log("🔍 Lancement comparaison VR");
+  if (req.method === "POST" && url.pathname === "/restore") {
+    try {
+      const body = JSON.parse(await readBody(req)) as {
+        path: string;
+        isDiff: boolean;
+      };
+      const { path, isDiff } = body || {};
 
-        const compareProcess = spawn(getBunExecutablePath(), [compareScript], {
-          env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
-          stdio: "inherit",
-        });
-
-        compareProcess.on("close", (code: number) => {
-          console.log(`✅ Comparaison terminée (code: ${code})`);
-          // Rafraîchir le cache après la comparaison et notifier les clients
-          cache = refreshCache(cache, true);
-        });
-
-        return jsonResponse({ success: true, message: "Comparaison lancée" });
-      } catch (err) {
-        console.error("❌ Compare error:", err);
-        return jsonResponse({ error: String(err) }, 500);
+      if (!path) {
+        throw new Error("Missing path");
       }
-    }
 
-    // 🔍 POST /compare/single - Lancer la comparaison pour une story spécifique
-    if (req.method === "POST" && url.pathname === "/compare/single") {
-      try {
-        const body = (await req.json()) as { storyId: string; deviceName: string };
-        const { storyId, deviceName } = body || {};
+      // Nettoyer le path au cas où il contiendrait des préfixes
+      const cleanPath = path
+        .replace(/^public\//, "") // Retire "public/" si présent
+        .replace(/^Screenshots\/deleted\//, "") // Retire "Screenshots/deleted/"
+        .replace(/^Screenshots\//, ""); // Retire "Screenshots/"
 
-        if (!storyId || !deviceName) {
-          return jsonResponse({ success: false, error: "Missing storyId or deviceName" }, 400);
-        }
+      if (isDiff) {
+        // Pour un diff, restaurer les 3 fichiers: diff, temp, original
+        // Le préfixe est maintenant au début, donc on le retire du début
+        const basePath = cleanPath
+          .replace(new RegExp(`^${DIFF_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), "")
+          .replace(new RegExp(`^${TEMP_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), "");
 
-        // Importer et appeler la fonction de comparaison pour une story spécifique
-        const { compareSingleStory } = await import(path.join(SCRIPT_DIR, "compare-visual-regressions.ts"));
-        const result = await compareSingleStory(storyId, deviceName);
+        const filesToRestore = [
+          cleanPath, // Le fichier diff lui-même
+          cleanPath.replace(
+            new RegExp(`^${DIFF_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+            TEMP_SCREENSHOT_NAME,
+          ), // temp
+          basePath, // original
+        ];
 
-        if (result.success) {
-          // Rafraîchir le cache après la comparaison et notifier les clients
-          cache = refreshCache(cache, true);
-          return jsonResponse({ success: true, message: "Comparaison lancée" });
-        } else {
-          return jsonResponse({ success: false, error: result.error || "Unknown error" }, 500);
-        }
-      } catch (err) {
-        console.error("❌ Compare single error:", err);
-        return jsonResponse({ error: String(err) }, 500);
-      }
-    }
-
-    // 🔍 POST /compare/by-type - Lancer la comparaison par type (new, diff, rejected) et optionnellement par device
-    if (req.method === "POST" && url.pathname === "/compare/by-type") {
-      try {
-        const body = (await req.json()) as { type: "new" | "diff" | "rejected"; deviceName?: string };
-        const { type, deviceName } = body || {};
-
-        if (!type || !["new", "diff", "rejected"].includes(type)) {
-          return jsonResponse(
-            { success: false, error: "Missing or invalid type (must be 'new', 'diff', or 'rejected')" },
-            400,
-          );
-        }
-
-        // Importer et appeler la fonction de comparaison par type
-        const { compareByType } = await import(path.join(SCRIPT_DIR, "compare-visual-regressions.ts"));
-        const result = await compareByType(type, deviceName);
-
-        if (result.success) {
-          // Rafraîchir le cache après la comparaison et notifier les clients
-          cache = refreshCache(cache, true);
-          return jsonResponse({
-            success: true,
-            message: `Comparaison lancée pour le type ${type}${deviceName ? ` sur ${deviceName}` : ""}`,
-          });
-        } else {
-          return jsonResponse({ success: false, error: result.error || "Unknown error" }, 500);
-        }
-      } catch (err) {
-        console.error("❌ Compare by type error:", err);
-        return jsonResponse({ error: String(err) }, 500);
-      }
-    }
-
-    // 🔍 POST /compare/all-stories - Régénérer toutes les stories pour un device (ou tous les devices si non spécifié)
-    if (req.method === "POST" && url.pathname === "/compare/all-stories") {
-      try {
-        const body = (await req.json()) as { deviceName?: string };
-        const { deviceName } = body || {};
-
-        // Importer et appeler la fonction de comparaison pour toutes les stories
-        const { compareAllStories } = await import(path.join(SCRIPT_DIR, "compare-visual-regressions.ts"));
-        const result = await compareAllStories(deviceName);
-
-        if (result.success) {
-          // Rafraîchir le cache après la comparaison et notifier les clients
-          cache = refreshCache(cache, true);
-          return jsonResponse({
-            success: true,
-            message: `Régénération lancée pour toutes les stories${deviceName ? ` sur ${deviceName}` : " (tous les devices)"}`,
-          });
-        } else {
-          return jsonResponse({ success: false, error: result.error || "Unknown error" }, 500);
-        }
-      } catch (err) {
-        console.error("❌ Compare all stories error:", err);
-        return jsonResponse({ error: String(err) }, 500);
-      }
-    }
-
-    // 🔍 POST /compare/selected - Régénérer une sélection de stories (même flux que by-type / all-stories)
-    if (req.method === "POST" && url.pathname === "/compare/selected") {
-      try {
-        const body = (await req.json()) as { stories: { storyId: string; deviceName: string }[] };
-        const { stories } = body || {};
-
-        if (!Array.isArray(stories) || stories.length === 0) {
-          return jsonResponse(
-            { success: false, error: "Missing or empty stories array (expected { storyId, deviceName }[])" },
-            400,
-          );
-        }
-
-        const { compareSelectedStories } = await import(path.join(SCRIPT_DIR, "compare-visual-regressions.ts"));
-        const result = await compareSelectedStories(stories);
-
-        if (result.success) {
-          cache = refreshCache(cache, true);
-          return jsonResponse({
-            success: true,
-            message: `Régénération lancée pour ${stories.length} comparaison${stories.length > 1 ? "s" : ""}`,
-          });
-        } else {
-          return jsonResponse({ success: false, error: result.error || "Unknown error" }, 500);
-        }
-      } catch (err) {
-        console.error("❌ Compare selected error:", err);
-        return jsonResponse({ error: String(err) }, 500);
-      }
-    }
-
-    // 🗑️ POST /delete - Supprimer (déplacer vers deleted/)
-    if (req.method === "POST" && url.pathname === "/delete") {
-      try {
-        const body = (await req.json()) as StoryScreenshotsPath;
-        const { temp, diff, new: newPath, original } = body || {};
-
-        const files = [original, temp, diff, newPath].filter(Boolean);
-
-        if (!files.length) {
-          throw new Error("Missing paths");
-        }
-
-        for (const p of files) {
-          const absSource = join(PUBLIC_DIR, p!);
-          if (!existsSync(absSource)) {
-            // console.warn(`⚠️  File not found: ${absSource}`);
-            continue;
-          }
-
-          // Retirer "Screenshots/" du début si présent pour éviter la duplication
-          const cleanPath = p!.replace(/^Screenshots\//, "");
-          const absTarget = join(DELETED_DIR, cleanPath);
-
-          mkdirSync(dirname(absTarget), { recursive: true });
-
-          renameSync(absSource, absTarget);
-          console.log(`🗃️  Moved to deleted/: ${cleanPath}`);
-        }
-
-        // Ignorer temporairement le watcher pour éviter les rafraîchissements en double
-        ignoreWatchTemporarily();
-        // Rafraîchir le cache et notifier les clients
-        cache = refreshCache(cache, true);
-
-        return jsonResponse({ success: true });
-      } catch (err) {
-        console.error("❌ Delete error:", err);
-        return jsonResponse({ error: String(err) }, 500);
-      }
-    }
-
-    // ♻️ POST /restore - Restaurer depuis deleted/
-    if (req.method === "POST" && url.pathname === "/restore") {
-      try {
-        const body = (await req.json()) as {
-          path: string;
-          isDiff: boolean;
-        };
-        const { path, isDiff } = body || {};
-
-        if (!path) {
-          throw new Error("Missing path");
-        }
-
-        // Nettoyer le path au cas où il contiendrait des préfixes
-        const cleanPath = path
-          .replace(/^public\//, "") // Retire "public/" si présent
-          .replace(/^Screenshots\/deleted\//, "") // Retire "Screenshots/deleted/"
-          .replace(/^Screenshots\//, ""); // Retire "Screenshots/"
-
-        if (isDiff) {
-          // Pour un diff, restaurer les 3 fichiers: diff, temp, original
-          // Le préfixe est maintenant au début, donc on le retire du début
-          const basePath = cleanPath
-            .replace(new RegExp(`^${DIFF_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), "")
-            .replace(new RegExp(`^${TEMP_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), "");
-
-          const filesToRestore = [
-            cleanPath, // Le fichier diff lui-même
-            cleanPath.replace(
-              new RegExp(`^${DIFF_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
-              TEMP_SCREENSHOT_NAME,
-            ), // temp
-            basePath, // original
-          ];
-
-          let restoredCount = 0;
-          for (const file of filesToRestore) {
-            const absDeleted = join(DELETED_DIR, file);
-            const absRestore = join(PUBLIC_SCREENSHOTS_DIR, file);
-
-            if (!existsSync(absDeleted)) {
-              console.warn(`⚠️  Not in deleted/: ${file}`);
-              continue;
-            }
-
-            mkdirSync(dirname(absRestore), { recursive: true });
-            renameSync(absDeleted, absRestore);
-            console.log(`↩️  Restored: ${file}`);
-            restoredCount++;
-          }
-
-          if (restoredCount === 0) {
-            return jsonResponse(
-              {
-                success: false,
-                error: "No files found in deleted/",
-              },
-              400,
-            );
-          }
-        } else {
-          // Pour un new, restaurer uniquement le fichier new
-          const absDeleted = join(DELETED_DIR, cleanPath);
-          const absRestore = join(PUBLIC_SCREENSHOTS_DIR, cleanPath);
+        let restoredCount = 0;
+        for (const file of filesToRestore) {
+          const absDeleted = join(DELETED_DIR, file);
+          const absRestore = join(PUBLIC_SCREENSHOTS_DIR, file);
 
           if (!existsSync(absDeleted)) {
-            console.warn(`⚠️  Not in deleted/: ${cleanPath}`);
-            console.warn(`⚠️  Chemin complet vérifié: ${absDeleted}`);
-            return jsonResponse(
-              {
-                success: false,
-                error: "Not found in deleted/",
-              },
-              400,
-            );
+            console.warn(`⚠️  Not in deleted/: ${file}`);
+            continue;
           }
 
           mkdirSync(dirname(absRestore), { recursive: true });
           renameSync(absDeleted, absRestore);
-          console.log(`↩️  Restored: ${cleanPath}`);
+          console.log(`↩️  Restored: ${file}`);
+          restoredCount++;
         }
 
-        // Ignorer temporairement le watcher pour éviter les rafraîchissements en double
-        ignoreWatchTemporarily();
-        // Rafraîchir le cache et notifier les clients
-        cache = refreshCache(cache, true);
-
-        return jsonResponse({ success: true });
-      } catch (err) {
-        console.error("❌ Restore error:", err);
-        return jsonResponse({ error: String(err) }, 500);
-      }
-    }
-
-    // 🔄 POST /refresh - Forcer le rafraîchissement du cache
-    if (req.method === "POST" && url.pathname === "/refresh") {
-      try {
-        cache = refreshCache(cache, true);
-        return jsonResponse({ success: true, lastUpdate: cache.lastUpdate });
-      } catch (err) {
-        console.error("❌ Refresh error:", err);
-        return jsonResponse({ error: String(err) }, 500);
-      }
-    }
-
-    // ============================================
-    // SERVEUR DE FICHIERS STATIQUES
-    // ============================================
-
-    // 🖼️ Servir les images et fichiers statiques
-    if (req.method === "GET" && url.pathname.startsWith("/Screenshots/")) {
-      try {
-        const filePath = join(PUBLIC_DIR, url.pathname);
-
-        if (!existsSync(filePath)) {
-          // console.warn(`⚠️  File not found: ${url.pathname}`);
-          return new Response("File not found", { status: 404, headers: corsHeaders });
+        if (restoredCount === 0) {
+          sendJson(res, { success: false, error: "No files found in deleted/" }, 400);
+          return;
+        }
+      } else {
+        const absDeleted = join(DELETED_DIR, cleanPath);
+        const absRestore = join(PUBLIC_SCREENSHOTS_DIR, cleanPath);
+        if (!existsSync(absDeleted)) {
+          console.warn(`⚠️  Not in deleted/: ${cleanPath}`);
+          console.warn(`⚠️  Chemin complet vérifié: ${absDeleted}`);
+          sendJson(res, { success: false, error: "Not found in deleted/" }, 400);
+          return;
         }
 
-        const file = Bun.file(filePath);
-        const contentType = filePath.endsWith(".png")
-          ? "image/png"
-          : filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")
-            ? "image/jpeg"
-            : "application/octet-stream";
-
-        return new Response(file, {
-          headers: {
-            "Content-Type": contentType,
-            "Cache-Control": "no-cache",
-            ...corsHeaders,
-          },
-        });
-      } catch (err) {
-        console.error("❌ Error serving file:", err);
-        return new Response("Internal Server Error", { status: 500, headers: corsHeaders });
+        mkdirSync(dirname(absRestore), { recursive: true });
+        renameSync(absDeleted, absRestore);
+        console.log(`↩️  Restored: ${cleanPath}`);
       }
-    }
 
-    return jsonResponse({ message: "Not Found" }, 404);
-  },
+      ignoreWatchTemporarily();
+      cache = refreshCache(cache, true);
+      sendJson(res, { success: true });
+    } catch (err) {
+      console.error("❌ Restore error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/refresh") {
+    try {
+      cache = refreshCache(cache, true);
+      sendJson(res, { success: true, lastUpdate: cache.lastUpdate });
+    } catch (err) {
+      console.error("❌ Refresh error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/Screenshots/")) {
+    try {
+      const filePath = join(PUBLIC_DIR, url.pathname);
+      if (!existsSync(filePath)) {
+        res.writeHead(404, corsHeaders);
+        res.end("File not found");
+        return;
+      }
+      const contentType = filePath.endsWith(".png")
+        ? "image/png"
+        : filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")
+          ? "image/jpeg"
+          : "application/octet-stream";
+      res.writeHead(200, { "Content-Type": contentType, "Cache-Control": "no-cache", ...corsHeaders });
+      createReadStream(filePath).pipe(res);
+    } catch (err) {
+      console.error("❌ Error serving file:", err);
+      res.writeHead(500, corsHeaders);
+      res.end("Internal Server Error");
+    }
+    return;
+  }
+
+  sendJson(res, { message: "Not Found" }, 404);
+};
+
+createServer(handler).listen(VR_SERVER_PORT, () => {
+  console.log(`🟢 VR server started on ${VR_SERVER_URL}`);
+  console.log(`📊 ${cache.diffPaths.length} diffs, ${cache.newPaths.length} nouveaux screenshots détectés`);
 });
-
-console.log(`🟢 VR server started on ${VR_SERVER_URL}`);
-console.log(`📊 ${cache.diffPaths.length} diffs, ${cache.newPaths.length} nouveaux screenshots détectés`);
