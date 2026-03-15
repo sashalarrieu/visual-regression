@@ -20,6 +20,8 @@ export type ContentPanelProps = {
   imageCacheKey?: number;
   storyId?: string;
   deviceName?: string;
+  /** Si le chargement de l'arbre a échoué (ex. serveur VR injoignable). */
+  fetchError?: string | null;
 };
 
 export const ContentPanel: React.FC<ContentPanelProps> = ({
@@ -31,6 +33,7 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
   imageCacheKey,
   storyId,
   deviceName,
+  fetchError = null,
 }) => {
   const { getDeviceStyle } = useDeviceConfig();
   const cachedImageUrls = useMemo(
@@ -47,6 +50,7 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
     return (
       <Box
         flex={1}
+        minHeight={280}
         alignItems="center"
         justifyContent="center"
         gap="m"
@@ -54,9 +58,31 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
         borderRadius="base"
         borderWidth={1}
         borderColor="newTheme_border"
+        p="l"
       >
-        <AnimatedLoader />
-        <Typo variant="h2_semiBold">Aucune regression détectée, ni nouvelle screenshot</Typo>
+        {fetchError ? (
+          <>
+            <Typo variant="h2_semiBold" color="newTheme_text">
+              Impossible de charger l'arbre des régressions
+            </Typo>
+            <Typo variant="paragraphe_regular" color="newTheme_textSecondary" textAlign="center">
+              {fetchError}
+            </Typo>
+            <Typo variant="paragraphe_regular" color="newTheme_textSecondary" textAlign="center">
+              Vérifie que le serveur VR tourne (yarn vr:server ou yarn vr) sur le port 2805.
+            </Typo>
+          </>
+        ) : (
+          <>
+            <AnimatedLoader />
+            <Typo variant="h2_semiBold" color="newTheme_text">
+              Aucune régression détectée, ni nouvelle screenshot
+            </Typo>
+            <Typo variant="paragraphe_regular" color="newTheme_textSecondary">
+              Lance la comparaison initiale (yarn vr) ou utilise le bouton « Rafraîchir » après avoir généré des screenshots.
+            </Typo>
+          </>
+        )}
       </Box>
     );
   }
@@ -89,6 +115,33 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
             bold
           />
         </Box>
+      </Box>
+    );
+  }
+
+  const hasNewImage = treeType === "new" && cachedImageUrls.new;
+  const hasDiffImage = treeType === "diff" && (showHeatmap ? cachedImageUrls.diff : (cachedImageUrls.original || cachedImageUrls.temp));
+
+  if (!hasNewImage && !hasDiffImage) {
+    return (
+      <Box
+        flex={1}
+        minHeight={280}
+        alignItems="center"
+        justifyContent="center"
+        gap="m"
+        backgroundColor="newTheme_neutral"
+        borderRadius="base"
+        borderWidth={1}
+        borderColor="newTheme_border"
+        p="l"
+      >
+        <Typo variant="h2_semiBold" color="newTheme_text">
+          Aucune image à afficher
+        </Typo>
+        <Typo variant="paragraphe_regular" color="newTheme_textSecondary">
+          Sélectionne un élément dans l'arbre à gauche pour comparer ou afficher la capture.
+        </Typo>
       </Box>
     );
   }

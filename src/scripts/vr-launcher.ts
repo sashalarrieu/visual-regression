@@ -12,7 +12,15 @@ import {
   VR_SERVER_PORT,
   VR_SERVER_URL,
 } from "../constants/constants";
-import { assertVrDevicesConfig, getNodeTsxArgs, getProjectRoot, getScriptDir, spawnShellOption } from "../utils/node";
+import { existsSync } from "fs";
+import {
+  assertVrDevicesConfig,
+  getNodeTsxArgs,
+  getProjectRoot,
+  getScriptDir,
+  getTsxCliPath,
+  spawnShellOption,
+} from "../utils/node";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
 const PACKAGE_ROOT = path.join(SCRIPT_DIR, "..", "..");
@@ -43,15 +51,49 @@ const waitForServer = async (port: number, maxAttempts = 30): Promise<boolean> =
 };
 
 const killPort = (port: number) => {
+  log("yellow", "⚠️", `Tentative de libération du port ${port}`);
+  const isWin = process.platform === "win32";
+  if (isWin) {
+    try {
+      const netstat = spawn("netstat", ["-ano"], { ...spawnShellOption, stdio: ["ignore", "pipe", "ignore"] });
+      let out = "";
+      netstat.stdout?.on("data", (d: Buffer) => (out += d.toString()));
+      netstat.on("close", (code: number) => {
+        if (code !== 0) return;
+        const lines = out.split("\n").filter(l => l.trim().includes(`:${port}`));
+        const pids = new Set<string>();
+        for (const line of lines) {
+          const m = line.trim().split(/\s+/);
+          const pid = m[m.length - 1];
+          if (pid && /^\d+$/.test(pid) && pid !== "0") pids.add(pid);
+        }
+        for (const pid of pids) {
+          try {
+            spawn("taskkill", ["/PID", pid, "/F"], { ...spawnShellOption, stdio: "ignore" });
+            log("green", "✅", `Port ${port} libéré (PID: ${pid})`);
+          } catch {
+            // ignore
+          }
+        }
+      });
+      netstat.on("error", () => log("red", "❌", `Impossible de libérer le port ${port}`));
+    } catch {
+      log("red", "❌", `Impossible de libérer le port ${port}`);
+    }
+    return;
+  }
   try {
-    log("yellow", "⚠️", `Tentative de libération du port ${port}`);
-    const process = spawn("lsof", ["-ti", `:${port}`]);
-
-    process.stdout.on("data", data => {
+    const proc = spawn("lsof", ["-ti", `:${port}`], { stdio: ["ignore", "pipe", "ignore"] });
+    proc.on("error", () => log("red", "❌", `Impossible de libérer le port ${port} (lsof non disponible)`));
+    proc.stdout?.on("data", (data: Buffer) => {
       const pid = data.toString().trim();
       if (pid) {
-        spawn("kill", ["-9", pid]);
-        log("green", "✅", `Port ${port} libéré (PID: ${pid})`);
+        try {
+          spawn("kill", ["-9", pid], { stdio: "ignore" });
+          log("green", "✅", `Port ${port} libéré (PID: ${pid})`);
+        } catch {
+          // ignore
+        }
       }
     });
   } catch {
@@ -73,13 +115,13 @@ const main = async () => {
   if (!expoAvailable) {
     log("yellow", "⚠️", `Le port ${EXPO_PORT} est déjà utilisé`);
     killPort(EXPO_PORT);
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, process.platform === "win32" ? 3500 : 2000));
   }
 
   if (!vrServerAvailable) {
     log("yellow", "⚠️", `Le port ${VR_SERVER_PORT} est déjà utilisé`);
     killPort(VR_SERVER_PORT);
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, process.platform === "win32" ? 3500 : 2000));
   }
 
   let storybookAlreadyRunning = false;
@@ -152,7 +194,7 @@ const main = async () => {
     stdio: "inherit",
     shell: true,
     cwd: PACKAGE_ROOT,
-    env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
+    env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT, CI: "1" },
   });
 
   expo.on("error", err => {
@@ -176,20 +218,58 @@ const main = async () => {
 
   log("green", "✅", "Expo prêt");
 
-  const compareScript = path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
+  // Préférer le script dans le projet hôte pour que Storybook (buildIndex) résolve les presets depuis le projet
+  const compareScriptInProject = path.join(
+    PROJECT_ROOT,
+    "node_modules",
+    "@setshao",
+    "visual-regression",
+    "src",
+    "scripts",
+    "compare-visual-regressions.ts",
+  );
+  const compareScript = existsSync(compareScriptInProject)
+    ? compareScriptInProject
+    : path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
   log("blue", "🔍", "Lancement de la comparaison initiale");
 
+  const compareEnv = { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT, VR_RUN_COMPARE: "1" };
+  const tsxCli = getTsxCliPath(PACKAGE_ROOT, PROJECT_ROOT);
   const { command: compareCommand, args: compareArgs } = getNodeTsxArgs(compareScript);
-  const compare = spawn(compareCommand, compareArgs, {
-    stdio: "inherit",
-    cwd: PROJECT_ROOT,
-    env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
-    ...spawnShellOption,
-  });
+  if (tsxCli !== null) {
+    log("blue", "📌", "Script comparaison: node + tsx (stdio direct)");
+  } else {
+    log("yellow", "📌", "Script comparaison: npx tsx (fallback)");
+  }
+  const compare =
+    tsxCli !== null
+      ? spawn("node", [tsxCli, compareScript], {
+          stdio: "inherit",
+          cwd: PROJECT_ROOT,
+          env: compareEnv,
+          shell: false,
+        })
+      : spawn(compareCommand, compareArgs, {
+          stdio: "inherit",
+          cwd: PROJECT_ROOT,
+          env: compareEnv,
+          ...spawnShellOption,
+        });
 
-  compare.on("close", code => {
+  compare.on("close", async code => {
     if (code === 0) {
       log("green", "✅", "Comparaison initiale terminée");
+      try {
+        const res = await fetch(`${VR_SERVER_URL}/refresh`, { method: "POST" });
+        if (res.ok) {
+          const body = (await res.json()) as { diffCount?: number; newCount?: number };
+          const diffs = body.diffCount ?? 0;
+          const news = body.newCount ?? 0;
+          log("blue", "🔄", `Cache des régressions rafraîchi: ${diffs} diff(s), ${news} nouveau(x) screenshot(s)`);
+        }
+      } catch {
+        // ignore
+      }
       log("green", "🎉", "Environnement VR prêt !");
       log("blue", "🌐", `Interface VR disponible sur ${EXPO_URL}`);
       log("blue", "🔧", `Serveur VR API sur ${VR_SERVER_URL}`);

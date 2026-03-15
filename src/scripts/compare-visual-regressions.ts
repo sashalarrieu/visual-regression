@@ -1,5 +1,6 @@
 // scripts/compare-visual-regressions.ts (package @setshao/visual-regression)
 import {
+  appendFileSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -7,7 +8,9 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  rmdirSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "fs";
 import path from "path";
@@ -29,12 +32,15 @@ import {
   SCREENSHOT_NAME,
   SCREENSHOTS_DIR,
   STORY_BASE_URI,
+  STORYBOOK_URL,
   TEMP_SCREENSHOT_NAME,
   THRESHOLD,
 } from "../constants/constants";
+import { fileURLToPath } from "url";
 import { getDevicesConfig, getProjectPaths, getProjectRoot, loadVrDevicesConfig } from "../utils/node";
 
 const PROJECT_ROOT = getProjectRoot();
+const SCRIPT_DIR_COMPARE = path.dirname(fileURLToPath(import.meta.url));
 const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR, storybookConfigDir: STORYBOOK_CONFIG_DIR } =
   getProjectPaths(PROJECT_ROOT);
 const DEVICES = getDevicesConfig(loadVrDevicesConfig(PROJECT_ROOT));
@@ -95,16 +101,50 @@ const addLogs = ({ log, type = "error", logs }: { log: string; type?: "error" | 
     logs.vrs.push(log);
     return;
   }
-  console.error(log);
+  // Erreurs regroupées en fin de run pour éviter le flood console
   logs.errors.push(log);
 };
 
+/** Suppression récursive manuelle (fallback Windows ENOTEMPTY) */
+const recursiveDeleteDir = (dir: string): void => {
+  const entries = readdirSync(dir, { withFileTypes: true });
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) recursiveDeleteDir(full);
+    else unlinkSync(full);
+  }
+  rmdirSync(dir);
+};
+
 /**
- * Supprime tous les fichiers de régressions visuelles
+ * Supprime tous les fichiers de régressions visuelles.
+ * Sous Windows, rmSync(recursive) peut lever ENOTEMPTY ; on réessaie puis fallback sur suppression manuelle, sans erreur console.
  */
 const deleteAllVisualRegressionsFiles = () => {
-  if (existsSync(PUBLIC_SCREENSHOTS_DIR)) {
-    rmSync(PUBLIC_SCREENSHOTS_DIR, { recursive: true, force: true });
+  if (!existsSync(PUBLIC_SCREENSHOTS_DIR)) return;
+  const retries = 3;
+  const delayMs = 250;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      rmSync(PUBLIC_SCREENSHOTS_DIR, { recursive: true, force: true });
+      return;
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      const retryable = err?.code === "ENOTEMPTY" || err?.code === "EBUSY" || err?.code === "EPERM";
+      if (retryable && i < retries) {
+        const deadline = Date.now() + delayMs;
+        while (Date.now() < deadline) {
+          /* busy wait */
+        }
+        continue;
+      }
+      try {
+        recursiveDeleteDir(PUBLIC_SCREENSHOTS_DIR);
+      } catch {
+        /* échec silencieux : on continue sans vider le dossier */
+      }
+      return;
+    }
   }
 };
 
@@ -172,48 +212,60 @@ const shouldIncludeStoryForVisualRegression = (entry: StoryIndexEntry): boolean 
   return isStoryForced || !isStoryIgnored;
 };
 
+/**
+ * Récupère la liste des stories depuis l'index HTTP de Storybook (fallback quand buildIndex renvoie 0).
+ */
+const fetchStoriesFromStorybookIndex = async (): Promise<StoryIndexEntry[]> => {
+  const url = `${STORYBOOK_URL}/index.json`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { entries?: Record<string, { id: string; type?: string; importPath?: string; title?: string; name?: string; tags?: string[] }> };
+  const entries = data.entries ?? {};
+  const list = Object.values(entries).filter(
+    (e): e is StoryIndexEntry => e.type === "story" && shouldIncludeStoryForVisualRegression(e as StoryIndexEntry),
+  );
+  return list;
+};
+
 // 1. Trouver tous les dossiers contenant un fichier .stories.tsx
 // buildIndex résout les stories (glob dans main.ts) par rapport à process.cwd() dans certaines versions.
-// On s'assure donc d'être dans la racine du projet pour que ../src/**/*.stories soit correct.
+// Si buildIndex renvoie 0 stories, fallback sur l'index HTTP de Storybook (déjà démarré).
 const getAllStories = async (): Promise<StoryIndexEntry[]> => {
-  // #region agent log
-  fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
-    body: JSON.stringify({
-      sessionId: "bd8ea2",
-      location: "compare-visual-regressions.ts:getAllStories entry",
-      message: "getAllStories called",
-      data: { PROJECT_ROOT, STORYBOOK_CONFIG_DIR, cwd: process.cwd() },
-      timestamp: Date.now(),
-      hypothesisId: "A",
-    }),
-  }).catch(() => {});
-  // #endregion
   const previousCwd = process.cwd();
   try {
     process.chdir(PROJECT_ROOT);
-    const index = await buildIndex({
-      configDir: STORYBOOK_CONFIG_DIR,
-    });
-    const entriesCount = Object.keys(index.entries).length;
-    const filtered = Object.values(index.entries).filter((entry): entry is StoryIndexEntry => {
-      return entry.type === "story" && shouldIncludeStoryForVisualRegression(entry);
-    });
-    // #region agent log
-    fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
-      body: JSON.stringify({
-        sessionId: "bd8ea2",
-        location: "compare-visual-regressions.ts:getAllStories after buildIndex",
-        message: "getAllStories result",
-        data: { entriesCount, storiesCount: filtered.length, sampleIds: filtered.slice(0, 3).map(s => s.id) },
-        timestamp: Date.now(),
-        hypothesisId: "A",
-      }),
-    }).catch(() => {});
-    // #endregion
+    let filtered: StoryIndexEntry[] = [];
+    try {
+      const index = await buildIndex({
+        configDir: STORYBOOK_CONFIG_DIR,
+      });
+      const entriesCount = Object.keys(index.entries).length;
+      filtered = Object.values(index.entries).filter((entry): entry is StoryIndexEntry => {
+        return entry.type === "story" && shouldIncludeStoryForVisualRegression(entry);
+      });
+      if (filtered.length === 0) {
+        console.warn("⚠️  buildIndex a renvoyé 0 stories, tentative via index.json de Storybook…");
+        filtered = await fetchStoriesFromStorybookIndex();
+        if (filtered.length > 0) {
+          console.log(`✅ ${filtered.length} stories récupérées depuis ${STORYBOOK_URL}/index.json`);
+        }
+      }
+    } catch (buildIndexErr) {
+      const msg = buildIndexErr instanceof Error ? buildIndexErr.message : String(buildIndexErr);
+      const isPresetError =
+        msg.includes("CriticalPresetLoadError") ||
+        msg.includes("ERR_MODULE_NOT_FOUND") ||
+        msg.includes("preset");
+      if (isPresetError) {
+        console.warn("⚠️  buildIndex indisponible (preset/projet), utilisation de l'index HTTP Storybook…");
+        filtered = await fetchStoriesFromStorybookIndex();
+        if (filtered.length > 0) {
+          console.log(`✅ ${filtered.length} stories récupérées depuis ${STORYBOOK_URL}/index.json`);
+        }
+      } else {
+        throw buildIndexErr;
+      }
+    }
     return filtered;
   } finally {
     process.chdir(previousCwd);
@@ -511,20 +563,6 @@ const extractDeviceAndStoryIdFromDeletedFile = (
  * qui ne régénère que celles qui sont dans le dossier deleted/
  */
 export const compareAllStories = async (deviceName?: string): Promise<{ success: boolean; error?: string }> => {
-  // #region agent log
-  fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
-    body: JSON.stringify({
-      sessionId: "bd8ea2",
-      location: "compare-visual-regressions.ts:compareAllStories entry",
-      message: "compareAllStories called",
-      data: { deviceName, DEVICESCount: Object.keys(DEVICES).length },
-      timestamp: Date.now(),
-      hypothesisId: "C_D",
-    }),
-  }).catch(() => {});
-  // #endregion
   const logs: LogsType = {
     errors: [],
     vrs: [],
@@ -537,20 +575,6 @@ export const compareAllStories = async (deviceName?: string): Promise<{ success:
   try {
     const stories = await getAllStories();
     const allDevices = Object.keys(DEVICES);
-    // #region agent log
-    fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
-      body: JSON.stringify({
-        sessionId: "bd8ea2",
-        location: "compare-visual-regressions.ts:compareAllStories after getAllStories",
-        message: "stories and devices",
-        data: { storiesCount: stories.length, allDevicesCount: allDevices.length, allDevices },
-        timestamp: Date.now(),
-        hypothesisId: "A_D",
-      }),
-    }).catch(() => {});
-    // #endregion
 
     // Structure pour stocker les fichiers à régénérer: Map<deviceName, Map<storyId, { componentDir }>>
     type FileToRegenerate = {
@@ -871,21 +895,27 @@ export const compareByType = async (
   }
 };
 
+const DEBUG_LOG_FILE = "debug-00c06d.log";
+
 const compareVisualRegressions = async () => {
-  // #region agent log
-  fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
-    body: JSON.stringify({
-      sessionId: "bd8ea2",
-      location: "compare-visual-regressions.ts:compareVisualRegressions entry",
-      message: "compareVisualRegressions (script main) called",
-      data: {},
-      timestamp: Date.now(),
-      hypothesisId: "E",
-    }),
-  }).catch(() => {});
-  // #endregion
+  // Premier log synchrone pour confirmer que le script s'exécute (stdout hérité du launcher).
+  if (process.stdout.writable) {
+    process.stdout.write("\n🔍 [VR] Comparaison en cours…\n");
+  }
+  const writeDebugLog = (payload: Record<string, unknown>) => {
+    try {
+      const logPath = path.resolve(process.cwd(), DEBUG_LOG_FILE);
+      appendFileSync(logPath, JSON.stringify({ sessionId: "00c06d", ...payload, timestamp: Date.now() }) + "\n");
+    } catch {
+      // ignore
+    }
+  };
+  writeDebugLog({
+    location: "compare-visual-regressions.ts:compareVisualRegressions entry",
+    message: "compareVisualRegressions started",
+    data: { PROJECT_ROOT, PUBLIC_SCREENSHOTS_DIR, cwd: process.cwd() },
+    hypothesisId: "entry",
+  });
   const logs: LogsType = {
     errors: [],
     vrs: [],
@@ -893,24 +923,28 @@ const compareVisualRegressions = async () => {
   };
   const storiesWithDiff: string[] = [];
 
-  const browser = await launchBrowser();
+  let browser = await launchBrowser();
 
   try {
-    const stories = await getAllStories();
-    // #region agent log
-    fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
-      body: JSON.stringify({
-        sessionId: "bd8ea2",
-        location: "compare-visual-regressions.ts:compareVisualRegressions after getAllStories",
-        message: "script main getAllStories result",
-        data: { storiesCount: stories.length },
-        timestamp: Date.now(),
-        hypothesisId: "A_E",
-      }),
-    }).catch(() => {});
-    // #endregion
+    let stories: StoryIndexEntry[];
+    try {
+      stories = await getAllStories();
+    } catch (getAllStoriesErr) {
+      const errMsg = getAllStoriesErr instanceof Error ? getAllStoriesErr.message : String(getAllStoriesErr);
+      writeDebugLog({
+        location: "compare-visual-regressions.ts:getAllStories",
+        message: "getAllStories failed",
+        data: { error: errMsg },
+        hypothesisId: "H1",
+      });
+      throw getAllStoriesErr;
+    }
+    writeDebugLog({
+      location: "compare-visual-regressions.ts:compareVisualRegressions after getAllStories",
+      message: "getAllStories result (file fallback)",
+      data: { storiesCount: stories.length, devicesCount: Object.keys(DEVICES).length, PUBLIC_SCREENSHOTS_DIR },
+      hypothesisId: "H1_H5",
+    });
     if (stories.length === 0) {
       addLogs({ log: `🚫 No stories found`, logs });
     } else {
@@ -921,57 +955,78 @@ const compareVisualRegressions = async () => {
 
       deleteAllVisualRegressionsFiles();
 
+      const isBrowserClosedError = (e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        return /target page, context or browser has been closed/i.test(msg) || /browser has been closed/i.test(msg);
+      };
+
       for (const story of stories) {
         const { importPath: storyPath, id: storyId } = story;
 
         // Itérer sur chaque device configuré
         for (const [deviceName, deviceConfig] of Object.entries(DEVICES)) {
-          try {
-            const componentDir = path.dirname(storyPath); // ./src/atoms/Alert
-            const screenshotDir = path.join(componentDir, SCREENSHOTS_DIR); // src/atoms/Alert/screenshots/
-            // Inclure le nom du device dans le chemin
-            const screenshotPath = path.join(screenshotDir, `${deviceName}-${storyId}${SCREENSHOT_NAME}`); // src/atoms/Alert/screenshots/desktop-fhd-atoms-alert--primary.screenshot.png
-            const publicScreenshotPath = path.join(
-              PUBLIC_SCREENSHOTS_DIR,
-              componentDir,
-              `${deviceName}-${storyId}${SCREENSHOT_NAME}`,
-            ); // public/screenshots/src/atoms/Alert/desktop-fhd-atoms-alert--primary.screenshot.png
-            const newScreenshotPath = path.join(
-              PUBLIC_SCREENSHOTS_DIR,
-              componentDir,
-              `${NEW_SCREENSHOT_NAME}${deviceName}-${storyId}${SCREENSHOT_NAME}`,
-            ); // public/screenshots/src/atoms/Alert/__new__desktop-fhd-atoms-alert--primary.screenshot.png
-            const tempScreenshotPath = path.join(
-              PUBLIC_SCREENSHOTS_DIR,
-              componentDir,
-              `${TEMP_SCREENSHOT_NAME}${deviceName}-${storyId}${SCREENSHOT_NAME}`,
-            ); // public/screenshots/src/atoms/Alert/__temp__desktop-fhd-atoms-alert--primary.screenshot.png
-            const diffScreenshotPath = path.join(
-              PUBLIC_SCREENSHOTS_DIR,
-              componentDir,
-              `${DIFF_SCREENSHOT_NAME}${deviceName}-${storyId}${SCREENSHOT_NAME}`,
-            ); // public/screenshots/src/atoms/Alert/__diff__desktop-fhd-atoms-alert--primary.screenshot.png
+          let attempt = 0;
+          const maxAttempts = 2;
+          while (attempt < maxAttempts) {
+            try {
+              const componentDir = path.dirname(storyPath); // ./src/atoms/Alert
+              const screenshotDir = path.join(componentDir, SCREENSHOTS_DIR); // src/atoms/Alert/screenshots/
+              const screenshotPath = path.join(screenshotDir, `${deviceName}-${storyId}${SCREENSHOT_NAME}`);
+              const publicScreenshotPath = path.join(
+                PUBLIC_SCREENSHOTS_DIR,
+                componentDir,
+                `${deviceName}-${storyId}${SCREENSHOT_NAME}`,
+              );
+              const newScreenshotPath = path.join(
+                PUBLIC_SCREENSHOTS_DIR,
+                componentDir,
+                `${NEW_SCREENSHOT_NAME}${deviceName}-${storyId}${SCREENSHOT_NAME}`,
+              );
+              const tempScreenshotPath = path.join(
+                PUBLIC_SCREENSHOTS_DIR,
+                componentDir,
+                `${TEMP_SCREENSHOT_NAME}${deviceName}-${storyId}${SCREENSHOT_NAME}`,
+              );
+              const diffScreenshotPath = path.join(
+                PUBLIC_SCREENSHOTS_DIR,
+                componentDir,
+                `${DIFF_SCREENSHOT_NAME}${deviceName}-${storyId}${SCREENSHOT_NAME}`,
+              );
 
-            await captureScreenshotWithPlaywright({
-              browser,
-              storyId,
-              tempScreenshotPath,
-              logs,
-              deviceName,
-              deviceConfig,
-            });
-            await compareScreenshots({
-              storyId: `${deviceName}-${storyId}`,
-              screenshotPath,
-              publicScreenshotPath,
-              newScreenshotPath,
-              tempScreenshotPath,
-              diffScreenshotPath,
-              storiesWithDiff,
-              logs,
-            });
-          } catch {
-            addLogs({ log: `🚫 Error testing ${storyId} (${deviceName})`, logs });
+              await captureScreenshotWithPlaywright({
+                browser,
+                storyId,
+                tempScreenshotPath,
+                logs,
+                deviceName,
+                deviceConfig,
+              });
+              await compareScreenshots({
+                storyId: `${deviceName}-${storyId}`,
+                screenshotPath,
+                publicScreenshotPath,
+                newScreenshotPath,
+                tempScreenshotPath,
+                diffScreenshotPath,
+                storiesWithDiff,
+                logs,
+              });
+              break;
+            } catch (e) {
+              const errMsg = e instanceof Error ? e.message : String(e);
+              if (isBrowserClosedError(e) && attempt === 0) {
+                attempt++;
+                try {
+                  await browser.close();
+                } catch {
+                  // ignore
+                }
+                browser = await launchBrowser();
+                continue;
+              }
+              addLogs({ log: `🚫 Error testing ${storyId} (${deviceName}): ${errMsg}`, logs });
+              break;
+            }
           }
         }
       }
@@ -985,9 +1040,21 @@ const compareVisualRegressions = async () => {
     const nbErrors = logs.errors.length;
     if (nbErrors) {
       console.log(`\n\n   ============================`);
-      console.log(`🚫  Errors`);
+      console.log(`🚫  Errors (${nbErrors})`);
       console.log(`   ========= ERRORS ===========`);
-      logs.errors.map(log => console.error(`${log}`));
+      if (nbErrors <= 15) {
+        logs.errors.forEach(log => console.error(log));
+      } else {
+        // Résumé groupé par message pour éviter le flood
+        const byMessage = new Map<string, number>();
+        for (const log of logs.errors) {
+          const idx = log.indexOf(": ");
+          const msg = idx >= 0 ? log.slice(idx + 2).slice(0, 100) : log;
+          byMessage.set(msg, (byMessage.get(msg) ?? 0) + 1);
+        }
+        const sorted = [...byMessage.entries()].sort((a, b) => b[1] - a[1]);
+        sorted.slice(0, 8).forEach(([msg, count]) => console.error(`  ×${count} ${msg}${msg.length >= 100 ? "…" : ""}`));
+      }
     }
 
     const nbVisualRegressions = logs.vrs.length;
@@ -1017,7 +1084,31 @@ const compareVisualRegressions = async () => {
 };
 
 // Ne lancer la comparaison complète que si le script est exécuté directement
-// (pas quand il est importé comme module)
-if (import.meta.main) {
+// (pas quand il est importé comme module).
+// VR_RUN_COMPARE=1 : passé par le launcher (fiable). Sinon fallback import.meta.main / argv (tsx+TS peut casser).
+const isRunAsMain =
+  process.env.VR_RUN_COMPARE === "1" ||
+  import.meta.main === true ||
+  (typeof process.argv[1] === "string" && process.argv[1].includes("compare-visual-regressions"));
+try {
+  const entryLogPath = path.join(SCRIPT_DIR_COMPARE, "vr-entry.log");
+  appendFileSync(
+    entryLogPath,
+    JSON.stringify({
+      argv1: process.argv[1],
+      VR_RUN_COMPARE: process.env.VR_RUN_COMPARE,
+      importMetaMain: (import.meta as { main?: boolean }).main,
+      isRunAsMain,
+      PROJECT_ROOT,
+    }) + "\n",
+  );
+} catch (e) {
+  try {
+    appendFileSync(path.join(SCRIPT_DIR_COMPARE, "vr-entry.err"), String(e) + "\n");
+  } catch {
+    // ignore
+  }
+}
+if (isRunAsMain) {
   compareVisualRegressions();
 }
