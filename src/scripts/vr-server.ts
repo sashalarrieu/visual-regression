@@ -78,16 +78,15 @@ const scanAllScreenshots = (): { diffPaths: string[]; newPaths: string[]; delete
             // Inclure le dossier "deleted" dans le scan récursif
             scanScreenshots(fullPath);
           } else if (file.endsWith(SCREENSHOT_EXTENSION)) {
-            const relativePath = fullPath.replace(PUBLIC_DIR, "");
+            const rawRelative = fullPath.replace(PUBLIC_DIR, "");
+            const relativePath = rawRelative.replace(/\\/g, "/").replace(/^\/+/, "");
             const isInDeleted = relativePath.includes("/deleted/");
 
             if (isInDeleted) {
-              // Dans deleted/ : scanner les fichiers avec DIFF_SCREENSHOT_NAME, TEMP_SCREENSHOT_NAME ou NEW_SCREENSHOT_NAME
               if (file.includes(DIFF_SCREENSHOT_NAME) || file.includes(NEW_SCREENSHOT_NAME)) {
                 deletedPaths.push(relativePath);
               }
             } else {
-              // En dehors de deleted/ : catégoriser selon le pattern
               if (file.includes(DIFF_SCREENSHOT_NAME)) {
                 diffPaths.push(relativePath);
               } else if (file.includes(NEW_SCREENSHOT_NAME)) {
@@ -174,8 +173,8 @@ const extractDeviceName = (fileName: string): { deviceName: string | null; story
 };
 
 const parsePath = (filePath: string): ParsedPath | null => {
-  // Nettoyer le chemin en retirant "Screenshots/deleted/" si présent
-  const cleanPath = filePath.replace(/^Screenshots\/deleted\//, "");
+  const normalized = filePath.replace(/\\/g, "/");
+  const cleanPath = normalized.replace(/^Screenshots\/deleted\//, "");
 
   const segments = cleanPath.split("/");
   const baseIdx = segments.indexOf(TREE_BASE_FOLDER);
@@ -263,11 +262,10 @@ const countRedPixelsInDiffImage = (diffImagePath: string): number | null => {
  */
 const getImageUrl = (path: string | undefined): string | undefined => {
   if (!path) return undefined;
-  // Si le chemin commence déjà par http, le retourner tel quel
   if (path.startsWith("http")) return path;
 
-  // Retirer "public/" du chemin s'il est présent
-  let cleanPath = path.replace(/^public\//, "");
+  // Normaliser les antislash (Windows) en slash pour les URLs
+  let cleanPath = path.replace(/\\/g, "/").replace(/^public\//, "");
 
   // Nettoyer les chemins qui contiennent déjà "Screenshots/deleted/" pour éviter la duplication
   // Si le chemin commence déjà par "Screenshots/deleted/", le retourner tel quel après nettoyage
@@ -624,12 +622,24 @@ const watchDeletedDirectory = () => {
     });
 
     watcher.on("error", error => {
-      console.warn("⚠️  Erreur lors de la surveillance du dossier deleted:", error);
+      const isEperm = (e: unknown) => (e as NodeJS.ErrnoException)?.code === "EPERM" || String(e).includes("EPERM");
+      try {
+        watcher.close();
+      } catch {
+        // ignore
+      }
+      // Aucun log pour EPERM : zéro bruit en console (Windows/antivirus)
+      if (!isEperm(error)) {
+        console.warn("⚠️  Erreur lors de la surveillance du dossier deleted:", error);
+      }
     });
 
     return watcher;
   } catch (error) {
-    console.warn(`⚠️  Impossible de surveiller ${DELETED_DIR}:`, error);
+    const isEperm = (e: unknown) => (e as NodeJS.ErrnoException)?.code === "EPERM" || String(e).includes("EPERM");
+    if (!isEperm(error)) {
+      console.warn(`⚠️  Impossible de surveiller ${DELETED_DIR}:`, error);
+    }
     return null;
   }
 };
@@ -902,20 +912,6 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
 
   // 🔍 POST /compare - Lancer la comparaison
   if (req.method === "POST" && url.pathname === "/compare") {
-    // #region agent log
-    fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
-      body: JSON.stringify({
-        sessionId: "bd8ea2",
-        location: "vr-server.ts:POST /compare",
-        message: "Endpoint POST /compare hit",
-        data: { pathname: url.pathname },
-        timestamp: Date.now(),
-        hypothesisId: "B_E",
-      }),
-    }).catch(() => {});
-    // #endregion
     try {
       const compareScript = path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
       console.log("🔍 Lancement comparaison VR");
@@ -995,20 +991,6 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
 
   // 🔍 POST /compare/all-stories - Régénérer toutes les stories pour un device (ou tous les devices si non spécifié)
   if (req.method === "POST" && url.pathname === "/compare/all-stories") {
-    // #region agent log
-    fetch("http://127.0.0.1:7703/ingest/b2510414-2bb2-4076-a83e-05c741ec7b98", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "bd8ea2" },
-      body: JSON.stringify({
-        sessionId: "bd8ea2",
-        location: "vr-server.ts:POST /compare/all-stories",
-        message: "Endpoint POST /compare/all-stories hit",
-        data: { pathname: url.pathname },
-        timestamp: Date.now(),
-        hypothesisId: "B",
-      }),
-    }).catch(() => {});
-    // #endregion
     try {
       const body = JSON.parse(await readBody(req)) as { deviceName?: string };
       const { deviceName } = body || {};
@@ -1184,7 +1166,12 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
   if (req.method === "POST" && url.pathname === "/refresh") {
     try {
       cache = refreshCache(cache, true);
-      sendJson(res, { success: true, lastUpdate: cache.lastUpdate });
+      sendJson(res, {
+        success: true,
+        lastUpdate: cache.lastUpdate,
+        diffCount: cache.diffPaths.length,
+        newCount: cache.newPaths.length,
+      });
     } catch (err) {
       console.error("❌ Refresh error:", err);
       sendJson(res, { error: String(err) }, 500);
@@ -1194,7 +1181,9 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
 
   if (req.method === "GET" && url.pathname.startsWith("/Screenshots/")) {
     try {
-      const filePath = join(PUBLIC_DIR, url.pathname);
+      // url.pathname est du type "/Screenshots/src/..." ; sur Windows il faut joindre avec PUBLIC_DIR sans que le "/" soit interprété comme absolu
+      const pathSegments = url.pathname.replace(/^\/+/, "").split("/");
+      const filePath = join(PUBLIC_DIR, ...pathSegments);
       if (!existsSync(filePath)) {
         res.writeHead(404, corsHeaders);
         res.end("File not found");

@@ -24,6 +24,20 @@ export const getNodeTsxArgs = (scriptPath: string): { command: string; args: str
 });
 
 /**
+ * Chemin vers le CLI tsx (node + cli.mjs) pour spawn sans shell et hériter stdout correctement (Windows).
+ */
+export const getTsxCliPath = (packageRoot: string, projectRoot: string): string | null => {
+  const candidates = [
+    path.join(packageRoot, "node_modules", "tsx", "dist", "cli.mjs"),
+    path.join(projectRoot, "node_modules", "tsx", "dist", "cli.mjs"),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+};
+
+/**
  * À passer dans les options de spawn sur Windows (Node 20.12+) pour éviter EINVAL avec .cmd.
  */
 export const spawnShellOption = process.platform === "win32" ? { shell: true as const } : {};

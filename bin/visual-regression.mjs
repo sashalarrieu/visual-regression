@@ -68,11 +68,11 @@ switch (subcommand) {
   }
   case "app": {
     // Ouvre l'interface web de régression visuelle (composant VisualRegressions, src/index.tsx)
-    // cwd = racine réelle du package pour que le projet ne soit pas sous node_modules → pas d'exclusion Babel
+    // CI=1 pour Metro : progression sur une seule ligne
     const child = spawn(
       npxRunner,
       ["expo", "start", "--web", "--clear", "--port", String(EXPO_PORT)],
-      spawnOpts(packageRootReal),
+      { ...spawnOpts(packageRootReal), env: { ...env, CI: "1" } },
     );
     child.on("error", err => {
       console.error("❌ Impossible de lancer l'interface VR:", err.message);

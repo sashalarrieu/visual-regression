@@ -170,7 +170,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   const [currentStory, setCurrentStory] = useState<Node | undefined>();
 
   const { devices, loading: devicesLoading, error: devicesError } = useDevicesConfig(devicesProp);
-  const { tree, loading, refresh } = useRegressionTrees();
+  const { tree, loading, error: treeError, refresh } = useRegressionTrees();
   const { deletedList, refresh: refreshDeleted } = useDeletedRegressions();
 
   const treeType = useMemo<"new" | "diff">(() => {
@@ -352,6 +352,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
               imageCacheKey={imageCacheKey}
               storyId={currentStory?.storyId}
               deviceName={currentStory?.deviceName}
+              fetchError={treeError}
             />
           </Box>
         </Box>
