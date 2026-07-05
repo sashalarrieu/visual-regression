@@ -35,7 +35,7 @@
       "@utils/*": ["./src/utils/*"],
     }
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", ".storybook/**/*"],
   "exclude": ["node_modules", "dist"],
   "extends": "expo/tsconfig.base"
 }

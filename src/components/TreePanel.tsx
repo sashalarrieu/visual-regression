@@ -89,7 +89,7 @@ export const TreePanel: React.FC<TreePanelProps> = ({
               fill: (isCurrentStory ? "newTheme_textOnPrimary" : deviceStyle.color) as keyof typeof colors,
             }}
             rightIcon={{
-              name: isNew ? "plus" : "triangle-exclamation",
+              name: isNew ? "add" : "warning",
               fill: (isCurrentStory
                 ? "newTheme_textOnPrimary"
                 : isNew
@@ -101,7 +101,7 @@ export const TreePanel: React.FC<TreePanelProps> = ({
           />
           {onCompareStoryNode && fileNode.storyId && fileNode.deviceName && (
             <Button
-              icon={{ name: "arrows-retweet" }}
+              icon={{ name: "sync" }}
               color={isCurrentStory ? "primary" : "base"}
               onPress={() => onCompareStoryNode(fileNode)}
             />
@@ -221,7 +221,7 @@ export const TreePanel: React.FC<TreePanelProps> = ({
         </Typo>
         <Box>
           <Button
-            icon={{ name: "arrows-revert" }}
+            icon={{ name: "replay" }}
             color="primary"
             onPress={onRefresh}
             loading={loading}

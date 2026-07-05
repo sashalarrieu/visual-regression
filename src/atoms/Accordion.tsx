@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { TouchableOpacity, View } from "react-native";
 
 import { Box } from "@atoms/Box";
+import { Icon } from "@atoms/Icon";
 import { Typo } from "@atoms/Typo";
 
 export type AccordionProps = {
@@ -20,10 +21,12 @@ export const Accordion: React.FC<AccordionProps> = ({ label, tags, defaultOpened
         onPress={() => setOpened(o => !o)}
         style={{ flexDirection: "row", alignItems: "center", paddingVertical: 8 }}
       >
-        <Typo variant="paragraphe_semiBold">
-          {opened ? "▼ " : "▶ "}
-          {label.text}
-        </Typo>
+        <Icon
+          name={opened ? "expand-more" : "chevron-right"}
+          size="s"
+          style={{ marginRight: 4 }}
+        />
+        <Typo variant="paragraphe_semiBold">{label.text}</Typo>
         {tags && <View style={{ flexDirection: "row", marginLeft: 8, gap: 4 }}>{tags}</View>}
       </TouchableOpacity>
       {opened && <Box style={style}>{children}</Box>}

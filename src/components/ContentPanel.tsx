@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React from "react";
 import { ActivityIndicator, Image } from "react-native";
 
 import type { StoryScreenshotsPath } from "@app-types/types";
@@ -9,7 +9,6 @@ import { DraggableImageCompare } from "@components/DraggableImageCompare";
 import { ScreenshotDetails } from "@components/ScreenshotDetails";
 import { useDeviceConfig } from "@providers/DeviceConfigProvider";
 import { colors } from "@themes/theme";
-import { addCacheBusting } from "@utils";
 
 export type ContentPanelProps = {
   tree: unknown;
@@ -17,9 +16,10 @@ export type ContentPanelProps = {
   showHeatmap: boolean;
   imageUrls: StoryScreenshotsPath;
   isRegenerating?: boolean;
-  imageCacheKey?: number;
   storyId?: string;
   deviceName?: string;
+  /** Force le remontage des images quand l'index serveur change. */
+  contentKey?: string;
   /** Si le chargement de l'arbre a échoué (ex. serveur VR injoignable). */
   fetchError?: string | null;
 };
@@ -30,21 +30,12 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
   showHeatmap,
   imageUrls,
   isRegenerating = false,
-  imageCacheKey,
   storyId,
   deviceName,
+  contentKey,
   fetchError = null,
 }) => {
   const { getDeviceStyle } = useDeviceConfig();
-  const cachedImageUrls = useMemo(
-    () => ({
-      original: addCacheBusting(imageUrls.original, imageCacheKey),
-      temp: addCacheBusting(imageUrls.temp, imageCacheKey),
-      diff: addCacheBusting(imageUrls.diff, imageCacheKey),
-      new: addCacheBusting(imageUrls.new, imageCacheKey),
-    }),
-    [imageUrls, imageCacheKey],
-  );
 
   if (!tree) {
     return (
@@ -62,24 +53,42 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
       >
         {fetchError ? (
           <>
-            <Typo variant="h2_semiBold" color="newTheme_text">
+            <Typo
+              variant="h2_semiBold"
+              color="newTheme_textOnSurface"
+            >
               Impossible de charger l'arbre des régressions
             </Typo>
-            <Typo variant="paragraphe_regular" color="newTheme_textSecondary" textAlign="center">
+            <Typo
+              variant="paragraphe_regular"
+              color="newTheme_textOnSurface"
+              textAlign="center"
+            >
               {fetchError}
             </Typo>
-            <Typo variant="paragraphe_regular" color="newTheme_textSecondary" textAlign="center">
+            <Typo
+              variant="paragraphe_regular"
+              color="newTheme_textOnSurface"
+              textAlign="center"
+            >
               Vérifie que le serveur VR tourne (yarn vr:server ou yarn vr) sur le port 2805.
             </Typo>
           </>
         ) : (
           <>
             <AnimatedLoader />
-            <Typo variant="h2_semiBold" color="newTheme_text">
+            <Typo
+              variant="h2_semiBold"
+              color="newTheme_textOnSurface"
+            >
               Aucune régression détectée, ni nouvelle screenshot
             </Typo>
-            <Typo variant="paragraphe_regular" color="newTheme_textSecondary">
-              Lance la comparaison initiale (yarn vr) ou utilise le bouton « Rafraîchir » après avoir généré des screenshots.
+            <Typo
+              variant="paragraphe_regular"
+              color="newTheme_textOnSurface"
+            >
+              Lance la comparaison initiale (yarn vr) ou utilise le bouton "Rafraîchir" après avoir généré des
+              screenshots.
             </Typo>
           </>
         )}
@@ -119,8 +128,8 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
     );
   }
 
-  const hasNewImage = treeType === "new" && cachedImageUrls.new;
-  const hasDiffImage = treeType === "diff" && (showHeatmap ? cachedImageUrls.diff : (cachedImageUrls.original || cachedImageUrls.temp));
+  const hasNewImage = treeType === "new" && imageUrls.new;
+  const hasDiffImage = treeType === "diff" && (showHeatmap ? imageUrls.diff : imageUrls.original || imageUrls.temp);
 
   if (!hasNewImage && !hasDiffImage) {
     return (
@@ -136,10 +145,16 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
         borderColor="newTheme_border"
         p="l"
       >
-        <Typo variant="h2_semiBold" color="newTheme_text">
+        <Typo
+          variant="h2_semiBold"
+          color="newTheme_textOnSurface"
+        >
           Aucune image à afficher
         </Typo>
-        <Typo variant="paragraphe_regular" color="newTheme_textSecondary">
+        <Typo
+          variant="paragraphe_regular"
+          color="newTheme_textOnSurface"
+        >
           Sélectionne un élément dans l'arbre à gauche pour comparer ou afficher la capture.
         </Typo>
       </Box>
@@ -147,8 +162,11 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
   }
 
   return (
-    <>
-      {treeType === "new" && cachedImageUrls.new && (
+    <Box
+      key={contentKey}
+      flex={1}
+    >
+      {treeType === "new" && imageUrls.new && (
         <Box
           flex={1}
           gap="s"
@@ -164,14 +182,14 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
             justifyContent="center"
           >
             <Image
-              key={cachedImageUrls.new}
-              source={{ uri: cachedImageUrls.new }}
+              key={imageUrls.new}
+              source={{ uri: imageUrls.new }}
               style={{ width: "100%", height: "100%", resizeMode: "contain" }}
             />
           </Box>
         </Box>
       )}
-      {treeType === "diff" && showHeatmap && cachedImageUrls.diff && (
+      {treeType === "diff" && showHeatmap && imageUrls.diff && (
         <Box
           flex={1}
           gap="s"
@@ -187,8 +205,8 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
             justifyContent="center"
           >
             <Image
-              key={cachedImageUrls.diff}
-              source={{ uri: cachedImageUrls.diff }}
+              key={imageUrls.diff}
+              source={{ uri: imageUrls.diff }}
               style={{ width: "100%", height: "100%", resizeMode: "contain" }}
             />
           </Box>
@@ -204,14 +222,15 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
           borderColor="newTheme_border"
           style={{ padding: 2 }}
         >
-          <React.Fragment key={`${cachedImageUrls.original || ""}-${cachedImageUrls.temp || ""}-${imageCacheKey || 0}`}>
+          <React.Fragment key={`${imageUrls.original || ""}-${imageUrls.temp || ""}-${contentKey || ""}`}>
             <DraggableImageCompare
-              leftImage={cachedImageUrls.original}
-              rightImage={cachedImageUrls.temp}
+              key={contentKey}
+              leftImage={imageUrls.original}
+              rightImage={imageUrls.temp}
             />
           </React.Fragment>
         </Box>
       )}
-    </>
+    </Box>
   );
 };

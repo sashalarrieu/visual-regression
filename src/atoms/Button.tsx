@@ -1,17 +1,19 @@
 import React from "react";
-import { ActivityIndicator, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Text, TouchableOpacity, View, type DimensionValue } from "react-native";
 
+import type { MaterialIconName } from "@app-types/types";
+import { Icon } from "@atoms/Icon";
 import { colors, spacing, type ColorKey } from "@themes/theme";
 
 export type ButtonProps = {
   label?: string;
-  icon?: { name: string };
-  leftIcon?: { name: string; fill?: ColorKey };
-  rightIcon?: { name: string; fill?: ColorKey };
+  icon?: { name: MaterialIconName };
+  leftIcon?: { name: MaterialIconName; fill?: ColorKey };
+  rightIcon?: { name: MaterialIconName; fill?: ColorKey };
   color?: "primary" | "danger" | "base";
   onPress: () => void;
   loading?: boolean;
-  width?: number;
+  width?: DimensionValue;
   flex?: number;
   justifyContent?: "space-between" | "center";
   number?: number;
@@ -19,28 +21,10 @@ export type ButtonProps = {
   disabled?: boolean;
 };
 
-const iconMap: Record<string, string> = {
-  "chevron-left": "←",
-  "chevron-right": "→",
-  clone: "⎘",
-  "arrows-retweet": "↻",
-  "clock-arrow-rotate": "🕐",
-  "arrows-revert": "↺",
-  "triangle-exclamation": "⚠",
-  plus: "+",
-  mobile: "📱",
-  "tablet-portrait": "📱",
-  "tablet-landscape": "🖥",
-  laptop: "💻",
-  hint: "?",
-  "squares-group": "⊞",
-  trash: "⋮",
-};
-
 const colorBg: Record<string, string> = {
   primary: colors.newTheme_primary,
   danger: colors.newTheme_danger,
-  base: colors.newTheme_base10,
+  base: colors.newTheme_surface,
 };
 
 export const Button: React.FC<ButtonProps> = ({
@@ -60,11 +44,18 @@ export const Button: React.FC<ButtonProps> = ({
 }) => {
   const bg = colorBg[color] ?? colorBg.primary;
   const textColor = color === "base" ? colors.newTheme_textOnSurface : colors.newTheme_textOnPrimary;
+  const defaultIconFill: ColorKey = color === "base" ? "newTheme_textOnSurface" : "newTheme_textOnPrimary";
 
-  const renderIcon = (cfg: { name: string; fill?: ColorKey } | undefined) => {
+  const renderIcon = (cfg: { name: MaterialIconName; fill?: ColorKey } | undefined) => {
     if (!cfg) return null;
-    const sym = iconMap[cfg.name] ?? cfg.name;
-    return <Text style={{ color: cfg.fill ? colors[cfg.fill] : textColor, marginHorizontal: 4 }}>{sym}</Text>;
+    return (
+      <Icon
+        name={cfg.name}
+        fill={cfg.fill ?? defaultIconFill}
+        size="m"
+        style={{ marginHorizontal: 4, marginRight: 4 }}
+      />
+    );
   };
 
   const content = (
@@ -106,6 +97,7 @@ export const Button: React.FC<ButtonProps> = ({
         borderRadius: 8,
         minWidth: width,
         flex: flex,
+        opacity: disabled || loading ? 0.3 : 1,
       }}
     >
       {content}

@@ -1,17 +1,17 @@
 import React from "react";
-import {
-  Modal as RNModal,
-  ScrollView,
-  Text,
-  TouchableOpacity,
-  TouchableWithoutFeedback,
-  View,
-  type ModalProps as RNModalProps,
-} from "react-native";
+import { Modal as RNModal, Pressable, ScrollView, StyleSheet, type ModalProps as RNModalProps } from "react-native";
 
 import { Box } from "@atoms/Box";
+import { Button, type ButtonProps } from "@atoms/Button";
 import { Typo } from "@atoms/Typo";
-import { colors, spacing } from "@themes/theme";
+import { spacing } from "@themes/theme";
+
+export type ModalButtonProps = {
+  title?: { text: string };
+  onPress: () => void;
+  disabled?: boolean;
+  color?: ButtonProps["color"];
+};
 
 export type ModalProps = RNModalProps & {
   isOpen: boolean;
@@ -24,8 +24,8 @@ export type ModalProps = RNModalProps & {
   content?: React.ReactNode;
   footer?: {
     buttons?: {
-      left?: { title?: { text: string }; onPress: () => void; disabled?: boolean; color?: string };
-      right?: { title?: { text: string }; onPress: () => void; disabled?: boolean; color?: string };
+      left?: ModalButtonProps;
+      right?: ModalButtonProps;
     };
   };
 };
@@ -38,94 +38,90 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, header, content, 
       transparent
       animationType="fade"
     >
-      <TouchableWithoutFeedback onPress={onClose}>
-        <View
+      <Box
+        flex={1}
+        justifyContent="center"
+        alignItems="center"
+        p="l"
+        style={{
+          backgroundColor: "rgba(0,0,0,0.5)",
+        }}
+      >
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Fermer la modale"
+        />
+        <Box
+          backgroundColor="newTheme_background"
+          borderRadius="base"
+          width="100%"
           style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.5)",
-            justifyContent: "center",
-            alignItems: "center",
-            padding: spacing.l,
+            maxWidth: 600,
+            maxHeight: "90%",
+            zIndex: 1,
           }}
         >
-          <TouchableWithoutFeedback onPress={() => {}}>
-            <View
+          {header && (
+            <Box
+              p="m"
+              pb="s"
+            >
+              {header.title && <Typo variant="h2_semiBold">{header.title.text}</Typo>}
+              {header.subtitle && (
+                <Typo
+                  variant="paragraphe_regular"
+                  color="newTheme_textLegend"
+                  style={{ marginTop: spacing.xs }}
+                >
+                  {header.subtitle}
+                </Typo>
+              )}
+              {header.children}
+            </Box>
+          )}
+          {content && (
+            <ScrollView
+              style={{ maxHeight: 400 }}
+              contentContainerStyle={{ padding: spacing.m }}
+            >
+              {content}
+            </ScrollView>
+          )}
+          {footer?.buttons && (
+            <Box
+              gap="s"
+              p="m"
+              borderColor="newTheme_border"
+              flexDirection="row"
+              justifyContent="space-between"
               style={{
-                backgroundColor: colors.newTheme_background,
-                borderRadius: 12,
-                maxWidth: 600,
-                width: "100%",
-                maxHeight: "90%",
+                borderTopWidth: 1,
               }}
             >
-              {header && (
-                <Box
-                  p="m"
-                  pb="s"
-                >
-                  {header.title && <Typo variant="h2_semiBold">{header.title.text}</Typo>}
-                  {header.subtitle && (
-                    <Typo
-                      variant="paragraphe_regular"
-                      color="newTheme_textLegend"
-                      style={{ marginTop: spacing.xs }}
-                    >
-                      {header.subtitle}
-                    </Typo>
-                  )}
-                  {header.children}
-                </Box>
+              {footer.buttons.left && (
+                <Button
+                  label={footer.buttons.left.title?.text ?? "Annuler"}
+                  onPress={footer.buttons.left.onPress}
+                  disabled={footer.buttons.left.disabled}
+                  color={footer.buttons.left.color ?? "primary"}
+                  flex={1}
+                />
               )}
-              {content && (
-                <ScrollView
-                  style={{ maxHeight: 400 }}
-                  contentContainerStyle={{ padding: spacing.m }}
-                >
-                  {content}
-                </ScrollView>
+              {footer.buttons.right && (
+                <Button
+                  label={footer.buttons.right.title?.text ?? "Valider"}
+                  onPress={footer.buttons.right.onPress}
+                  disabled={footer.buttons.right.disabled}
+                  color={footer.buttons.right.color ?? "primary"}
+                  flex={1}
+                />
               )}
-              {footer?.buttons && (
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    padding: spacing.m,
-                    borderTopWidth: 1,
-                    borderTopColor: colors.newTheme_border,
-                  }}
-                >
-                  {footer.buttons.left && (
-                    <TouchableOpacity
-                      onPress={footer.buttons.left.onPress}
-                      disabled={footer.buttons.left.disabled}
-                      style={{ padding: spacing.s }}
-                    >
-                      <Text style={{ color: colors.newTheme_primary }}>
-                        {footer.buttons.left.title?.text ?? "Annuler"}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                  {footer.buttons.right && (
-                    <TouchableOpacity
-                      onPress={footer.buttons.right.onPress}
-                      disabled={footer.buttons.right.disabled}
-                      style={{
-                        padding: spacing.s,
-                        backgroundColor: colors.newTheme_primary,
-                        borderRadius: 8,
-                      }}
-                    >
-                      <Text style={{ color: colors.newTheme_textOnPrimary }}>
-                        {footer.buttons.right.title?.text ?? "OK"}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              )}
-            </View>
-          </TouchableWithoutFeedback>
-        </View>
-      </TouchableWithoutFeedback>
+            </Box>
+          )}
+        </Box>
+      </Box>
     </RNModal>
   );
 };

@@ -36,8 +36,9 @@ const useServerEvents = (onEvent: () => void) => {
       eventSource.onmessage = event => {
         try {
           const data = JSON.parse(event.data);
-          if (data.type === "cache-updated") onEventRef.current();
-          else if (data.type === "connected" && data.lastUpdate) onEventRef.current();
+          if (data.type === "index-updated" || data.type === "connected") {
+            onEventRef.current();
+          }
         } catch {
           /* ignore parse errors */
         }
@@ -59,19 +60,25 @@ const useRegressionTrees = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchTrees = useCallback(async () => {
+  const fetchTrees = useCallback(async (options?: { silent?: boolean }) => {
     try {
-      setLoading(true);
-      setError(null);
+      if (!options?.silent) {
+        setLoading(true);
+        setError(null);
+      }
       const response = await fetch(`${VR_SERVER_URL}/regressions/tree`);
       if (!response.ok) throw new Error("Failed to fetch tree");
       const result = await response.json();
       setData(result);
     } catch (err) {
       console.error("❌ Error fetching tree:", err);
-      setError(err instanceof Error ? err.message : "Unknown error");
+      if (!options?.silent) {
+        setError(err instanceof Error ? err.message : "Unknown error");
+      }
     } finally {
-      setLoading(false);
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -80,21 +87,32 @@ const useRegressionTrees = () => {
   }, [fetchTrees]);
 
   const handleServerEvent = useCallback(() => {
-    fetchTrees();
+    fetchTrees({ silent: true });
   }, [fetchTrees]);
 
   useServerEvents(handleServerEvent);
 
-  return { ...data, loading, error, refresh: fetchTrees };
+  const rebuild = useCallback(async () => {
+    try {
+      setLoading(true);
+      await fetch(`${VR_SERVER_URL}/regressions/rebuild`, { method: "POST" });
+    } catch (err) {
+      console.error("❌ Error rebuilding index:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  return { ...data, loading, error, refresh: rebuild };
 };
 
 const useDeletedRegressions = () => {
   const [deletedList, setDeletedList] = useState<DeletedItem[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const fetchDeleted = useCallback(async () => {
+  const fetchDeleted = useCallback(async (options?: { silent?: boolean }) => {
     try {
-      setLoading(true);
+      if (!options?.silent) setLoading(true);
       const response = await fetch(`${VR_SERVER_URL}/regressions/deleted`);
       if (!response.ok) throw new Error("Failed to fetch deleted");
       const result = await response.json();
@@ -102,13 +120,48 @@ const useDeletedRegressions = () => {
     } catch (err) {
       console.error("❌ Error fetching deleted:", err);
     } finally {
-      setLoading(false);
+      if (!options?.silent) setLoading(false);
     }
   }, []);
 
-  useServerEvents(fetchDeleted);
+  useServerEvents(() => {
+    fetchDeleted({ silent: true });
+  });
 
   return { deletedList, loading, refresh: fetchDeleted };
+};
+
+const usePixelDiffMetrics = (diffPath: string | undefined, enabled: boolean) => {
+  const [countPixelDiff, setCountPixelDiff] = useState<number | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!enabled || !diffPath) {
+      setCountPixelDiff(undefined);
+      return;
+    }
+
+    let cancelled = false;
+    setCountPixelDiff(undefined);
+
+    fetch(`${VR_SERVER_URL}/regressions/metrics?path=${encodeURIComponent(diffPath)}`)
+      .then(res => {
+        if (!res.ok) throw new Error("Failed to fetch metrics");
+        return res.json();
+      })
+      .then(result => {
+        if (!cancelled) setCountPixelDiff(result.countPixelDiff ?? null);
+      })
+      .catch(err => {
+        console.error("❌ Error fetching pixel diff metrics:", err);
+        if (!cancelled) setCountPixelDiff(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [diffPath, enabled]);
+
+  return countPixelDiff;
 };
 
 const useDevicesConfig = (devicesProp?: DeviceDisplayConfig[]) => {
@@ -167,11 +220,25 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   const [showDeleted, setShowDeleted] = useState(false);
   const [showCompareModal, setShowCompareModal] = useState(false);
   const [showHeatmap, setShowHeatmap] = useState(false);
-  const [currentStory, setCurrentStory] = useState<Node | undefined>();
+  const [selectedPath, setSelectedPath] = useState<string | undefined>();
+  const [pendingRestorePath, setPendingRestorePath] = useState<string | undefined>();
 
   const { devices, loading: devicesLoading, error: devicesError } = useDevicesConfig(devicesProp);
-  const { tree, loading, error: treeError, refresh } = useRegressionTrees();
+  const { tree, lastUpdate, loading, error: treeError, refresh } = useRegressionTrees();
   const { deletedList, refresh: refreshDeleted } = useDeletedRegressions();
+
+  const flattenTree = useCallback((node: Node | null): Node[] => {
+    if (!node) return [];
+    if (node.type === "file") return [node];
+    return Object.values(node.children ?? {}).flatMap(flattenTree);
+  }, []);
+
+  const allList = useMemo(() => flattenTree(tree), [tree, flattenTree]);
+
+  const currentStory = useMemo(
+    () => (selectedPath ? allList.find(n => n.path === selectedPath) : undefined),
+    [allList, selectedPath],
+  );
 
   const treeType = useMemo<"new" | "diff">(() => {
     if (!currentStory?.storyType) return "new";
@@ -188,41 +255,77 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     [currentStory],
   );
 
-  const flattenTree = useCallback((node: Node | null): Node[] => {
-    if (!node) return [];
-    if (node.type === "file") return [node];
-    return Object.values(node.children ?? {}).flatMap(flattenTree);
+  const goTo = useCallback((node: Node) => {
+    setSelectedPath(node.path);
   }, []);
 
-  const allList = useMemo(() => flattenTree(tree), [tree, flattenTree]);
-
-  const goTo = useCallback(
-    (node: Node) => {
-      const index = allList.findIndex(n => n.path === node.path);
-      if (index !== -1) setCurrentStory(allList[index]);
-    },
-    [allList],
-  );
-
   const goNext = useCallback(() => {
-    if (!currentStory) {
-      if (allList.length) setCurrentStory(allList[0]);
+    if (!allList.length) {
+      setSelectedPath(undefined);
       return;
     }
-    const index = allList.findIndex(n => n.path === currentStory.path);
-    if (index < allList.length - 1) setCurrentStory(allList[index + 1]);
-    else setCurrentStory(allList[0]);
-  }, [allList, currentStory]);
+    if (!selectedPath) {
+      setSelectedPath(allList[0].path);
+      return;
+    }
+    const index = allList.findIndex(n => n.path === selectedPath);
+    if (index !== -1 && index < allList.length - 1) {
+      setSelectedPath(allList[index + 1].path);
+    } else {
+      setSelectedPath(allList[0].path);
+    }
+  }, [allList, selectedPath]);
 
   const goPrev = useCallback(() => {
-    if (!currentStory) {
-      if (allList.length) setCurrentStory(allList[0]);
+    if (!allList.length) {
+      setSelectedPath(undefined);
       return;
     }
-    const index = allList.findIndex(n => n.path === currentStory.path);
-    if (index > 0) setCurrentStory(allList[index - 1]);
-    else setCurrentStory(allList[allList.length - 1]);
-  }, [allList, currentStory]);
+    if (!selectedPath) {
+      setSelectedPath(allList[0].path);
+      return;
+    }
+    const index = allList.findIndex(n => n.path === selectedPath);
+    if (index > 0) {
+      setSelectedPath(allList[index - 1].path);
+    } else {
+      setSelectedPath(allList[allList.length - 1].path);
+    }
+  }, [allList, selectedPath]);
+
+  const advanceAfterDelete = useCallback(() => {
+    const deletedPath = selectedPath;
+    const remaining = deletedPath ? allList.filter(n => n.path !== deletedPath) : allList;
+    if (remaining.length > 0) {
+      setSelectedPath(remaining[0].path);
+    } else {
+      setSelectedPath(undefined);
+    }
+  }, [allList, selectedPath]);
+
+  const focusRestoredStory = useCallback((fullPath: string) => {
+    setPendingRestorePath(fullPath);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingRestorePath) return;
+    const match = allList.find(n => n.path === pendingRestorePath);
+    if (match) {
+      setSelectedPath(match.path);
+      setPendingRestorePath(undefined);
+    }
+  }, [pendingRestorePath, allList]);
+
+  useEffect(() => {
+    if (pendingRestorePath) return;
+    if (!selectedPath && allList.length > 0) {
+      setSelectedPath(allList[0].path);
+      return;
+    }
+    if (selectedPath && allList.length > 0 && !allList.some(n => n.path === selectedPath)) {
+      setSelectedPath(allList[0].path);
+    }
+  }, [selectedPath, allList, pendingRestorePath]);
 
   const {
     handleValid,
@@ -232,20 +335,28 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     handleCompareAllStories,
     handleDelete,
     handleRestore,
-  } = createVisualRegressionActions(goNext, refresh, refreshDeleted);
+  } = createVisualRegressionActions({
+    onNext: goNext,
+    onAfterDelete: advanceAfterDelete,
+    onAfterRestore: focusRestoredStory,
+  });
 
   const [regeneratingPaths, setRegeneratingPaths] = useState<Set<string>>(new Set());
-  const [imageCacheKey, setImageCacheKey] = useState(0);
+
+  const countPixelDiff = usePixelDiffMetrics(
+    storyScreenshotsPath?.diff,
+    showHeatmap && treeType === "diff" && Boolean(storyScreenshotsPath?.diff),
+  );
 
   const handleCompareStoryFromTree = useCallback(
     async (node: Node) => {
       if (!node.storyId || !node.deviceName) return;
       const path = node.path;
-      const isCurrentStory = currentStory?.path === path;
+      const lastSlash = path.lastIndexOf("/");
+      const componentDir = lastSlash > 0 ? path.slice(0, lastSlash) : undefined;
       setRegeneratingPaths(prev => new Set(prev).add(path));
       try {
-        await handleCompareStory(node.storyId, node.deviceName);
-        if (isCurrentStory) setImageCacheKey(prev => prev + 1);
+        await handleCompareStory(node.storyId, node.deviceName, componentDir);
       } finally {
         setRegeneratingPaths(prev => {
           const next = new Set(prev);
@@ -254,36 +365,12 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
         });
       }
     },
-    [handleCompareStory, currentStory?.path],
+    [handleCompareStory],
   );
-
-  const resetCurrentStory = useCallback(() => {
-    if (allList.length > 0) setCurrentStory(allList[0]);
-  }, [allList]);
-
-  useEffect(() => {
-    if (!currentStory) {
-      resetCurrentStory();
-    } else {
-      const index = allList.findIndex(n => n.path === currentStory.path);
-      if (index === -1) resetCurrentStory();
-    }
-  }, [currentStory, allList, resetCurrentStory]);
 
   useEffect(() => {
     if (showDeleted) refreshDeleted();
   }, [showDeleted, refreshDeleted]);
-
-  const wasRegeneratingRef = useRef(false);
-  useEffect(() => {
-    if (currentStory) {
-      const isRegenerating = regeneratingPaths.has(currentStory.path);
-      if (wasRegeneratingRef.current && !isRegenerating) setImageCacheKey(prev => prev + 1);
-      wasRegeneratingRef.current = isRegenerating;
-    } else {
-      wasRegeneratingRef.current = false;
-    }
-  }, [currentStory, regeneratingPaths]);
 
   if (devicesLoading) {
     return (
@@ -333,7 +420,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
               currentStory={currentStory}
               treeType={treeType}
               showHeatmap={showHeatmap}
-              countPixelDiff={showHeatmap && storyScreenshotsPath?.diff ? currentStory?.countPixelDiff : undefined}
+              countPixelDiff={showHeatmap ? countPixelDiff : undefined}
               storyScreenshotsPath={storyScreenshotsPath}
               onPrev={goPrev}
               onNext={goNext}
@@ -349,10 +436,10 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
               showHeatmap={showHeatmap}
               imageUrls={imageUrls}
               isRegenerating={currentStory ? regeneratingPaths.has(currentStory.path) : false}
-              imageCacheKey={imageCacheKey}
               storyId={currentStory?.storyId}
               deviceName={currentStory?.deviceName}
               fetchError={treeError}
+              contentKey={`${selectedPath ?? ""}-${lastUpdate}`}
             />
           </Box>
         </Box>

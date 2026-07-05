@@ -1,11 +1,12 @@
 import { ScrollView, Text, TouchableOpacity, View } from "react-native";
 
+import type { MaterialIconName } from "@app-types/types";
 import { colors, spacing } from "@themes/theme";
 
 export type TabBarTab<T = string> = {
   key: T;
   title: string;
-  icon?: { name: string; fill?: string };
+  icon?: { name: MaterialIconName; fill?: string };
   alertTextInfo?: number;
 };
 

@@ -67,13 +67,12 @@ switch (subcommand) {
     break;
   }
   case "app": {
-    // Ouvre l'interface web de régression visuelle (composant VisualRegressions, src/index.tsx)
-    // CI=1 pour Metro : progression sur une seule ligne
-    const child = spawn(
-      npxRunner,
-      ["expo", "start", "--web", "--clear", "--port", String(EXPO_PORT)],
-      { ...spawnOpts(packageRootReal), env: { ...env, CI: "1" } },
-    );
+    // Interface web VR (Expo). Ne pas forcer CI=1 : Metro désactive le hot reload en mode CI.
+    const expoArgs = ["expo", "start", "--web", "--port", String(EXPO_PORT)];
+    if (process.env.VR_CLEAR_METRO === "1") {
+      expoArgs.push("--clear");
+    }
+    const child = spawn(npxRunner, expoArgs, spawnOpts(packageRootReal));
     child.on("error", err => {
       console.error("❌ Impossible de lancer l'interface VR:", err.message);
       process.exit(1);

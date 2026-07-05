@@ -55,14 +55,14 @@ module.exports = [
     deviceScaleFactor: 3,
     isMobile: true,
     label: "iPhone 16",
-    icon: "mobile",
+    icon: "phone-iphone",
     color: "newTheme_fantasy",
   },
 ];
 ```
 
 - **label** : texte affiché dans l’UI.
-- **icon** : nom de l’icône (ex. `"laptop"`, `"mobile"`, `"tablet-portrait"`, `"tablet-landscape"`).
+- **icon** : nom MaterialIcons (`@expo/vector-icons`), ex. `"laptop"`, `"phone-iphone"`, `"tablet-mac"`, `"tablet"`.
 - **color** : clé de couleur du thème (ex. `"newTheme_primary"`, `"newTheme_danger"`).
 
 Les scripts (serveur VR, comparaison Playwright) utilisent `name`, `viewport`, `deviceScaleFactor`, `isMobile`. L’UI utilise `name`, `label`, `icon`, `color` via la prop **obligatoire** `devices`, construite avec `fromVRDeviceConfig(config)`.

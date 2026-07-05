@@ -2,6 +2,7 @@
  * Config des devices pour la régression visuelle.
  * Utilisée par : vr-server, compare-visual-regressions, et l'UI @setshao/visual-regression.
  * Chaque device doit définir : name, viewport, deviceScaleFactor?, isMobile?, label, icon, color.
+ * icon : nom MaterialIcons (@expo/vector-icons), ex. "laptop", "tablet".
  */
 module.exports = [
   {
@@ -19,7 +20,7 @@ module.exports = [
     deviceScaleFactor: 3,
     isMobile: true,
     label: "iPhone 16",
-    icon: "mobile",
+    icon: "phone-iphone",
     color: "newTheme_fantasy",
   },
   {
@@ -28,7 +29,7 @@ module.exports = [
     deviceScaleFactor: 2,
     isMobile: true,
     label: "iPad A16 Portrait",
-    icon: "tablet-portrait",
+    icon: "tablet-mac",
     color: "newTheme_warning",
   },
   {
@@ -37,7 +38,7 @@ module.exports = [
     deviceScaleFactor: 2,
     isMobile: true,
     label: "iPad A16 Paysage",
-    icon: "tablet-landscape",
+    icon: "tablet",
     color: "newTheme_info",
   },
 ];

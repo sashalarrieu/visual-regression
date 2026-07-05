@@ -36,7 +36,7 @@ export const ReloadButton: React.FC<ReloadButtonProps> = ({ label = "Redémarrer
   return (
     <Button
       label={label}
-      leftIcon={{ name: "arrows-retweet" }}
+      leftIcon={{ name: "sync" }}
       onPress={handleReload}
       color="danger"
       loading={loading}

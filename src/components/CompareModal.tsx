@@ -1,17 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList } from "react-native";
 
-import type { DeletedItem, Node, StoryDevicePair } from "@app-types/types";
+import type { DeletedItem, MaterialIconName, Node, StoryDevicePair } from "@app-types/types";
 import { Box } from "@atoms/Box";
 import { Button } from "@atoms/Button";
 import { EndOfList } from "@atoms/EndOfList";
 import { Modal } from "@atoms/Modal";
-import { TabBar } from "@atoms/TabBar";
+import { TabBar, type TabBarTab } from "@atoms/TabBar";
 import { Typo } from "@atoms/Typo";
 import { DeletedItemRow } from "@components/DeletedItemRow";
 import { useDeviceConfig } from "@providers/DeviceConfigProvider";
 import { spacing } from "@themes/theme";
-import { formatStoryIdForDisplay } from "@utils";
+import { formatStoryIdForDisplay, fetchStorybookStoryCount } from "@utils";
 
 export type CompareModalProps = {
   visible: boolean;
@@ -19,7 +19,7 @@ export type CompareModalProps = {
   deletedList: DeletedItem[];
   allList: Node[];
   onCompareSelected: (stories: StoryDevicePair[]) => void;
-  onCompareStory?: (storyId: string, deviceName: string) => void;
+  onCompareStory?: (storyId: string, deviceName: string, componentDir?: string) => void;
   onCompareByType: (type: "new" | "diff" | "rejected", deviceName?: string) => Promise<void>;
   onCompareAllStories: (deviceName?: string) => Promise<void>;
   loading?: boolean;
@@ -36,9 +36,21 @@ export const CompareModal: React.FC<CompareModalProps> = ({
   onCompareAllStories,
   loading = false,
 }) => {
-  const { getDeviceStyle, getDeviceDisplayName } = useDeviceConfig();
+  const { getDeviceStyle, getDeviceDisplayName, deviceConfigs } = useDeviceConfig();
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [selectedDevice, setSelectedDevice] = useState<string | "all">("all");
+  const [storybookStoryCount, setStorybookStoryCount] = useState(0);
+
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    fetchStorybookStoryCount().then(count => {
+      if (!cancelled) setStorybookStoryCount(count);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible]);
 
   useEffect(() => {
     if (visible) setSelectedItems(new Set());
@@ -64,12 +76,12 @@ export const CompareModal: React.FC<CompareModalProps> = ({
     return counts;
   }, [deletedList, availableDevices]);
 
-  const deviceTabs = useMemo(() => {
+  const deviceTabs = useMemo<TabBarTab<string>[]>(() => {
     return [
       {
-        key: "all" as const,
+        key: "all",
         title: "Tous",
-        icon: { name: "squares-group" },
+        icon: { name: "grid-view" },
         alertTextInfo: deviceCounts.get("all") || 0,
       },
       ...availableDevices.map(device => {
@@ -132,7 +144,15 @@ export const CompareModal: React.FC<CompareModalProps> = ({
   const handleCompareSelected = useCallback(() => {
     const selected = validStories
       .filter(item => selectedItems.has(item.fullPath))
-      .map(item => ({ storyId: item.storyId!, deviceName: item.deviceName! }));
+      .map(item => {
+        const normalized = item.fullPath.replace(/\\/g, "/");
+        const lastSlash = normalized.lastIndexOf("/");
+        return {
+          storyId: item.storyId!,
+          deviceName: item.deviceName!,
+          componentDir: lastSlash > 0 ? normalized.slice(0, lastSlash) : undefined,
+        };
+      });
     if (selected.length > 0) {
       onCompareSelected(selected);
       onClose();
@@ -141,7 +161,11 @@ export const CompareModal: React.FC<CompareModalProps> = ({
 
   const handleCompareSingleStory = useCallback(
     (item: DeletedItem) => {
-      if (item.storyId && item.deviceName && onCompareStory) onCompareStory(item.storyId, item.deviceName);
+      if (!item.storyId || !item.deviceName || !onCompareStory) return;
+      const normalized = item.fullPath.replace(/\\/g, "/");
+      const lastSlash = normalized.lastIndexOf("/");
+      const componentDir = lastSlash > 0 ? normalized.slice(0, lastSlash) : undefined;
+      onCompareStory(item.storyId, item.deviceName, componentDir);
     },
     [onCompareStory],
   );
@@ -166,42 +190,48 @@ export const CompareModal: React.FC<CompareModalProps> = ({
     const filteredRejected = deviceName
       ? deletedList.filter(item => item.deviceName === deviceName && item.storyId)
       : deletedList.filter(item => item.storyId);
-    const allStoriesForDevice = deviceName
-      ? allList.filter(node => node.deviceName === deviceName && node.storyId)
-      : allList.filter(node => node.storyId);
+    const devicesForAllCount = selectedDevice === "all" ? (deviceConfigs?.length ?? availableDevices.length) : 1;
     return {
-      all: allStoriesForDevice.length + filteredRejected.length,
+      all: storybookStoryCount * devicesForAllCount,
       new: filteredRejected.filter(item => !item.isDiff).length,
       diff: filteredRejected.filter(item => item.isDiff).length,
       rejected: filteredRejected.length,
     };
-  }, [selectedDevice, allList, deletedList]);
+  }, [selectedDevice, deletedList, storybookStoryCount, deviceConfigs, availableDevices.length]);
 
-  const compareButtons = useMemo(
+  const compareButtons = useMemo<
+    {
+      label: string;
+      onPress: () => void;
+      icon: { name: MaterialIconName };
+      number: number;
+      color?: "danger" | "primary";
+    }[]
+  >(
     () => [
       {
         label: "Tous",
         onPress: handleCompareAllForDevice,
-        icon: { name: "squares-group" },
+        icon: { name: "grid-view" },
         number: storyCountsByType.all,
         color: "danger" as const,
       },
       {
         label: "New",
         onPress: () => handleCompareByTypeForDevice("new"),
-        icon: { name: "plus" },
+        icon: { name: "add" },
         number: storyCountsByType.new,
       },
       {
         label: "Diff",
         onPress: () => handleCompareByTypeForDevice("diff"),
-        icon: { name: "triangle-exclamation" },
+        icon: { name: "warning" },
         number: storyCountsByType.diff,
       },
       {
         label: "Refusé",
         onPress: () => handleCompareByTypeForDevice("rejected"),
-        icon: { name: "trash" },
+        icon: { name: "delete-outline" },
         number: storyCountsByType.rejected,
       },
     ],

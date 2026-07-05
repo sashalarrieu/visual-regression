@@ -86,17 +86,17 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
             onPress={onNext}
           />
           <Button
-            icon={{ name: "clone" }}
+            icon={{ name: "content-copy" }}
             color="primary"
             onPress={copyStoryPathToClipboard}
           />
           <Button
-            icon={{ name: "arrows-retweet" }}
+            icon={{ name: "sync" }}
             color="primary"
             onPress={onOpenCompareModal}
           />
           <Button
-            icon={{ name: "clock-arrow-rotate" }}
+            icon={{ name: "history" }}
             color="primary"
             onPress={onShowDeleted}
           />

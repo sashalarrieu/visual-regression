@@ -1,5 +1,6 @@
 // scripts/vr-launcher.ts (package @setshao/visual-regression)
 import { spawn } from "child_process";
+import { existsSync } from "fs";
 import path from "path";
 
 import {
@@ -11,8 +12,7 @@ import {
   STORYBOOK_URL,
   VR_SERVER_PORT,
   VR_SERVER_URL,
-} from "../constants/constants";
-import { existsSync } from "fs";
+} from "@constants/constants";
 import {
   assertVrDevicesConfig,
   getNodeTsxArgs,
@@ -20,7 +20,8 @@ import {
   getScriptDir,
   getTsxCliPath,
   spawnShellOption,
-} from "../utils/node";
+  waitForStorybookStories,
+} from "@utils/node";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
 const PACKAGE_ROOT = path.join(SCRIPT_DIR, "..", "..");
@@ -126,7 +127,14 @@ const main = async () => {
 
   let storybookAlreadyRunning = false;
   if (!storybookAvailable) {
-    storybookAlreadyRunning = true;
+    const storiesIndexed = await waitForStorybookStories(1, 3);
+    if (storiesIndexed) {
+      storybookAlreadyRunning = true;
+    } else {
+      log("yellow", "⚠️", `Port ${STORYBOOK_PORT} occupé mais index Storybook vide — redémarrage`);
+      killPort(STORYBOOK_PORT);
+      await new Promise(resolve => setTimeout(resolve, process.platform === "win32" ? 3500 : 2000));
+    }
   }
 
   log("blue", "🔧", "Démarrage du serveur VR");
@@ -155,13 +163,7 @@ const main = async () => {
   let storybook: ReturnType<typeof spawn> | null = null;
 
   if (storybookAlreadyRunning) {
-    const storybookReady = await waitForServer(STORYBOOK_PORT, 1);
-    if (!storybookReady) {
-      log("red", "❌", "Storybook ne répond pas sur le port attendu");
-      vrServer.kill();
-      process.exit(1);
-    }
-    log("green", "✅", "Storybook prêt");
+    log("green", "✅", "Storybook prêt (instance existante)");
   } else {
     log("blue", "📚", "Démarrage de Storybook");
 
@@ -185,16 +187,31 @@ const main = async () => {
       process.exit(1);
     }
 
+    const storiesIndexed = await waitForStorybookStories(1, 90);
+    if (!storiesIndexed) {
+      log("red", "❌", "Storybook n'a pas indexé les stories à temps");
+      vrServer.kill();
+      if (storybook) {
+        storybook.kill();
+      }
+      process.exit(1);
+    }
+
     log("green", "✅", "Storybook prêt");
   }
 
   log("blue", "📱", "Démarrage de l'interface VR (Expo depuis le package)");
 
-  const expo = spawn("cross-env", ["expo", "start", "--web", "--clear", "--port", String(EXPO_PORT)], {
+  const expoArgs = ["expo", "start", "--web", "--port", String(EXPO_PORT)];
+  if (process.env.VR_CLEAR_METRO === "1") {
+    expoArgs.push("--clear");
+  }
+
+  const expo = spawn("cross-env", expoArgs, {
     stdio: "inherit",
     shell: true,
     cwd: PACKAGE_ROOT,
-    env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT, CI: "1" },
+    env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
   });
 
   expo.on("error", err => {
@@ -260,12 +277,12 @@ const main = async () => {
     if (code === 0) {
       log("green", "✅", "Comparaison initiale terminée");
       try {
-        const res = await fetch(`${VR_SERVER_URL}/refresh`, { method: "POST" });
+        const res = await fetch(`${VR_SERVER_URL}/regressions/rebuild`, { method: "POST" });
         if (res.ok) {
           const body = (await res.json()) as { diffCount?: number; newCount?: number };
           const diffs = body.diffCount ?? 0;
           const news = body.newCount ?? 0;
-          log("blue", "🔄", `Cache des régressions rafraîchi: ${diffs} diff(s), ${news} nouveau(x) screenshot(s)`);
+          log("blue", "🔄", `Index des régressions reconstruit: ${diffs} diff(s), ${news} nouveau(x) screenshot(s)`);
         }
       } catch {
         // ignore

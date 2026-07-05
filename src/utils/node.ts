@@ -7,8 +7,8 @@ import { createRequire } from "module";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import type { DeviceConfig, DeviceDisplayConfig, VRDeviceConfigItem } from "../types/types";
-import { SCREENSHOTS_DIR } from "../constants/constants";
+import type { DeviceConfig, DeviceDisplayConfig, VRDeviceConfigItem } from "@app-types/types";
+import { SCREENSHOTS_DIR, STORYBOOK_URL } from "@constants/constants";
 
 const _require = createRequire(import.meta.url);
 const VR_DEVICES_CONFIG_FILENAME = "vr-devices.config.cjs";
@@ -95,12 +95,35 @@ export const getDevicesConfig = (config: VRDeviceConfigItem[]): Record<string, D
     ]),
   );
 
+/** Compte les stories indexées (hors pages docs). */
+export const countStorybookStories = async (): Promise<number> => {
+  try {
+    const res = await fetch(`${STORYBOOK_URL}/index.json`);
+    if (!res.ok) return 0;
+    const data = (await res.json()) as { entries?: Record<string, { type?: string }> };
+    return Object.entries(data.entries ?? {}).filter(([id, entry]) => entry.type === "story" && !id.endsWith("--docs"))
+      .length;
+  } catch {
+    return 0;
+  }
+};
+
+/** Attend que Storybook ait indexé au moins minStories stories. */
+export const waitForStorybookStories = async (minStories = 1, maxAttempts = 90): Promise<boolean> => {
+  for (let i = 0; i < maxAttempts; i++) {
+    const count = await countStorybookStories();
+    if (count >= minStories) return true;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  return false;
+};
+
 export const getDevicesDisplayConfig = (root: string): DeviceDisplayConfig[] => {
   const config = loadVrDevicesConfig(root);
   return config.map(d => ({
     name: d.name,
     label: d.label ?? d.name,
-    icon: d.icon ?? "hint",
+    icon: d.icon ?? "help-outline",
     color: d.color ?? "newTheme_danger",
   }));
 };

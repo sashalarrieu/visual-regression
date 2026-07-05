@@ -1,9 +1,25 @@
 import type { DeviceDisplayConfig, DeviceStyle, Node, StoryScreenshotsPath, VRDeviceConfig } from "@app-types/types";
-import { UNKNOWN_DEVICE_STYLE, VR_SERVER_URL } from "@constants/constants";
+import { FORCE_VR_TAG, IGNORE_VR_TAG, STORYBOOK_URL, UNKNOWN_DEVICE_STYLE, VR_SERVER_URL } from "@constants/constants";
 
 /**
  * Utilitaires partagés (app React + scripts). Code Node-only (import.meta, createRequire) dans ./node.ts.
  */
+
+/** Compte les stories Storybook éligibles à la VR (même filtre que compareAllStories). */
+export const fetchStorybookStoryCount = async (): Promise<number> => {
+  try {
+    const res = await fetch(`${STORYBOOK_URL}/index.json`);
+    if (!res.ok) return 0;
+    const data = (await res.json()) as { entries?: Record<string, { type?: string; tags?: string[] }> };
+    return Object.entries(data.entries ?? {}).filter(([id, entry]) => {
+      if (entry.type !== "story" || id.endsWith("--docs")) return false;
+      const tags = entry.tags ?? [];
+      return tags.includes(FORCE_VR_TAG) || !tags.includes(IGNORE_VR_TAG);
+    }).length;
+  } catch {
+    return 0;
+  }
+};
 
 export const capitalizeAll = (str: string, locale: string = "fr-FR"): string => {
   if (!str) return str;
@@ -27,12 +43,19 @@ export const fromVRDeviceConfig = (devices: VRDeviceConfig[]): DeviceDisplayConf
     color: d.color,
   }));
 
+export type VisualRegressionActionHandlers = {
+  onNext: () => void;
+  /** Appelé après un refus : avance la sélection en excluant l'élément supprimé. */
+  onAfterDelete: () => void;
+  /** Appelé après une restauration depuis l'historique des refusés. */
+  onAfterRestore?: (fullPath: string) => void;
+};
+
 export const createVisualRegressionActions = (
-  onNext: () => void,
-  onRefresh: () => Promise<void>,
-  onRefreshDeleted: () => Promise<void>,
+  handlers: VisualRegressionActionHandlers,
   serverUrl: string = VR_SERVER_URL,
 ) => {
+  const { onNext, onAfterDelete, onAfterRestore } = handlers;
   const handleValid = async (storyScreenshotsPath?: StoryScreenshotsPath) => {
     if (!storyScreenshotsPath) return;
     try {
@@ -48,7 +71,6 @@ export const createVisualRegressionActions = (
       }
       console.log("✅ Validation réussie");
       onNext();
-      await onRefresh();
     } catch (err) {
       console.error("Erreur de communication avec le serveur VR:", err);
     }
@@ -65,19 +87,20 @@ export const createVisualRegressionActions = (
     }
   };
 
-  const handleCompareStory = async (storyId?: string, deviceName?: string) => {
+  const handleCompareStory = async (storyId?: string, deviceName?: string, componentDir?: string) => {
     if (!storyId || !deviceName) return;
     try {
       const res = await fetch(`${serverUrl}/compare/single`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storyId, deviceName }),
+        body: JSON.stringify({ storyId, deviceName, componentDir }),
       });
       const result = await res.json();
-      if (!res.ok || !result.success) return;
+      if (!res.ok || !result.success) {
+        console.error("❌ Comparaison échouée :", result.error ?? res.statusText);
+        return;
+      }
       console.log("✅ Comparaison lancée");
-      await onRefresh();
-      await onRefreshDeleted();
     } catch (err) {
       console.error("❌ Compare story error:", err);
     }
@@ -93,9 +116,7 @@ export const createVisualRegressionActions = (
       });
       if (!res.ok) return;
       console.log("✅ Deleted successfully");
-      onNext();
-      await onRefresh();
-      await onRefreshDeleted();
+      onAfterDelete();
     } catch (err) {
       console.error("❌ Delete error:", err);
     }
@@ -108,10 +129,13 @@ export const createVisualRegressionActions = (
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path, isDiff }),
       });
-      if (!res.ok) return;
+      const result = await res.json();
+      if (!res.ok) {
+        console.error("❌ Restauration échouée :", result.error ?? res.statusText);
+        return;
+      }
       console.log("✅ Restored successfully");
-      await onRefresh();
-      await onRefreshDeleted();
+      onAfterRestore?.(path);
     } catch (err) {
       console.error("❌ Restore error:", err);
     }
@@ -126,10 +150,11 @@ export const createVisualRegressionActions = (
         body: JSON.stringify({ stories }),
       });
       const result = await res.json();
-      if (!res.ok || !result.success) return;
+      if (!res.ok || !result.success) {
+        console.error("❌ Régénération échouée :", result.error ?? res.statusText);
+        return;
+      }
       console.log(`✅ Régénération lancée pour ${stories.length} comparaison(s)`);
-      await onRefresh();
-      await onRefreshDeleted();
     } catch (err) {
       console.error("❌ Compare selected error:", err);
     }
@@ -145,9 +170,10 @@ export const createVisualRegressionActions = (
         body: JSON.stringify(body),
       });
       const result = await res.json();
-      if (!res.ok || !result.success) return;
-      await onRefresh();
-      await onRefreshDeleted();
+      if (!res.ok || !result.success) {
+        console.error("❌ Comparaison par type échouée :", result.error ?? res.statusText);
+        return;
+      }
     } catch (err) {
       console.error("❌ Compare by type error:", err);
     }
@@ -163,9 +189,10 @@ export const createVisualRegressionActions = (
         body: JSON.stringify(body),
       });
       const result = await res.json();
-      if (!res.ok || !result.success) return;
-      await onRefresh();
-      await onRefreshDeleted();
+      if (!res.ok || !result.success) {
+        console.error("❌ Régénération globale échouée :", result.error ?? res.statusText);
+        return;
+      }
     } catch (err) {
       console.error("❌ Compare all stories error:", err);
     }

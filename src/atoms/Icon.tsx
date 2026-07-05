@@ -1,30 +1,24 @@
+import { MaterialIcons } from "@expo/vector-icons";
 import React from "react";
-import { Text, type TextStyle } from "react-native";
+import type { StyleProp, TextStyle } from "react-native";
 
+import type { MaterialIconName } from "@app-types/types";
 import { colors, spacing, type ColorKey } from "@themes/theme";
 
-const iconMap: Record<string, string> = {
-  mobile: "📱",
-  "tablet-portrait": "📱",
-  "tablet-landscape": "🖥",
-  laptop: "💻",
-  hint: "?",
-};
-
-const sizeMap = { s: 12, m: 16, l: 20 };
+const sizeMap = { s: 14, m: 18, l: 22 };
 
 export type IconProps = {
-  name: string;
+  name: MaterialIconName;
   fill?: ColorKey;
   size?: "s" | "m" | "l";
+  style?: StyleProp<TextStyle>;
 };
 
-export const Icon: React.FC<IconProps> = ({ name, fill = "newTheme_textOnSurface", size = "m" }) => {
-  const sym = iconMap[name] ?? name;
-  const style: TextStyle = {
-    fontSize: sizeMap[size],
-    color: colors[fill],
-    marginRight: spacing.s,
-  };
-  return <Text style={style}>{sym}</Text>;
-};
+export const Icon: React.FC<IconProps> = ({ name, fill = "newTheme_textOnSurface", size = "m", style }) => (
+  <MaterialIcons
+    name={name}
+    size={sizeMap[size]}
+    color={colors[fill]}
+    style={[{ marginRight: spacing.s }, style]}
+  />
+);

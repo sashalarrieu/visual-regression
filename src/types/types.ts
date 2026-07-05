@@ -3,6 +3,11 @@
  * Domaine et context uniquement ; les props des composants restent dans chaque composant.
  */
 
+import type { MaterialIcons } from "@expo/vector-icons";
+import type { ComponentProps } from "react";
+
+export type MaterialIconName = ComponentProps<typeof MaterialIcons>["name"];
+
 // --- Domaine / config ---
 
 /** Identifiant d'un device (clé utilisée dans l'API et les noms de fichiers). */
@@ -12,7 +17,7 @@ export type DeviceId = string;
 export type DeviceDisplayConfig = {
   name: DeviceId;
   label: string;
-  icon: string;
+  icon: MaterialIconName;
   color: string;
 };
 
@@ -23,13 +28,13 @@ export type VRDeviceConfig = {
   deviceScaleFactor?: number;
   isMobile?: boolean;
   label: string;
-  icon: string;
+  icon: MaterialIconName;
   color: string;
 };
 
 /** Style d'affichage d'un device (icône + couleur). */
 export type DeviceStyle = {
-  icon: string;
+  icon: MaterialIconName;
   color: string;
 };
 
@@ -63,6 +68,8 @@ export type Node = {
 export type StoryDevicePair = {
   storyId: string;
   deviceName: string;
+  /** Dossier composant relatif (ex. src/demo) — évite buildIndex Storybook lors de la régénération. */
+  componentDir?: string;
 };
 
 /** Élément supprimé (corbeille), utilisé par le serveur VR et l'UI. */
@@ -89,11 +96,13 @@ export type ParsedPath = {
   deviceName?: string;
 };
 
-/** Cache des chemins de régressions (serveur VR). */
-export type CacheData = {
+/** Index en mémoire des régressions (serveur VR). */
+export type RegressionIndex = {
   diffPaths: string[];
   newPaths: string[];
   deletedPaths: string[];
+  tree: Node | null;
+  deletedItems: DeletedItem[];
   lastUpdate: number;
 };
 
@@ -110,7 +119,7 @@ export type VRDeviceConfigItem = {
   deviceScaleFactor?: number;
   isMobile?: boolean;
   label?: string;
-  icon?: string;
+  icon?: MaterialIconName;
   color?: string;
 };
 

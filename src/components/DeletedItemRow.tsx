@@ -32,21 +32,22 @@ export const DeletedItemRow: React.FC<DeletedItemRowProps> = ({
   const handleRestorePress = () => onRestore(item.fullPath, item.isDiff);
 
   return (
-    <Touchable
-      onPress={handlePress}
-      notPressable={!onSelect || disabled}
+    <Box
+      flex={1}
+      backgroundColor={selected ? "newTheme_primary10" : "newTheme_surface"}
+      borderColor={selected ? "newTheme_primary" : "newTheme_background"}
+      borderWidth={1}
+      flexDirection="row"
+      alignItems="center"
+      justifyContent="space-between"
+      gap="m"
+      p="m"
+      borderRadius="base"
     >
-      <Box
-        flex={1}
-        backgroundColor={selected ? "newTheme_primary10" : "newTheme_surface"}
-        borderColor={selected ? "newTheme_primary" : "newTheme_background"}
-        borderWidth={1}
-        flexDirection="row"
-        alignItems="center"
-        justifyContent="space-between"
-        gap="m"
-        p="m"
-        borderRadius="base"
+      <Touchable
+        onPress={handlePress}
+        notPressable={!onSelect || disabled}
+        style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 16 }}
       >
         <Picture
           source={item.imageUrl ? { uri: item.imageUrl } : undefined}
@@ -59,28 +60,29 @@ export const DeletedItemRow: React.FC<DeletedItemRowProps> = ({
           countPixelDiff={item.isDiff ? item.countPixelDiff : undefined}
           showHeatmap={item.isDiff && item.countPixelDiff != null}
         />
-        <Box
-          flexShrink={1}
-          flexDirection="row"
-          alignItems="center"
-          justifyContent="space-between"
-          gap="m"
-        >
-          {item.isDiff ? (
-            <Tag
-              label={{ text: "DIFF" }}
-              color="newTheme_danger"
-            />
-          ) : (
-            <TagNew />
-          )}
-          <Button
-            onPress={handleRestorePress}
-            icon={{ name: onSelect ? "arrows-retweet" : "arrows-revert" }}
-            color="base"
+      </Touchable>
+      <Box
+        flexShrink={1}
+        flexDirection="row"
+        alignItems="center"
+        justifyContent="space-between"
+        gap="m"
+      >
+        {item.isDiff ? (
+          <Tag
+            label={{ text: "DIFF" }}
+            color="newTheme_danger"
           />
-        </Box>
+        ) : (
+          <TagNew />
+        )}
+        <Button
+          onPress={handleRestorePress}
+          icon={{ name: onSelect ? "sync" : "replay" }}
+          color="base"
+          disabled={disabled}
+        />
       </Box>
-    </Touchable>
+    </Box>
   );
 };

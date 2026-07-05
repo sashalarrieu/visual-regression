@@ -3,7 +3,7 @@
  * Partagées entre l'UI (src) et les scripts (scripts/).
  */
 
-import type { DeviceStyle } from "../types/types";
+import type { DeviceStyle } from "@app-types/types";
 
 // --- Ports (launcher, serveur, Storybook, Expo) ---
 
@@ -19,7 +19,7 @@ export const EXPO_URL = `${LOCAL_URL}:${EXPO_PORT}`;
 export const STORYBOOK_URL = `${LOCAL_URL}:${STORYBOOK_PORT}`;
 
 /** Style utilisé quand le device n'est pas trouvé dans la config. */
-export const UNKNOWN_DEVICE_STYLE: DeviceStyle = { icon: "hint", color: "newTheme_danger" };
+export const UNKNOWN_DEVICE_STYLE: DeviceStyle = { icon: "help-outline", color: "newTheme_danger" };
 
 // --- Screenshots (noms, dossiers, extension) ---
 
@@ -37,6 +37,9 @@ export const TREE_BASE_FOLDER = "src";
 // --- Storybook / comparaison ---
 
 export const STORY_BASE_URI = `${STORYBOOK_URL}/iframe.html?id=`;
+
+/** URL iframe Storybook pour une story (viewMode=story évite la page docs). */
+export const getStoryIframeUrl = (storyId: string): string => `${STORY_BASE_URI}${storyId}&viewMode=story`;
 export const MAX_TEST_TIME = 10000; // 10 sec
 export const THRESHOLD = 0;
 

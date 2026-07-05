@@ -7,42 +7,45 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
-  rmSync,
   rmdirSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 
 import pixelmatch from "pixelmatch";
 import { Browser, chromium } from "playwright";
 import { PNG } from "pngjs";
-import { buildIndex } from "storybook/internal/core-server";
-import type { StoryIndexEntry } from "storybook/internal/types";
 
-import type { DeviceConfig, LogsType } from "../types/types";
+import type { DeviceConfig, LogsType, StoryDevicePair } from "@app-types/types";
 import {
   DIFF_SCREENSHOT_NAME,
   FORCE_VR_TAG,
+  getStoryIframeUrl,
   IGNORE_VR_TAG,
   MAX_TEST_TIME,
   NEW_SCREENSHOT_NAME,
   SCREENSHOT_EXTENSION,
   SCREENSHOT_NAME,
   SCREENSHOTS_DIR,
-  STORY_BASE_URI,
   STORYBOOK_URL,
   TEMP_SCREENSHOT_NAME,
   THRESHOLD,
-} from "../constants/constants";
-import { fileURLToPath } from "url";
-import { getDevicesConfig, getProjectPaths, getProjectRoot, loadVrDevicesConfig } from "../utils/node";
+} from "@constants/constants";
+import {
+  getDevicesConfig,
+  getProjectPaths,
+  getProjectRoot,
+  loadVrDevicesConfig,
+  waitForStorybookStories,
+} from "@utils/node";
 
 const PROJECT_ROOT = getProjectRoot();
 const SCRIPT_DIR_COMPARE = path.dirname(fileURLToPath(import.meta.url));
-const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR, storybookConfigDir: STORYBOOK_CONFIG_DIR } =
-  getProjectPaths(PROJECT_ROOT);
+const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR } = getProjectPaths(PROJECT_ROOT);
 const DEVICES = getDevicesConfig(loadVrDevicesConfig(PROJECT_ROOT));
 
 /** Options de lancement Chromium : timeout augmenté et args Windows. */
@@ -120,7 +123,7 @@ const recursiveDeleteDir = (dir: string): void => {
  * Supprime tous les fichiers de régressions visuelles.
  * Sous Windows, rmSync(recursive) peut lever ENOTEMPTY ; on réessaie puis fallback sur suppression manuelle, sans erreur console.
  */
-const deleteAllVisualRegressionsFiles = () => {
+export const deleteAllVisualRegressionsFiles = () => {
   if (!existsSync(PUBLIC_SCREENSHOTS_DIR)) return;
   const retries = 3;
   const delayMs = 250;
@@ -203,74 +206,99 @@ const deleteStoryScreenshotsForRegeneration = (componentDir: string, deviceName:
   }
 };
 
-const shouldIncludeStoryForVisualRegression = (entry: StoryIndexEntry): boolean => {
-  const tags = entry.tags ?? [];
+/** Entrée story telle que renvoyée par Storybook (index.json ou buildIndex). */
+type StoryIndexEntry = {
+  id: string;
+  type?: string;
+  importPath: string;
+  title?: string;
+  name?: string;
+  tags?: string[];
+};
 
+const shouldIncludeStoryForVisualRegression = (entry: StoryIndexEntry): boolean => {
+  if (entry.type !== "story") return false;
+  if (entry.id?.endsWith("--docs")) return false;
+
+  const tags = entry.tags ?? [];
   const isStoryForced = tags.includes(FORCE_VR_TAG);
   const isStoryIgnored = tags.includes(IGNORE_VR_TAG);
 
   return isStoryForced || !isStoryIgnored;
 };
 
-/**
- * Récupère la liste des stories depuis l'index HTTP de Storybook (fallback quand buildIndex renvoie 0).
- */
-const fetchStoriesFromStorybookIndex = async (): Promise<StoryIndexEntry[]> => {
-  const url = `${STORYBOOK_URL}/index.json`;
-  const res = await fetch(url);
-  if (!res.ok) return [];
-  const data = (await res.json()) as { entries?: Record<string, { id: string; type?: string; importPath?: string; title?: string; name?: string; tags?: string[] }> };
-  const entries = data.entries ?? {};
-  const list = Object.values(entries).filter(
-    (e): e is StoryIndexEntry => e.type === "story" && shouldIncludeStoryForVisualRegression(e as StoryIndexEntry),
-  );
-  return list;
+type StorybookIndexEntries = Record<string, StoryIndexEntry>;
+
+let cachedStorybookEntries: StorybookIndexEntries | null = null;
+let cachedStorybookEntriesAt = 0;
+const STORYBOOK_INDEX_CACHE_MS = 5000;
+
+const normalizeComponentDir = (dir: string): string => dir.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+
+/** Index HTTP Storybook (cache court). Ne pas utiliser buildIndex : incompatible avec tsx sur Windows. */
+const fetchStorybookIndexEntries = async (): Promise<StorybookIndexEntries> => {
+  const now = Date.now();
+  if (cachedStorybookEntries && now - cachedStorybookEntriesAt < STORYBOOK_INDEX_CACHE_MS) {
+    return cachedStorybookEntries;
+  }
+  const res = await fetch(`${STORYBOOK_URL}/index.json`);
+  if (!res.ok) return cachedStorybookEntries ?? {};
+  const data = (await res.json()) as { entries?: StorybookIndexEntries };
+  cachedStorybookEntries = data.entries ?? {};
+  cachedStorybookEntriesAt = now;
+  return cachedStorybookEntries;
 };
 
-// 1. Trouver tous les dossiers contenant un fichier .stories.tsx
-// buildIndex résout les stories (glob dans main.ts) par rapport à process.cwd() dans certaines versions.
-// Si buildIndex renvoie 0 stories, fallback sur l'index HTTP de Storybook (déjà démarré).
-const getAllStories = async (): Promise<StoryIndexEntry[]> => {
-  const previousCwd = process.cwd();
-  try {
-    process.chdir(PROJECT_ROOT);
-    let filtered: StoryIndexEntry[] = [];
-    try {
-      const index = await buildIndex({
-        configDir: STORYBOOK_CONFIG_DIR,
-      });
-      const entriesCount = Object.keys(index.entries).length;
-      filtered = Object.values(index.entries).filter((entry): entry is StoryIndexEntry => {
-        return entry.type === "story" && shouldIncludeStoryForVisualRegression(entry);
-      });
-      if (filtered.length === 0) {
-        console.warn("⚠️  buildIndex a renvoyé 0 stories, tentative via index.json de Storybook…");
-        filtered = await fetchStoriesFromStorybookIndex();
-        if (filtered.length > 0) {
-          console.log(`✅ ${filtered.length} stories récupérées depuis ${STORYBOOK_URL}/index.json`);
-        }
-      }
-    } catch (buildIndexErr) {
-      const msg = buildIndexErr instanceof Error ? buildIndexErr.message : String(buildIndexErr);
-      const isPresetError =
-        msg.includes("CriticalPresetLoadError") ||
-        msg.includes("ERR_MODULE_NOT_FOUND") ||
-        msg.includes("preset");
-      if (isPresetError) {
-        console.warn("⚠️  buildIndex indisponible (preset/projet), utilisation de l'index HTTP Storybook…");
-        filtered = await fetchStoriesFromStorybookIndex();
-        if (filtered.length > 0) {
-          console.log(`✅ ${filtered.length} stories récupérées depuis ${STORYBOOK_URL}/index.json`);
-        }
-      } else {
-        throw buildIndexErr;
-      }
-    }
-    return filtered;
-  } finally {
-    process.chdir(previousCwd);
-  }
+const fetchStoriesFromStorybookIndex = async (): Promise<StoryIndexEntry[]> => {
+  const entries = await fetchStorybookIndexEntries();
+  return Object.values(entries).filter(
+    entry => shouldIncludeStoryForVisualRegression(entry) && Boolean(entry.importPath),
+  );
 };
+
+const findComponentDirInScreenshots = (storyId: string, deviceName: string): string | null => {
+  const needle = `${deviceName}-${storyId}${SCREENSHOT_NAME}`;
+  const dirsToScan = [PUBLIC_SCREENSHOTS_DIR, path.join(PUBLIC_SCREENSHOTS_DIR, "deleted")];
+
+  const scanDir = (currentDir: string): string | null => {
+    if (!existsSync(currentDir)) return null;
+    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        const found = scanDir(fullPath);
+        if (found) return found;
+        continue;
+      }
+      if (!entry.name.endsWith(SCREENSHOT_EXTENSION)) continue;
+      if (!entry.name.includes(needle)) continue;
+      const relative = path.relative(PUBLIC_SCREENSHOTS_DIR, path.dirname(fullPath)).replace(/\\/g, "/");
+      return relative === "" ? null : relative;
+    }
+    return null;
+  };
+
+  for (const root of dirsToScan) {
+    const found = scanDir(root);
+    if (found) return found;
+  }
+  return null;
+};
+
+const resolveComponentDir = async (
+  storyId: string,
+  deviceName: string,
+  componentDirHint?: string,
+): Promise<string | null> => {
+  if (componentDirHint) return normalizeComponentDir(componentDirHint);
+
+  const entries = await fetchStorybookIndexEntries();
+  const story = entries[storyId];
+  if (story?.importPath) return normalizeComponentDir(path.dirname(story.importPath));
+
+  return findComponentDirInScreenshots(storyId, deviceName);
+};
+
+const getAllStories = async (): Promise<StoryIndexEntry[]> => fetchStoriesFromStorybookIndex();
 
 const captureScreenshotWithPlaywright = async ({
   browser,
@@ -300,15 +328,22 @@ const captureScreenshotWithPlaywright = async ({
   }, MAX_TEST_TIME);
 
   try {
-    await page.goto(`${STORY_BASE_URI}${storyId}`, { waitUntil: "networkidle" });
+    await page.goto(getStoryIframeUrl(storyId), { waitUntil: "load", timeout: MAX_TEST_TIME });
+    await page.waitForSelector("#storybook-root", { timeout: MAX_TEST_TIME });
+    await page.waitForTimeout(300);
 
-    // Créer dossier si besoin
+    const storyNotFound = await page.getByText(/Couldn't find story/i).count();
+    if (storyNotFound > 0) {
+      addLogs({
+        log: `📸 Storybook n'a pas rendu la story ${storyId} (${deviceName}) — index Storybook vide ou story introuvable`,
+        logs,
+      });
+      return;
+    }
+
     mkdirSync(path.dirname(tempScreenshotPath), { recursive: true });
 
-    // Screenshot uniquement du composant
-    await page.screenshot({
-      path: tempScreenshotPath,
-    });
+    await page.locator("#storybook-root").screenshot({ path: tempScreenshotPath });
   } catch {
     addLogs({ log: `📸 Failed to capture screenshot for ${storyId} (${deviceName})`, logs });
   } finally {
@@ -392,7 +427,7 @@ const compareScreenshots = ({
  * (DeletedItemRow, TreePanel) et compareSingleStory.
  */
 export const compareSelectedStories = async (
-  storiesToCompare: { storyId: string; deviceName: string }[],
+  storiesToCompare: StoryDevicePair[],
 ): Promise<{ success: boolean; error?: string }> => {
   const logs: LogsType = {
     errors: [],
@@ -404,22 +439,19 @@ export const compareSelectedStories = async (
   const browser = await launchBrowser();
 
   try {
-    const stories = await getAllStories();
-
     type FileToRegenerate = { componentDir: string };
     const filesToRegenerate = new Map<string, Map<string, FileToRegenerate>>();
 
-    for (const { storyId, deviceName: d } of storiesToCompare) {
+    for (const { storyId, deviceName: d, componentDir: componentDirHint } of storiesToCompare) {
       if (!DEVICES[d]) {
         addLogs({ log: `⚠️  Device ${d} not found, skipping ${storyId}`, logs });
         continue;
       }
-      const story = stories.find(s => s.id === storyId);
-      if (!story) {
-        addLogs({ log: `⚠️  Story ${storyId} not found, skipping`, logs });
+      const componentDir = await resolveComponentDir(storyId, d, componentDirHint);
+      if (!componentDir) {
+        addLogs({ log: `⚠️  Story ${storyId} introuvable (index Storybook + disque), skipping`, logs });
         continue;
       }
-      const componentDir = path.dirname(story.importPath);
       if (!filesToRegenerate.has(d)) {
         filesToRegenerate.set(d, new Map());
       }
@@ -498,6 +530,7 @@ export const compareSelectedStories = async (
 
     if (totalFilesCount === 0) {
       console.log(`\n🚫 Aucun fichier à régénérer pour la sélection`);
+      return { success: false, error: "Aucune story résolue pour la régénération" };
     }
 
     return { success: true };
@@ -515,7 +548,8 @@ export const compareSelectedStories = async (
 export const compareSingleStory = async (
   storyId: string,
   deviceName: string,
-): Promise<{ success: boolean; error?: string }> => compareSelectedStories([{ storyId, deviceName }]);
+  componentDir?: string,
+): Promise<{ success: boolean; error?: string }> => compareSelectedStories([{ storyId, deviceName, componentDir }]);
 
 /**
  * Extrait le device et le storyId depuis un nom de fichier dans deleted/
@@ -562,7 +596,18 @@ const extractDeviceAndStoryIdFromDeletedFile = (
  * Cette fonction régénère toutes les stories sans condition, contrairement à compareByType
  * qui ne régénère que celles qui sont dans le dossier deleted/
  */
-export const compareAllStories = async (deviceName?: string): Promise<{ success: boolean; error?: string }> => {
+export type CompareAllStoriesOptions = {
+  /** Appelé juste après le vidage de public/Screenshots/ (pour rafraîchir l'index serveur). */
+  onDirectoryWiped?: () => void;
+};
+
+export const compareAllStories = async (
+  deviceName?: string,
+  options?: CompareAllStoriesOptions,
+): Promise<{ success: boolean; error?: string }> => {
+  deleteAllVisualRegressionsFiles();
+  options?.onDirectoryWiped?.();
+
   const logs: LogsType = {
     errors: [],
     vrs: [],
@@ -923,6 +968,15 @@ const compareVisualRegressions = async () => {
   };
   const storiesWithDiff: string[] = [];
 
+  const storybookReady = await waitForStorybookStories(1, 30);
+  if (!storybookReady) {
+    console.error(
+      `\n❌ Storybook (${STORYBOOK_URL}) n'a aucune story indexée.\n` +
+        "   Relancez Storybook (yarn storybook ou yarn vr) et attendez qu'il soit prêt.\n",
+    );
+    process.exit(1);
+  }
+
   let browser = await launchBrowser();
 
   try {
@@ -1053,7 +1107,9 @@ const compareVisualRegressions = async () => {
           byMessage.set(msg, (byMessage.get(msg) ?? 0) + 1);
         }
         const sorted = [...byMessage.entries()].sort((a, b) => b[1] - a[1]);
-        sorted.slice(0, 8).forEach(([msg, count]) => console.error(`  ×${count} ${msg}${msg.length >= 100 ? "…" : ""}`));
+        sorted
+          .slice(0, 8)
+          .forEach(([msg, count]) => console.error(`  ×${count} ${msg}${msg.length >= 100 ? "…" : ""}`));
       }
     }
 

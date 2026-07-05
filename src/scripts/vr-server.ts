@@ -14,14 +14,20 @@ import {
 import type { IncomingMessage, ServerResponse } from "http";
 import { createServer } from "http";
 import path from "path";
+import { pathToFileURL } from "url";
 
 import { PNG } from "pngjs";
 
-import type { CacheData, DeletedItem, Node, ParsedPath, StoryScreenshotsPath } from "../types/types";
+import type {
+  DeletedItem,
+  Node,
+  ParsedPath,
+  RegressionIndex,
+  StoryDevicePair,
+  StoryScreenshotsPath,
+} from "@app-types/types";
 import {
   DIFF_SCREENSHOT_NAME,
-  EXPO_PORT,
-  LOCAL_URL,
   NEW_SCREENSHOT_NAME,
   SCREENSHOT_EXTENSION,
   SCREENSHOTS_DIR,
@@ -29,7 +35,7 @@ import {
   TREE_BASE_FOLDER,
   VR_SERVER_PORT,
   VR_SERVER_URL,
-} from "../constants/constants";
+} from "@constants/constants";
 import {
   getDevicesDisplayConfig,
   getDevicesNames,
@@ -39,7 +45,7 @@ import {
   getScriptDir,
   loadVrDevicesConfig,
   spawnShellOption,
-} from "../utils/node";
+} from "@utils/node";
 
 const PROJECT_ROOT = getProjectRoot();
 const {
@@ -52,8 +58,10 @@ const SCRIPT_DIR = getScriptDir(import.meta);
 const join = path.join;
 const dirname = path.dirname;
 
+const importCompareModule = () => import(pathToFileURL(join(SCRIPT_DIR, "compare-visual-regressions.ts")).href);
+
 // ============================================
-// SYSTÈME DE CACHE DES RÉGRESSIONS
+// INDEX DES RÉGRESSIONS (en mémoire)
 // ============================================
 
 /**
@@ -104,38 +112,6 @@ const scanAllScreenshots = (): { diffPaths: string[]; newPaths: string[]; delete
   }
 
   return { diffPaths, newPaths, deletedPaths };
-};
-
-const createCache = (): CacheData => {
-  return {
-    diffPaths: [],
-    newPaths: [],
-    deletedPaths: [],
-    lastUpdate: 0,
-  };
-};
-
-const refreshCache = (_cache: CacheData, notify = true): CacheData => {
-  // Scan optimisé : parcourt chaque répertoire une seule fois
-  const { diffPaths, newPaths, deletedPaths } = scanAllScreenshots();
-
-  const newCache = {
-    diffPaths,
-    newPaths,
-    deletedPaths,
-    lastUpdate: Date.now(),
-  };
-
-  console.log(
-    `♻️  Cache rafraîchi: ${newCache.diffPaths.length} diffs, ${newCache.newPaths.length} nouveaux, ${newCache.deletedPaths.length} supprimés`,
-  );
-
-  // Notifier tous les clients SSE connectés
-  if (notify && sseClients.size > 0) {
-    notifyAllClients();
-  }
-
-  return newCache;
 };
 
 // ============================================
@@ -192,6 +168,67 @@ const parsePath = (filePath: string): ParsedPath | null => {
   const label = deviceName ? `${deviceName} - ${storyId}` : storyId;
 
   return { folders, fileName, label, deviceName: deviceName || undefined };
+};
+
+const splitCleanPath = (cleanPath: string): { dirPrefix: string; fileName: string } => {
+  const normalized = cleanPath.replace(/\\/g, "/");
+  const lastSlash = normalized.lastIndexOf("/");
+  if (lastSlash === -1) {
+    return { dirPrefix: "", fileName: normalized };
+  }
+  return {
+    dirPrefix: normalized.slice(0, lastSlash + 1),
+    fileName: normalized.slice(lastSlash + 1),
+  };
+};
+
+/** Libellé compact pour les logs delete/restore : `{device}-{storyId} | {componentDir}`. */
+const formatScreenshotLogLabel = (cleanPath: string): string => {
+  const normalized = cleanPath.replace(/\\/g, "/").replace(/^Screenshots\//, "");
+  const lastSlash = normalized.lastIndexOf("/");
+  const componentDir = lastSlash > 0 ? normalized.slice(0, lastSlash) : "";
+  const fileName = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+  const { deviceName, storyId } = extractDeviceName(fileName);
+  const screenshotKey = deviceName ? `${deviceName}-${storyId}` : storyId;
+  return componentDir ? `${screenshotKey} | ${componentDir}` : screenshotKey;
+};
+
+/** Chemin préféré pour le libellé de log (original > diff > temp > new). */
+const pickScreenshotPathForLog = (paths: (string | undefined)[]): string | null => {
+  const score = (p: string): number => {
+    if (p.includes(DIFF_SCREENSHOT_NAME)) return 1;
+    if (p.includes(TEMP_SCREENSHOT_NAME)) return 2;
+    if (p.includes(NEW_SCREENSHOT_NAME)) return 3;
+    return 0;
+  };
+  const candidates = paths.filter((p): p is string => Boolean(p)).map(p => p.replace(/^Screenshots\//, ""));
+  if (!candidates.length) return null;
+  return [...candidates].sort((a, b) => score(a) - score(b))[0];
+};
+
+/** Chemins relatifs (sans Screenshots/) des 3 fichiers d'une régression diff. */
+const getDiffScreenshotVariants = (cleanPath: string): { diff: string; temp: string; original: string } => {
+  const { dirPrefix, fileName } = splitCleanPath(cleanPath);
+
+  const removePrefix = (name: string, prefix: string): string =>
+    name.startsWith(prefix) ? name.slice(prefix.length) : name;
+
+  const replacePrefix = (name: string, oldPrefix: string, newPrefix: string): string =>
+    name.startsWith(oldPrefix) ? newPrefix + name.slice(oldPrefix.length) : name;
+
+  const diffFileName = fileName.startsWith(DIFF_SCREENSHOT_NAME)
+    ? fileName
+    : fileName.startsWith(TEMP_SCREENSHOT_NAME)
+      ? replacePrefix(fileName, TEMP_SCREENSHOT_NAME, DIFF_SCREENSHOT_NAME)
+      : DIFF_SCREENSHOT_NAME + fileName;
+
+  const baseFileName = removePrefix(removePrefix(diffFileName, DIFF_SCREENSHOT_NAME), TEMP_SCREENSHOT_NAME);
+
+  return {
+    diff: `${dirPrefix}${diffFileName}`,
+    temp: `${dirPrefix}${TEMP_SCREENSHOT_NAME}${baseFileName}`,
+    original: `${dirPrefix}${baseFileName}`,
+  };
 };
 
 /**
@@ -260,7 +297,7 @@ const countRedPixelsInDiffImage = (diffImagePath: string): number | null => {
 /**
  * Construit l'URL complète d'une image
  */
-const getImageUrl = (path: string | undefined): string | undefined => {
+const getImageUrl = (path: string | undefined, version?: number): string | undefined => {
   if (!path) return undefined;
   if (path.startsWith("http")) return path;
 
@@ -274,13 +311,14 @@ const getImageUrl = (path: string | undefined): string | undefined => {
     cleanPath = cleanPath
       .replace(/^Screenshots\/deleted\/public\/Screenshots\/deleted\//, "Screenshots/deleted/")
       .replace(/^Screenshots\/deleted\/public\//, "Screenshots/deleted/");
-    return `${VR_SERVER_URL}/${cleanPath}`;
+    const base = `${VR_SERVER_URL}/${cleanPath}`;
+    return version !== undefined ? `${base}?v=${version}` : base;
   }
 
   // Pour les chemins de deleted qui commencent directement par "src/", on reconstruit
   if (cleanPath.startsWith("src/")) {
-    // C'est un chemin depuis deleted/, on reconstruit
-    return `${VR_SERVER_URL}/Screenshots/deleted/${cleanPath}`;
+    const base = `${VR_SERVER_URL}/Screenshots/deleted/${cleanPath}`;
+    return version !== undefined ? `${base}?v=${version}` : base;
   }
 
   // S'assurer que le chemin commence par "Screenshots/" pour correspondre au serveur VR
@@ -288,8 +326,8 @@ const getImageUrl = (path: string | undefined): string | undefined => {
     cleanPath = `Screenshots/${cleanPath}`;
   }
 
-  // Construire l'URL via le serveur VR normalement
-  return `${VR_SERVER_URL}/${cleanPath}`;
+  const base = `${VR_SERVER_URL}/${cleanPath}`;
+  return version !== undefined ? `${base}?v=${version}` : base;
 };
 
 /**
@@ -316,7 +354,7 @@ const getDeviceName = (node: Node): string => {
   return "";
 };
 
-const buildTree = (files: string[], baseDir: string): Node => {
+const buildTree = (files: string[], baseDir: string, version: number): Node => {
   const root: Node = {
     type: "folder",
     name: baseDir,
@@ -361,15 +399,11 @@ const buildTree = (files: string[], baseDir: string): Node => {
       // Calculer les chemins d'images
       const imagePaths = calculateImagePaths(filePath);
       const imageUrls = {
-        original: getImageUrl(imagePaths.original),
-        temp: getImageUrl(imagePaths.temp),
-        diff: getImageUrl(imagePaths.diff),
-        new: getImageUrl(imagePaths.new),
+        original: getImageUrl(imagePaths.original, version),
+        temp: getImageUrl(imagePaths.temp, version),
+        diff: getImageUrl(imagePaths.diff, version),
+        new: getImageUrl(imagePaths.new, version),
       };
-
-      // Calculer countPixelDiff pour les diff en comptant les pixels rouges dans l'image diff
-      const countPixelDiff =
-        isDiff && imagePaths.diff ? countRedPixelsInDiffImage(join(PUBLIC_DIR, imagePaths.diff)) : null;
 
       current.children![label] = {
         type: "file",
@@ -381,7 +415,6 @@ const buildTree = (files: string[], baseDir: string): Node => {
         displayName,
         imagePaths,
         imageUrls,
-        countPixelDiff,
       };
     }
   }
@@ -499,20 +532,90 @@ const parseDeleted = (filePath: string): DeletedItem | null => {
   // Extraire le storyId
   const storyId = parsed.label.includes(" - ") ? parsed.label.split(" - ")[1] : parsed.label;
 
-  // Calculer countPixelDiff pour les diff en comptant les pixels rouges dans l'image diff
-  const countPixelDiff = isDiff
-    ? countRedPixelsInDiffImage(join(PUBLIC_DIR, SCREENSHOTS_DIR, "deleted", cleanPath))
-    : null;
-
   return {
     ...parsed,
     isDiff,
-    fullPath: cleanPath, // Juste "src/atoms/Alert/__diff__desktop-fhd-..." (pour la restauration)
-    imagePath, // Chemin de l'image à afficher (__temp__ pour diff, __new__ pour new)
-    imageUrl, // URL complète de l'image à afficher
+    fullPath: cleanPath,
+    imagePath,
+    imageUrl,
     storyId,
-    countPixelDiff,
   };
+};
+
+const buildDeletedItems = (deletedPaths: string[]): DeletedItem[] =>
+  deletedPaths
+    .filter(p => p.includes(DIFF_SCREENSHOT_NAME) || p.includes(NEW_SCREENSHOT_NAME))
+    .map(parseDeleted)
+    .filter(Boolean) as DeletedItem[];
+
+const buildIndexFromScan = (): RegressionIndex => {
+  const { diffPaths, newPaths, deletedPaths } = scanAllScreenshots();
+  const lastUpdate = Date.now();
+  const allPaths = [...diffPaths, ...newPaths];
+  const rawTree = allPaths.length ? buildTree(allPaths, TREE_BASE_FOLDER, lastUpdate) : null;
+
+  return {
+    diffPaths,
+    newPaths,
+    deletedPaths,
+    tree: rawTree ? sortTree(rawTree) : null,
+    deletedItems: buildDeletedItems(deletedPaths),
+    lastUpdate,
+  };
+};
+
+let index: RegressionIndex = {
+  diffPaths: [],
+  newPaths: [],
+  deletedPaths: [],
+  tree: null,
+  deletedItems: [],
+  lastUpdate: 0,
+};
+const metricsCache = new Map<string, number | null>();
+
+type RefreshIndexOptions = {
+  notify?: boolean;
+  /** Si false, ignore un scan vide quand l'index contenait déjà des régressions (ex. compare qui vide public/Screenshots/). */
+  allowEmpty?: boolean;
+};
+
+const refreshIndex = (options: RefreshIndexOptions | boolean = {}): void => {
+  const { notify = true, allowEmpty = true } = typeof options === "boolean" ? { notify: options } : options;
+  const previousCount = index.diffPaths.length + index.newPaths.length;
+  const next = buildIndexFromScan();
+  const nextCount = next.diffPaths.length + next.newPaths.length;
+
+  if (!allowEmpty && nextCount === 0 && previousCount > 0) {
+    console.log("♻️  Scan vide ignoré (index précédent conservé)");
+    return;
+  }
+
+  index = next;
+  metricsCache.clear();
+
+  if (notify && sseClients.size > 0) {
+    notifyAllClients();
+  }
+};
+
+const resolveMetricsAbsPath = (imagePath: string): string | null => {
+  const normalized = imagePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalized.startsWith("Screenshots/")) {
+    return null;
+  }
+  const absPath = join(PUBLIC_DIR, ...normalized.split("/"));
+  return existsSync(absPath) ? absPath : null;
+};
+
+const getPixelDiffMetrics = (imagePath: string): number | null => {
+  if (metricsCache.has(imagePath)) {
+    return metricsCache.get(imagePath) ?? null;
+  }
+  const absPath = resolveMetricsAbsPath(imagePath);
+  const count = absPath ? countRedPixelsInDiffImage(absPath) : null;
+  metricsCache.set(imagePath, count);
+  return count;
 };
 
 // ============================================
@@ -546,7 +649,7 @@ type NodeSSEClient = { id: string; res: ServerResponse };
 const sseClients = new Set<NodeSSEClient>();
 
 const notifyAllClients = () => {
-  const message = JSON.stringify({ type: "cache-updated", timestamp: Date.now() });
+  const message = JSON.stringify({ type: "index-updated", timestamp: Date.now() });
   const toRemove: NodeSSEClient[] = [];
 
   for (const client of sseClients) {
@@ -562,64 +665,70 @@ const notifyAllClients = () => {
 };
 
 // ============================================
-// SURVEILLANCE DU DOSSIER DELETED
+// SURVEILLANCE DU DOSSIER SCREENSHOTS
 // ============================================
 
 let watchDebounceTimer: NodeJS.Timeout | null = null;
-let ignoreWatchUntil: number = 0; // Timestamp jusqu'auquel ignorer les événements du watcher
+let watchRestartTimer: NodeJS.Timeout | null = null;
+let activeWatcher: ReturnType<typeof watch> | null = null;
 
-/**
- * Ignore les événements du watcher pendant un court moment pour éviter les rafraîchissements en double
- */
-const ignoreWatchTemporarily = (durationMs = 2000) => {
-  ignoreWatchUntil = Date.now() + durationMs;
-  // Annuler aussi le debounce en cours
-  if (watchDebounceTimer) {
-    clearTimeout(watchDebounceTimer);
-    watchDebounceTimer = null;
-  }
+const isRegressionScreenshot = (relativePath: string): boolean =>
+  relativePath.endsWith(SCREENSHOT_EXTENSION) &&
+  (relativePath.includes(DIFF_SCREENSHOT_NAME) || relativePath.includes(NEW_SCREENSHOT_NAME));
+
+const scheduleWatcherRestart = () => {
+  if (watchRestartTimer) clearTimeout(watchRestartTimer);
+  watchRestartTimer = setTimeout(() => {
+    watchRestartTimer = null;
+    watchScreenshotsDirectory();
+  }, 1500);
 };
 
-const watchDeletedDirectory = () => {
-  // Créer le dossier deleted s'il n'existe pas
+const watchScreenshotsDirectory = () => {
+  if (!existsSync(PUBLIC_SCREENSHOTS_DIR)) {
+    mkdirSync(PUBLIC_SCREENSHOTS_DIR, { recursive: true });
+  }
   if (!existsSync(DELETED_DIR)) {
     mkdirSync(DELETED_DIR, { recursive: true });
   }
 
-  // Fonction pour rafraîchir le cache avec debounce
-  const debouncedRefresh = () => {
-    // Ignorer si on est dans une période d'ignorance
-    if (Date.now() < ignoreWatchUntil) {
-      return;
+  if (activeWatcher) {
+    try {
+      activeWatcher.close();
+    } catch {
+      // ignore
     }
+    activeWatcher = null;
+  }
 
+  const debouncedRefresh = () => {
     if (watchDebounceTimer) {
       clearTimeout(watchDebounceTimer);
     }
     watchDebounceTimer = setTimeout(() => {
-      cache = refreshCache(cache, true);
+      refreshIndex({ notify: true, allowEmpty: false });
       watchDebounceTimer = null;
-    }, 1000); // Debounce de 1000ms pour éviter trop de rafraîchissements
+    }, 1000);
   };
 
-  // Surveiller récursivement le dossier deleted
   try {
-    const watcher = watch(DELETED_DIR, { recursive: true }, (_, filename) => {
+    const watcher = watch(PUBLIC_SCREENSHOTS_DIR, { recursive: true }, (_, filename) => {
       if (!filename) return;
 
-      // Le filename peut être relatif ou absolu selon l'OS
-      const fullPath = filename.startsWith(DELETED_DIR) ? filename : join(DELETED_DIR, filename);
-      const relativePath = fullPath.replace(PUBLIC_DIR, "");
+      if (!existsSync(PUBLIC_SCREENSHOTS_DIR)) {
+        scheduleWatcherRestart();
+        return;
+      }
 
-      // Vérifier si c'est un fichier __diff__ ou __new__ dans le dossier deleted
-      if (
-        (relativePath.includes(DIFF_SCREENSHOT_NAME) || relativePath.includes(NEW_SCREENSHOT_NAME)) &&
-        relativePath.includes("/deleted/") &&
-        relativePath.endsWith(SCREENSHOT_EXTENSION)
-      ) {
+      const fullPath = filename.startsWith(PUBLIC_SCREENSHOTS_DIR) ? filename : join(PUBLIC_SCREENSHOTS_DIR, filename);
+      const relativePath = fullPath.replace(PUBLIC_DIR, "").replace(/\\/g, "/");
+
+      if (isRegressionScreenshot(relativePath)) {
         debouncedRefresh();
       }
     });
+
+    activeWatcher = watcher;
 
     watcher.on("error", error => {
       const isEperm = (e: unknown) => (e as NodeJS.ErrnoException)?.code === "EPERM" || String(e).includes("EPERM");
@@ -628,18 +737,20 @@ const watchDeletedDirectory = () => {
       } catch {
         // ignore
       }
-      // Aucun log pour EPERM : zéro bruit en console (Windows/antivirus)
+      activeWatcher = null;
       if (!isEperm(error)) {
-        console.warn("⚠️  Erreur lors de la surveillance du dossier deleted:", error);
+        console.warn("⚠️  Erreur lors de la surveillance du dossier Screenshots:", error);
       }
+      scheduleWatcherRestart();
     });
 
     return watcher;
   } catch (error) {
     const isEperm = (e: unknown) => (e as NodeJS.ErrnoException)?.code === "EPERM" || String(e).includes("EPERM");
     if (!isEperm(error)) {
-      console.warn(`⚠️  Impossible de surveiller ${DELETED_DIR}:`, error);
+      console.warn(`⚠️  Impossible de surveiller ${PUBLIC_SCREENSHOTS_DIR}:`, error);
     }
+    scheduleWatcherRestart();
     return null;
   }
 };
@@ -698,19 +809,13 @@ const restoreAllDeletedFiles = () => {
 };
 
 // ============================================
-// INITIALISATION DU CACHE
+// INITIALISATION DE L'INDEX
 // ============================================
 
-// Restaurer tous les fichiers supprimés avant de scanner le cache
 restoreAllDeletedFiles();
-
-let cache = createCache();
-console.log("🔄 Rafraîchissement du cache des régressions");
-// Forcer le rafraîchissement du cache après la restauration (sans notifier car pas de clients connectés)
-cache = refreshCache(cache, false);
-
-// Démarrer la surveillance du dossier deleted
-watchDeletedDirectory();
+console.log("🔄 Initialisation de l'index des régressions");
+refreshIndex(false);
+watchScreenshotsDirectory();
 
 // ============================================
 // SERVEUR HTTP (Node)
@@ -729,28 +834,9 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
   // ROUTES DE LECTURE
   // ============================================
 
-  if (req.method === "GET" && url.pathname === "/regressions") {
-    try {
-      sendJson(res, {
-        diff: cache.diffPaths,
-        new: cache.newPaths,
-        deleted: cache.deletedPaths,
-        lastUpdate: cache.lastUpdate,
-      });
-    } catch (err) {
-      console.error("❌ Error fetching regressions:", err);
-      sendJson(res, { error: String(err) }, 500);
-    }
-    return;
-  }
-
-  // 📖 GET /regressions/tree - Récupérer l'arborescence des régressions
   if (req.method === "GET" && url.pathname === "/regressions/tree") {
     try {
-      const allPaths = [...cache.diffPaths, ...cache.newPaths];
-      const rawTree = allPaths.length ? buildTree(allPaths, TREE_BASE_FOLDER) : null;
-      const tree = rawTree ? sortTree(rawTree) : null;
-      sendJson(res, { tree, lastUpdate: cache.lastUpdate });
+      sendJson(res, { tree: index.tree, lastUpdate: index.lastUpdate });
     } catch (err) {
       console.error("❌ Error building tree:", err);
       sendJson(res, { error: String(err) }, 500);
@@ -773,13 +859,41 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
   // 📖 GET /regressions/deleted - Récupérer les suppressions
   if (req.method === "GET" && url.pathname === "/regressions/deleted") {
     try {
-      const deletedList = cache.deletedPaths
-        .filter(p => p.includes(DIFF_SCREENSHOT_NAME) || p.includes(NEW_SCREENSHOT_NAME))
-        .map(parseDeleted)
-        .filter(Boolean) as DeletedItem[];
-      sendJson(res, { deleted: deletedList, lastUpdate: cache.lastUpdate });
+      sendJson(res, { deleted: index.deletedItems, lastUpdate: index.lastUpdate });
     } catch (err) {
       console.error("❌ Error fetching deleted:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/regressions/rebuild") {
+    try {
+      refreshIndex({ notify: true, allowEmpty: true });
+      sendJson(res, {
+        success: true,
+        lastUpdate: index.lastUpdate,
+        diffCount: index.diffPaths.length,
+        newCount: index.newPaths.length,
+      });
+    } catch (err) {
+      console.error("❌ Rebuild error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/regressions/metrics") {
+    try {
+      const imagePath = url.searchParams.get("path");
+      if (!imagePath) {
+        sendJson(res, { error: "Missing path query parameter" }, 400);
+        return;
+      }
+      const countPixelDiff = getPixelDiffMetrics(imagePath);
+      sendJson(res, { countPixelDiff });
+    } catch (err) {
+      console.error("❌ Error fetching metrics:", err);
       sendJson(res, { error: String(err) }, 500);
     }
     return;
@@ -796,7 +910,7 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
     });
     const client: NodeSSEClient = { id: clientId, res };
     sseClients.add(client);
-    res.write(`data: ${JSON.stringify({ type: "connected", clientId, lastUpdate: cache.lastUpdate })}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: "connected", clientId, lastUpdate: index.lastUpdate })}\n\n`);
 
     const pingIntervalRef = setInterval(() => {
       try {
@@ -899,7 +1013,7 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
       }
 
       // Rafraîchir le cache et notifier les clients
-      cache = refreshCache(cache, true);
+      refreshIndex(true);
 
       console.log(`✅ Validated (${isDiffCase ? "diff" : "new"}): ${target}`);
       sendJson(res, { success: true });
@@ -913,6 +1027,7 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
   // 🔍 POST /compare - Lancer la comparaison
   if (req.method === "POST" && url.pathname === "/compare") {
     try {
+      refreshIndex({ notify: true, allowEmpty: true });
       const compareScript = path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
       console.log("🔍 Lancement comparaison VR");
       const { command, args } = getNodeTsxArgs(compareScript);
@@ -924,7 +1039,7 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
       // Rafraîchir le cache après la comparaison et notifier les clients
       compareProcess.on("close", (code: number) => {
         console.log(`✅ Comparaison terminée (code: ${code})`);
-        cache = refreshCache(cache, true);
+        refreshIndex({ notify: true, allowEmpty: true });
       });
       sendJson(res, { success: true, message: "Comparaison lancée" });
     } catch (err) {
@@ -937,18 +1052,18 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
   // 🔍 POST /compare/single - Lancer la comparaison pour une story spécifique
   if (req.method === "POST" && url.pathname === "/compare/single") {
     try {
-      const body = JSON.parse(await readBody(req)) as { storyId: string; deviceName: string };
-      const { storyId, deviceName } = body || {};
+      const body = JSON.parse(await readBody(req)) as { storyId: string; deviceName: string; componentDir?: string };
+      const { storyId, deviceName, componentDir } = body || {};
       if (!storyId || !deviceName) {
         sendJson(res, { success: false, error: "Missing storyId or deviceName" }, 400);
         return;
       }
       // Importer et appeler la fonction de comparaison pour une story spécifique
-      const { compareSingleStory } = await import(path.join(SCRIPT_DIR, "compare-visual-regressions.ts"));
-      const result = await compareSingleStory(storyId, deviceName);
+      const { compareSingleStory } = await importCompareModule();
+      const result = await compareSingleStory(storyId, deviceName, componentDir);
       if (result.success) {
         // Rafraîchir le cache après la comparaison et notifier les clients
-        cache = refreshCache(cache, true);
+        refreshIndex(true);
         sendJson(res, { success: true, message: "Comparaison lancée" });
       } else {
         sendJson(res, { success: false, error: result.error || "Unknown error" }, 500);
@@ -970,11 +1085,11 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
         return;
       }
       // Importer et appeler la fonction de comparaison par type
-      const { compareByType } = await import(path.join(SCRIPT_DIR, "compare-visual-regressions.ts"));
+      const { compareByType } = await importCompareModule();
       const result = await compareByType(type, deviceName);
       if (result.success) {
         // Rafraîchir le cache après la comparaison et notifier les clients
-        cache = refreshCache(cache, true);
+        refreshIndex(true);
         sendJson(res, {
           success: true,
           message: `Comparaison lancée pour le type ${type}${deviceName ? ` sur ${deviceName}` : ""}`,
@@ -994,12 +1109,12 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
     try {
       const body = JSON.parse(await readBody(req)) as { deviceName?: string };
       const { deviceName } = body || {};
-      // Importer et appeler la fonction de comparaison pour toutes les stories
-      const { compareAllStories } = await import(path.join(SCRIPT_DIR, "compare-visual-regressions.ts"));
-      const result = await compareAllStories(deviceName);
+      const { compareAllStories } = await importCompareModule();
+      const result = await compareAllStories(deviceName, {
+        onDirectoryWiped: () => refreshIndex({ notify: true, allowEmpty: true }),
+      });
       if (result.success) {
-        // Rafraîchir le cache après la comparaison et notifier les clients
-        cache = refreshCache(cache, true);
+        refreshIndex({ notify: true, allowEmpty: true });
         sendJson(res, {
           success: true,
           message: `Régénération lancée pour toutes les stories${deviceName ? ` sur ${deviceName}` : " (tous les devices)"}`,
@@ -1017,7 +1132,7 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
   // 🔍 POST /compare/selected - Régénérer une sélection de stories (même flux que by-type / all-stories)
   if (req.method === "POST" && url.pathname === "/compare/selected") {
     try {
-      const body = JSON.parse(await readBody(req)) as { stories: { storyId: string; deviceName: string }[] };
+      const body = JSON.parse(await readBody(req)) as { stories: StoryDevicePair[] };
       const { stories } = body || {};
       if (!Array.isArray(stories) || stories.length === 0) {
         sendJson(
@@ -1028,10 +1143,10 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
         return;
       }
 
-      const { compareSelectedStories } = await import(path.join(SCRIPT_DIR, "compare-visual-regressions.ts"));
+      const { compareSelectedStories } = await importCompareModule();
       const result = await compareSelectedStories(stories);
       if (result.success) {
-        cache = refreshCache(cache, true);
+        refreshIndex(true);
         sendJson(res, {
           success: true,
           message: `Régénération lancée pour ${stories.length} comparaison${stories.length > 1 ? "s" : ""}`,
@@ -1057,6 +1172,8 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
         throw new Error("Missing paths");
       }
 
+      let movedAny = false;
+
       for (const p of files) {
         const absSource = join(PUBLIC_DIR, p!);
         if (!existsSync(absSource)) {
@@ -1071,11 +1188,17 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
         mkdirSync(dirname(absTarget), { recursive: true });
 
         renameSync(absSource, absTarget);
-        console.log(`🗃️  Moved to deleted/: ${cleanPath}`);
+        movedAny = true;
       }
 
-      ignoreWatchTemporarily();
-      cache = refreshCache(cache, true);
+      if (movedAny) {
+        const logPath = pickScreenshotPathForLog([original, diff, temp, newPath]);
+        if (logPath) {
+          console.log(`🗃️  Deleted ${formatScreenshotLogLabel(logPath)}`);
+        }
+      }
+
+      refreshIndex(true);
       sendJson(res, { success: true });
     } catch (err) {
       console.error("❌ Delete error:", err);
@@ -1103,20 +1226,8 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
         .replace(/^Screenshots\//, ""); // Retire "Screenshots/"
 
       if (isDiff) {
-        // Pour un diff, restaurer les 3 fichiers: diff, temp, original
-        // Le préfixe est maintenant au début, donc on le retire du début
-        const basePath = cleanPath
-          .replace(new RegExp(`^${DIFF_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), "")
-          .replace(new RegExp(`^${TEMP_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), "");
-
-        const filesToRestore = [
-          cleanPath, // Le fichier diff lui-même
-          cleanPath.replace(
-            new RegExp(`^${DIFF_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
-            TEMP_SCREENSHOT_NAME,
-          ), // temp
-          basePath, // original
-        ];
+        const { diff, temp, original } = getDiffScreenshotVariants(cleanPath);
+        const filesToRestore = [diff, temp, original];
 
         let restoredCount = 0;
         for (const file of filesToRestore) {
@@ -1128,9 +1239,12 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
             continue;
           }
 
+          if (existsSync(absRestore)) {
+            rmSync(absRestore, { force: true });
+          }
+
           mkdirSync(dirname(absRestore), { recursive: true });
           renameSync(absDeleted, absRestore);
-          console.log(`↩️  Restored: ${file}`);
           restoredCount++;
         }
 
@@ -1138,6 +1252,8 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
           sendJson(res, { success: false, error: "No files found in deleted/" }, 400);
           return;
         }
+
+        console.log(`↩️  Restored ${formatScreenshotLogLabel(cleanPath)}`);
       } else {
         const absDeleted = join(DELETED_DIR, cleanPath);
         const absRestore = join(PUBLIC_SCREENSHOTS_DIR, cleanPath);
@@ -1150,30 +1266,13 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
 
         mkdirSync(dirname(absRestore), { recursive: true });
         renameSync(absDeleted, absRestore);
-        console.log(`↩️  Restored: ${cleanPath}`);
+        console.log(`↩️  Restored ${formatScreenshotLogLabel(cleanPath)}`);
       }
 
-      ignoreWatchTemporarily();
-      cache = refreshCache(cache, true);
+      refreshIndex(true);
       sendJson(res, { success: true });
     } catch (err) {
       console.error("❌ Restore error:", err);
-      sendJson(res, { error: String(err) }, 500);
-    }
-    return;
-  }
-
-  if (req.method === "POST" && url.pathname === "/refresh") {
-    try {
-      cache = refreshCache(cache, true);
-      sendJson(res, {
-        success: true,
-        lastUpdate: cache.lastUpdate,
-        diffCount: cache.diffPaths.length,
-        newCount: cache.newPaths.length,
-      });
-    } catch (err) {
-      console.error("❌ Refresh error:", err);
       sendJson(res, { error: String(err) }, 500);
     }
     return;
@@ -1209,5 +1308,5 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
 
 createServer(handler).listen(VR_SERVER_PORT, () => {
   console.log(`🟢 VR server started on ${VR_SERVER_URL}`);
-  console.log(`📊 ${cache.diffPaths.length} diffs, ${cache.newPaths.length} nouveaux screenshots détectés`);
+  console.log(`📊 ${index.diffPaths.length} diffs, ${index.newPaths.length} nouveaux screenshots détectés`);
 });
