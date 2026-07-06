@@ -43,7 +43,7 @@ import {
   getProjectPaths,
   getProjectRoot,
   getScriptDir,
-  loadVrDevicesConfig,
+  resolveVrConfig,
   spawnShellOption,
 } from "@utils/node";
 
@@ -53,7 +53,7 @@ const {
   publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR,
   deletedDir: DELETED_DIR,
 } = getProjectPaths(PROJECT_ROOT);
-const DEVICES = getDevicesNames(loadVrDevicesConfig(PROJECT_ROOT));
+const DEVICES = getDevicesNames(resolveVrConfig(PROJECT_ROOT).devices);
 const SCRIPT_DIR = getScriptDir(import.meta);
 const join = path.join;
 const dirname = path.dirname;
@@ -844,7 +844,7 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
     return;
   }
 
-  // 📖 GET /regressions/config/devices - Config d'affichage des devices (pour l'UI, depuis vr-devices.config.cjs)
+  // 📖 GET /regressions/config/devices - Config d'affichage des devices (pour l'UI, depuis vr.config.cjs)
   if (req.method === "GET" && url.pathname === "/regressions/config/devices") {
     try {
       const devices = getDevicesDisplayConfig(PROJECT_ROOT);

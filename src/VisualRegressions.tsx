@@ -19,7 +19,7 @@ import { spacing } from "@themes/theme";
 import { createVisualRegressionActions } from "@utils";
 
 export type VisualRegressionsProps = {
-  /** Config d'affichage des devices (label, icon, color). Optionnel : si absent, récupérée depuis le serveur VR (GET /regressions/config/devices, depuis vr-devices.config.cjs). */
+  /** Config d'affichage des devices (label, icon, color). Optionnel : si absent, récupérée depuis le serveur VR (GET /regressions/config/devices, depuis vr.config.cjs). */
   devices?: DeviceDisplayConfig[];
 };
 
@@ -389,7 +389,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
       <ErrorState
         title="Erreur de configuration des devices"
         message={devicesError}
-        hint={`L'interface ne peut pas s'afficher tant que la configuration des devices n'est pas disponible. Vérifie que le serveur VR est démarré (script "vr:server") et que le fichier "vr-devices.config.cjs" existe à la racine de ton projet.`}
+        hint={`L'interface ne peut pas s'afficher tant que la configuration des devices n'est pas disponible. Vérifie que le serveur VR est démarré (script "vr:server") et que le fichier "vr.config.cjs" existe à la racine de ton projet.`}
       />
     );
   }

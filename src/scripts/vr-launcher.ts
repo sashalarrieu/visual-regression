@@ -14,7 +14,7 @@ import {
   VR_SERVER_URL,
 } from "@constants/constants";
 import {
-  assertVrDevicesConfig,
+  assertVrConfig,
   getNodeTsxArgs,
   getProjectRoot,
   getScriptDir,
@@ -103,7 +103,7 @@ const killPort = (port: number) => {
 };
 
 const main = async () => {
-  assertVrDevicesConfig(PROJECT_ROOT);
+  assertVrConfig(PROJECT_ROOT);
 
   log("blue", "🚀", "Démarrage de l'environnement Visual Regressions");
 

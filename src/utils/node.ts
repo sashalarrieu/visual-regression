@@ -2,16 +2,14 @@
  * Utilitaires Node/Bun uniquement (scripts VR).
  * Ne pas importer depuis l'app React/Expo (web) — utilise import.meta et createRequire.
  */
-import { existsSync } from "fs";
-import { createRequire } from "module";
 import path from "path";
 import { fileURLToPath } from "url";
 
 import type { DeviceConfig, DeviceDisplayConfig, VRDeviceConfigItem } from "@app-types/types";
 import { SCREENSHOTS_DIR, STORYBOOK_URL } from "@constants/constants";
+import { resolveVrConfig } from "@utils/vr-config";
 
-const _require = createRequire(import.meta.url);
-const VR_DEVICES_CONFIG_FILENAME = "vr-devices.config.cjs";
+export { assertVrConfig, loadVrConfig, resolveVrConfig, VR_CONFIG_FILENAME } from "@utils/vr-config";
 
 export const getProjectRoot = (): string => path.resolve(process.env.VR_PROJECT_ROOT || process.cwd());
 
@@ -27,6 +25,7 @@ export const getNodeTsxArgs = (scriptPath: string): { command: string; args: str
  * Chemin vers le CLI tsx (node + cli.mjs) pour spawn sans shell et hériter stdout correctement (Windows).
  */
 export const getTsxCliPath = (packageRoot: string, projectRoot: string): string | null => {
+  const { existsSync } = require("fs") as typeof import("fs");
   const candidates = [
     path.join(packageRoot, "node_modules", "tsx", "dist", "cli.mjs"),
     path.join(projectRoot, "node_modules", "tsx", "dist", "cli.mjs"),
@@ -58,33 +57,11 @@ export const getProjectPaths = (root: string) => {
   };
 };
 
-export const assertVrDevicesConfig = (root: string): void => {
-  const configPath = path.join(root, VR_DEVICES_CONFIG_FILENAME);
-  if (!existsSync(configPath)) {
-    console.error(
-      `\n❌ Fichier de configuration requis manquant : ${VR_DEVICES_CONFIG_FILENAME}\n` +
-        `   Créez ce fichier à la racine de votre projet (${root}).\n` +
-        `   Voir la documentation : https://github.com/setshao/visual-regression#readme\n`,
-    );
-    process.exit(1);
-  }
-  const config = _require(configPath);
-  if (!Array.isArray(config) || config.length === 0) {
-    console.error(`\n❌ Le fichier ${VR_DEVICES_CONFIG_FILENAME} doit exporter un tableau non vide de devices.\n`);
-    process.exit(1);
-  }
-};
+export const getDevicesNames = (devices: { name: string }[]): string[] => devices.map(d => d.name);
 
-export const loadVrDevicesConfig = (root: string): VRDeviceConfigItem[] => {
-  assertVrDevicesConfig(root);
-  return _require(path.join(root, VR_DEVICES_CONFIG_FILENAME)) || [];
-};
-
-export const getDevicesNames = (config: VRDeviceConfigItem[]): string[] => config.map(d => d.name);
-
-export const getDevicesConfig = (config: VRDeviceConfigItem[]): Record<string, DeviceConfig> =>
+export const getDevicesConfig = (devices: VRDeviceConfigItem[]): Record<string, DeviceConfig> =>
   Object.fromEntries(
-    config.map(d => [
+    devices.map(d => [
       d.name,
       {
         width: d.viewport.width,
@@ -119,8 +96,8 @@ export const waitForStorybookStories = async (minStories = 1, maxAttempts = 90):
 };
 
 export const getDevicesDisplayConfig = (root: string): DeviceDisplayConfig[] => {
-  const config = loadVrDevicesConfig(root);
-  return config.map(d => ({
+  const devices = resolveVrConfig(root).devices;
+  return devices.map(d => ({
     name: d.name,
     label: d.label ?? d.name,
     icon: d.icon ?? "help-outline",

@@ -4,21 +4,21 @@ overview: "Phases 0-8 : pipeline VR (pool borné, vr.config.cjs, TurboSnap local
 todos:
   - id: unified-config
     content: "Migrer vr-devices.config.cjs → vr.config.cjs : objet unifié (devices, capture, compare, launcher, storybook) + resolveVrConfig() avec hiérarchie env > fichier > défauts"
-    status: pending
+    status: completed
   - id: capture-engine
     content: "Créer vr-capture-engine.ts : pool global borné, cache contextes par device, pages éphémères, capture + compare optimisé, blocage réseau — lit resolveVrConfig()"
-    status: pending
+    status: completed
   - id: refactor-compare
     content: Refactoriser compare-visual-regressions.ts pour déléguer au moteur (4 fonctions publiques)
-    status: pending
+    status: completed
+  - id: smart-wait
+    content: Remplacer waitForTimeout(300) par attente composite (fonts, storybook-root visible)
+    status: completed
   - id: incremental-mode
     content: "Créer vr-incremental.ts : getChangedFiles (git base + working tree + manifest), global triggers, filterCaptureTasks, wipe conditionnel"
     status: pending
   - id: dependency-graph
     content: "Créer vr-dependency-graph.ts : trace via preview-stats.json (TurboSnap), fallback analyse imports statique, mapping storyIds"
-    status: pending
-  - id: smart-wait
-    content: Remplacer waitForTimeout(300) par attente composite (fonts, storybook-root visible)
     status: pending
   - id: skip-initial-compare
     content: "Modifier vr-launcher.ts : pas de compare au yarn vr par défaut, rebuild index seulement"

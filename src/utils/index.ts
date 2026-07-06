@@ -33,7 +33,7 @@ export const capitalizeAll = (str: string, locale: string = "fr-FR"): string => 
 
 /**
  * Construit la liste d'affichage (DeviceDisplayConfig[]) à partir de la config devices du projet hôte.
- * La config (vr-devices.config.cjs) doit impérativement définir pour chaque device : name, viewport, icon, color, label.
+ * La config (vr.config.cjs) doit impérativement définir pour chaque device : name, viewport, icon, color, label.
  */
 export const fromVRDeviceConfig = (devices: VRDeviceConfig[]): DeviceDisplayConfig[] =>
   devices.map(d => ({

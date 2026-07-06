@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
  * Point d'entrée CLI pour @setshao/visual-regression.
- * À lancer depuis la racine du projet hôte (où se trouve vr-devices.config.cjs).
+ * À lancer depuis la racine du projet hôte (où se trouve vr.config.cjs).
  *
  * Usage:
  *   visual-regression           → lance tout (serveur + Storybook + Expo + comparaison)
  *   visual-regression server     → uniquement le serveur VR (vr:server)
  *   visual-regression compare    → uniquement la comparaison (vr:compare)
  *   visual-regression app        → uniquement l'interface Web VR (vr:app)
+ *   visual-regression benchmark [max] → benchmark concurrency 1..max (défaut 16, vr:benchmark)
  */
 import { spawn } from "child_process";
 import { existsSync, realpathSync } from "fs";
@@ -19,14 +20,24 @@ const packageRoot = path.resolve(__dirname, "..");
 /** Racine réelle du package (sans symlink) pour que Expo ne soit pas sous node_modules → Babel s'applique. */
 const packageRootReal = realpathSync(packageRoot);
 const hostRoot = process.cwd();
-const configPath = path.join(hostRoot, "vr-devices.config.cjs");
+const configPath = path.join(hostRoot, "vr.config.cjs");
+const legacyConfigPath = path.join(hostRoot, "vr-devices.config.cjs");
 
 if (!existsSync(configPath)) {
-  console.error(
-    "\n❌ Fichier de configuration requis manquant : vr-devices.config.cjs\n" +
-      `   Créez ce fichier à la racine de votre projet (${hostRoot}).\n` +
-      "   Voir la documentation : https://github.com/setshao/visual-regression#readme\n",
-  );
+  if (existsSync(legacyConfigPath)) {
+    console.error(
+      "\n❌ Fichier de configuration requis manquant : vr.config.cjs\n" +
+        "   Ancien fichier détecté : vr-devices.config.cjs\n" +
+        "   Renommez-le en vr.config.cjs et enveloppez les devices dans un objet :\n" +
+        "   module.exports = { devices: [ /* vos devices */ ] };\n",
+    );
+  } else {
+    console.error(
+      "\n❌ Fichier de configuration requis manquant : vr.config.cjs\n" +
+        `   Créez ce fichier à la racine de votre projet (${hostRoot}).\n` +
+        "   Voir la documentation : https://github.com/setshao/visual-regression#readme\n",
+    );
+  }
   process.exit(1);
 }
 
@@ -57,6 +68,8 @@ function getTsxCliPath() {
 }
 
 let scriptPath;
+/** Arguments supplémentaires passés au script tsx (ex. benchmark 12). */
+let scriptArgs = [];
 switch (subcommand) {
   case "server": {
     scriptPath = path.join(packageRootReal, "src", "scripts", "vr-server.ts");
@@ -64,6 +77,11 @@ switch (subcommand) {
   }
   case "compare": {
     scriptPath = path.join(packageRootReal, "src", "scripts", "compare-visual-regressions.ts");
+    break;
+  }
+  case "benchmark": {
+    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-benchmark-concurrency.ts");
+    scriptArgs = process.argv.slice(3);
     break;
   }
   case "app": {
@@ -90,17 +108,17 @@ switch (subcommand) {
 if (scriptPath) {
   const tsxCli = getTsxCliPath();
   const useNpxFallback = !tsxCli;
-  // compare (et server) doivent s'exécuter avec cwd = racine du projet hôte pour que
-  // Storybook buildIndex() résolve correctement les stories (configDir + glob ../src/...).
-  const cwd = subcommand === "compare" || subcommand === "server" ? hostRoot : packageRootReal;
+  // compare, server et benchmark s'exécutent avec cwd = racine du projet hôte.
+  const hostCwdSubcommands = new Set(["compare", "server", "benchmark"]);
+  const cwd = hostCwdSubcommands.has(subcommand) ? hostRoot : packageRootReal;
   const child = tsxCli
-    ? spawn("node", [tsxCli, scriptPath], {
+    ? spawn("node", [tsxCli, scriptPath, ...scriptArgs], {
         ...spawnOpts(cwd),
         shell: false,
       })
     : spawn(
         npxRunner,
-        ["tsx", scriptPath],
+        ["tsx", scriptPath, ...scriptArgs],
         spawnOpts(hostRoot),
       );
   child.on("error", err => {

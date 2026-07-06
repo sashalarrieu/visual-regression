@@ -18,7 +18,7 @@ Le package fournit une **app web de régression dédiée** (UI intégrée dans l
 
 - **Rôle du projet hôte**  
   - Posséder un **Storybook** (les stories sont la source de vérité pour les captures).
-  - Fournir une **configuration de devices** (`vr-devices.config.cjs` au format attendu).
+  - Fournir une **configuration VR** (`vr.config.cjs` au format attendu).
   - Lancer les scripts `visual-regression` depuis la **racine** du projet (ou via `VR_PROJECT_ROOT`).
 
 En résumé, `visual-regression` vise à **industrialiser la régression visuelle autour de Storybook**, avec un rôle minimal pour le projet hôte : configurer ses devices et lancer les scripts.
@@ -28,37 +28,45 @@ En résumé, `visual-regression` vise à **industrialiser la régression visuell
 ## Fonctionnement
 
 - **Ce package** : app web de régression (UI intégrée), logique cliente (navigation dans les stories/devices, visualisation NEW / DIFF avec heatmap, validation/refus, historique), **et les scripts** (serveur VR, launcher, comparaison Playwright). Tout tourne en autonomie : le package ne laisse rien à maintenir dans le projet hôte côté scripts ou UI.
-- **Le projet hôte** : à la racine, un fichier `vr-devices.config.cjs` et un dossier `.storybook/` pour Storybook. Le répertoire de screenshots (par défaut `public/`) est automatiquement créé/utilisé par le package si nécessaire. On lance les commandes VR depuis la **racine du projet hôte** (ou avec `VR_PROJECT_ROOT` pointant vers cette racine) ; les scripts du package utilisent alors cette racine pour charger la config et servir les fichiers.
+- **Le projet hôte** : à la racine, un fichier `vr.config.cjs` et un dossier `.storybook/` pour Storybook. Le répertoire de screenshots (par défaut `public/`) est automatiquement créé/utilisé par le package si nécessaire. On lance les commandes VR depuis la **racine du projet hôte** (ou avec `VR_PROJECT_ROOT` pointant vers cette racine) ; les scripts du package utilisent alors cette racine pour charger la config et servir les fichiers.
 
-**Prérequis côté projet hôte** : `vr-devices.config.cjs`, `.storybook/`. Les **devices** se configurent en format **Playwright** (voir section suivante). Le dossier `public/` est géré automatiquement par `visual-regression` (créé si absent).
+**Prérequis côté projet hôte** : `vr.config.cjs`, `.storybook/`. Les **devices** se configurent en format **Playwright** (voir section suivante). Le dossier `public/` est géré automatiquement par `visual-regression` (créé si absent).
 
 ---
 
-## Devices (obligatoire)
+## Configuration (`vr.config.cjs`)
 
-L’utilisation de `@setshao/visual-regression` impose de **définir des devices** dans le projet hôte (ex. `vr-devices.config.cjs`). Chaque device doit inclure les champs viewport (pour les scripts de capture) **et** la personnalisation d’affichage (label, icon, color) pour l’UI :
+L’utilisation de `@setshao/visual-regression` impose de **définir un fichier `vr.config.cjs`** à la racine du projet hôte. Il regroupe les devices et les paramètres du moteur VR. Chaque device doit inclure les champs viewport (pour les scripts de capture) **et** la personnalisation d’affichage (label, icon, color) pour l’UI :
 
 ```js
-module.exports = [
-  {
-    name: "desktop-fhd",
-    viewport: { width: 1920, height: 1080 },
-    deviceScaleFactor: 1,
-    isMobile: false,
-    label: "Desktop FHD",
-    icon: "laptop",
-    color: "newTheme_primary",
-  },
-  {
-    name: "iphone16",
-    viewport: { width: 393, height: 852 },
-    deviceScaleFactor: 3,
-    isMobile: true,
-    label: "iPhone 16",
-    icon: "phone-iphone",
-    color: "newTheme_fantasy",
-  },
-];
+// vr.config.cjs
+module.exports = {
+  devices: [
+    {
+      name: "desktop-fhd",
+      viewport: { width: 1920, height: 1080 },
+      deviceScaleFactor: 1,
+      isMobile: false,
+      label: "Desktop FHD",
+      icon: "laptop",
+      color: "newTheme_primary",
+    },
+    {
+      name: "iphone16",
+      viewport: { width: 393, height: 852 },
+      deviceScaleFactor: 3,
+      isMobile: true,
+      label: "iPhone 16",
+      icon: "phone-iphone",
+      color: "newTheme_fantasy",
+    },
+  ],
+  // Sections optionnelles (défauts du package si absentes) :
+  capture: { concurrency: 8, maxTestTime: 10_000 },
+  compare: { mode: "incremental", base: "origin/main", threshold: 0 },
+  launcher: { runInitialCompare: false, storybookStatic: false },
+  storybook: { url: "http://localhost:6006" },
+};
 ```
 
 - **label** : texte affiché dans l’UI.
@@ -66,6 +74,22 @@ module.exports = [
 - **color** : clé de couleur du thème (ex. `"newTheme_primary"`, `"newTheme_danger"`).
 
 Les scripts (serveur VR, comparaison Playwright) utilisent `name`, `viewport`, `deviceScaleFactor`, `isMobile`. L’UI utilise `name`, `label`, `icon`, `color` via la prop **obligatoire** `devices`, construite avec `fromVRDeviceConfig(config)`.
+
+### Migration depuis `vr-devices.config.cjs`
+
+Si vous aviez l’ancien format (tableau exporté directement), renommez le fichier en `vr.config.cjs` et enveloppez les devices :
+
+```js
+// Avant : module.exports = [ { name: "desktop-fhd", ... } ];
+// Après :
+module.exports = { devices: [ { name: "desktop-fhd", ... } ] };
+```
+
+Pas de rétrocompatibilité silencieuse : le package affiche un message explicite si `vr-devices.config.cjs` est encore présent sans `vr.config.cjs`.
+
+### Hiérarchie de résolution
+
+`valeur finale = variable d'environnement (VR_*) > vr.config.cjs > défauts du package`
 
 ---
 
@@ -136,9 +160,18 @@ Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du pr
 
 ### 2. Variables d’environnement
 
-| Variable           | Description |
-|--------------------|-------------|
-| `VR_PROJECT_ROOT`  | Racine du projet hôte (défaut : `process.cwd()`) |
+| Variable | Description |
+|----------|-------------|
+| `VR_PROJECT_ROOT` | Racine du projet hôte (défaut : `process.cwd()`) |
+| `VR_CONCURRENCY` | Override de `capture.concurrency` |
+| `VR_MAX_TEST_TIME` | Override de `capture.maxTestTime` (ms) |
+| `VR_COMPARE_MODE` | `"incremental"` ou `"full"` |
+| `VR_COMPARE_BASE` | Ref git pour le diff (ex. `origin/main`) |
+| `VR_THRESHOLD` | Seuil pixelmatch |
+| `VR_RUN_INITIAL_COMPARE` | `true` / `1` pour lancer la comparaison au `yarn vr` |
+| `VR_STORYBOOK_STATIC` | `true` / `1` pour Storybook build + serve |
+| `VR_STORYBOOK_URL` | URL Storybook (défaut : `http://localhost:6006`) |
+| `VR_SHARD_INDEX` / `VR_SHARD_TOTAL` | Sharding CI (env uniquement) |
 
 ---
 

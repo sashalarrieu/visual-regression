@@ -39,14 +39,14 @@ import {
   getDevicesConfig,
   getProjectPaths,
   getProjectRoot,
-  loadVrDevicesConfig,
+  resolveVrConfig,
   waitForStorybookStories,
 } from "@utils/node";
 
 const PROJECT_ROOT = getProjectRoot();
 const SCRIPT_DIR_COMPARE = path.dirname(fileURLToPath(import.meta.url));
 const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR } = getProjectPaths(PROJECT_ROOT);
-const DEVICES = getDevicesConfig(loadVrDevicesConfig(PROJECT_ROOT));
+const DEVICES = getDevicesConfig(resolveVrConfig(PROJECT_ROOT).devices);
 
 /** Options de lancement Chromium : timeout augmenté et args Windows. */
 const CHROMIUM_LAUNCH_OPTIONS = {

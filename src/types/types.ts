@@ -21,7 +21,7 @@ export type DeviceDisplayConfig = {
   color: string;
 };
 
-/** Config complète d'un device : viewport (Playwright) + personnalisation affichage. Définie dans vr-devices.config.cjs. */
+/** Config complète d'un device : viewport (Playwright) + personnalisation affichage. Définie dans vr.config.cjs. */
 export type VRDeviceConfig = {
   name: string;
   viewport: { width: number; height: number };
@@ -112,7 +112,7 @@ export type SSEClient = {
   controller: ReadableStreamDefaultController<string>;
 };
 
-/** Item chargé depuis vr-devices.config.cjs (scripts). */
+/** Item device chargé depuis vr.config.cjs (scripts). */
 export type VRDeviceConfigItem = {
   name: string;
   viewport: { width: number; height: number };
@@ -121,6 +121,53 @@ export type VRDeviceConfigItem = {
   label?: string;
   icon?: MaterialIconName;
   color?: string;
+};
+
+export type VrCompareMode = "incremental" | "full";
+
+/** Configuration VR résolue (fichier + env + défauts). */
+export type VrConfig = {
+  devices: VRDeviceConfigItem[];
+  capture: {
+    concurrency: number;
+    maxTestTime: number;
+  };
+  compare: {
+    mode: VrCompareMode;
+    base: string;
+    includeWorkingTree: boolean;
+    threshold: number;
+    globalTriggers: string[];
+    statsFile: string;
+    manifestPath: string;
+  };
+  launcher: {
+    runInitialCompare: boolean;
+    storybookStatic: boolean;
+  };
+  storybook: {
+    url: string;
+  };
+  stabilize: {
+    freezeAnimations: boolean;
+    waitNetworkQuietMs: number;
+    waitFonts: boolean;
+    burstCapture: boolean;
+    burstFrames: number;
+    burstIntervalMs: number;
+    flakeRetryThreshold: number;
+    maxStabilizeTime: number;
+  };
+};
+
+/** Sections optionnelles de vr.config.cjs (fichier brut). */
+export type VrConfigFile = {
+  devices: VRDeviceConfigItem[];
+  capture?: Partial<VrConfig["capture"]>;
+  compare?: Partial<VrConfig["compare"]>;
+  launcher?: Partial<VrConfig["launcher"]>;
+  storybook?: Partial<VrConfig["storybook"]>;
+  stabilize?: Partial<VrConfig["stabilize"]>;
 };
 
 /** Config viewport Playwright pour un device (script compare). */

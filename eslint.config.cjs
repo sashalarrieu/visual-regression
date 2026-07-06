@@ -233,6 +233,6 @@ module.exports = [
 
   // Ignored files
   {
-    ignores: ["dist/*", "node_modules/*", "web-build/*", "bin/*", "storybook-static/*"],
+    ignores: ["dist/*", "node_modules/*", "web-build/*", "bin/*", "storybook-static/*", "vr.config.cjs"],
   },
 ];
