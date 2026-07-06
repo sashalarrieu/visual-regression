@@ -16,7 +16,7 @@ todos:
     status: completed
   - id: incremental-mode
     content: "Créer vr-incremental.ts : getChangedFiles (git base + working tree + manifest), global triggers, filterCaptureTasks, wipe conditionnel"
-    status: pending
+    status: completed
   - id: dependency-graph
     content: "Créer vr-dependency-graph.ts : trace via preview-stats.json (TurboSnap), fallback analyse imports statique, mapping storyIds"
     status: pending

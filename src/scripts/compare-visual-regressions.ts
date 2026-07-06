@@ -13,7 +13,14 @@ import {
   SCREENSHOT_NAME,
 } from "@constants/constants";
 import type { CaptureTask } from "@scripts/vr-capture-engine";
-import { deleteAllVisualRegressionsFiles, logCaptureTasks, runCaptureBatch } from "@scripts/vr-capture-engine";
+import {
+  deleteAllVisualRegressionsFiles,
+  logCapturePoolStart,
+  logCaptureTasks,
+  logCaptureTimerEnd,
+  resolveConcurrency,
+  runCaptureBatch,
+} from "@scripts/vr-capture-engine";
 import {
   getDevicesConfig,
   getProjectPaths,
@@ -21,6 +28,7 @@ import {
   resolveVrConfig,
   waitForStorybookStories,
 } from "@utils/node";
+import { filterCaptureTasks, getChangedFiles, shouldWipePublicDir, updateManifest } from "@utils/vr-incremental";
 
 export { deleteAllVisualRegressionsFiles } from "@scripts/vr-capture-engine";
 
@@ -429,10 +437,10 @@ const compareVisualRegressions = async () => {
   }
 
   const devices = getDevices();
-  const tasks: CaptureTask[] = [];
+  const allTasks: CaptureTask[] = [];
   for (const story of stories) {
     for (const deviceName of Object.keys(devices)) {
-      tasks.push({
+      allTasks.push({
         storyId: story.id,
         deviceName,
         componentDir: normalizeComponentDir(path.dirname(story.importPath)),
@@ -441,16 +449,58 @@ const compareVisualRegressions = async () => {
   }
 
   const compareMode = config.compare.mode;
-  const wipePublicDir = compareMode === "full";
+  const changedFiles = getChangedFiles(PROJECT_ROOT, config);
+
+  if (changedFiles.source === "git" && changedFiles.files.length > 0) {
+    console.log(`\n📂 ${changedFiles.files.length} fichier(s) modifié(s) (${changedFiles.source})`);
+    changedFiles.files.slice(0, 10).forEach(f => console.log(`   • ${f}`));
+    if (changedFiles.files.length > 10) {
+      console.log(`   … et ${changedFiles.files.length - 10} autre(s)`);
+    }
+  } else if (changedFiles.source === "manifest" && changedFiles.files.length > 0) {
+    console.log(`\n📂 ${changedFiles.files.length} fichier(s) modifié(s) (manifest)`);
+  } else if (changedFiles.source === "git" && changedFiles.files.length === 0) {
+    console.log(`\n📂 Aucun fichier modifié détecté (git)`);
+  }
+
+  const { tasks, skipped, reason } = filterCaptureTasks(allTasks, config, stories, {
+    projectRoot: PROJECT_ROOT,
+    publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR,
+    changedFiles,
+  });
+
+  const wipePublicDir = shouldWipePublicDir(config, { tasks, skipped, reason });
+
+  if (reason === "incremental") {
+    console.log(`\n📦 Mode incrémental : ${tasks.length}/${allTasks.length} tâche(s) à capturer (${skipped} skipped)`);
+  }
 
   console.log(
-    `🐍 ${stories.length} stories × ${Object.keys(devices).length} devices = ${tasks.length} screenshots | mode ${compareMode}`,
+    `🐍 ${stories.length} stories × ${Object.keys(devices).length} devices = ${allTasks.length} screenshots | mode ${compareMode}${reason === "global-trigger" ? " (global trigger → full)" : ""}`,
   );
 
+  if (tasks.length === 0) {
+    console.log("\n✅ Aucune capture nécessaire — tout est à jour.");
+    logCaptureTimerEnd(0, 0);
+    process.exit(0);
+  }
+
+  const batchMode = compareMode === "full" || reason === "global-trigger" ? "full" : "incremental";
+  const concurrency = resolveConcurrency(tasks.length, config);
+  logCapturePoolStart(concurrency, tasks.length, batchMode);
+
   const result = await runCaptureBatch(tasks, {
-    mode: compareMode,
+    mode: batchMode,
     wipePublicDir,
+    concurrency,
+    quietBatchLogs: true,
   });
+
+  logCaptureTimerEnd(result.stats.durationMs, tasks.length);
+
+  if (result.success) {
+    updateManifest(PROJECT_ROOT, config);
+  }
 
   printLogsSummary(result.logs);
 
@@ -463,7 +513,6 @@ const compareVisualRegressions = async () => {
 };
 
 const isRunAsMain =
-  process.env.VR_RUN_COMPARE === "1" ||
   import.meta.main === true ||
   (typeof process.argv[1] === "string" && process.argv[1].includes("compare-visual-regressions"));
 
@@ -490,3 +539,5 @@ try {
 if (isRunAsMain) {
   compareVisualRegressions();
 }
+
+export { compareVisualRegressions };

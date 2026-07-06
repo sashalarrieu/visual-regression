@@ -113,6 +113,8 @@ export type CaptureBatchOptions = {
   clearScreenshotsBeforeCapture?: boolean;
   concurrency?: number;
   onProgress?: (done: number, total: number) => void;
+  /** Supprime le log pool/timer interne (si le caller les affiche). */
+  quietBatchLogs?: boolean;
 };
 
 export type CaptureStats = {
@@ -195,12 +197,29 @@ export const resolveConcurrency = (taskCount: number, config: VrConfig): number 
 };
 
 const formatDurationMs = (ms: number): string => {
-  if (ms < 1000) return `${ms}ms`;
+  if (ms < 1000) return `${Math.round(ms)}ms`;
   const seconds = ms / 1000;
   if (seconds < 60) return `${seconds.toFixed(1)}s`;
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.round(seconds % 60);
   return `${minutes}m ${remainingSeconds}s`;
+};
+
+/** Affiche le démarrage du pool (workers + tâches). */
+export const logCapturePoolStart = (concurrency: number, taskCount: number, mode: string): void => {
+  console.log(`\n⚡ Pool de capture : ${concurrency} worker(s) | ${taskCount} tâche(s) | mode ${mode}`);
+};
+
+/** Affiche la durée totale de génération. */
+export const logCaptureTimerEnd = (durationMs: number, taskCount: number): void => {
+  if (taskCount === 0) {
+    console.log(`\n⏱️  Génération terminée en ${formatDurationMs(durationMs)} (0 tâche)`);
+    return;
+  }
+  const avgMs = durationMs / taskCount;
+  console.log(
+    `\n⏱️  Génération terminée en ${formatDurationMs(durationMs)} (${taskCount} tâche(s), ~${formatDurationMs(avgMs)}/tâche)`,
+  );
 };
 
 export const getStoryIframeUrl = (storybookUrl: string, storyId: string): string =>
@@ -580,7 +599,9 @@ export const runCaptureBatch = async (
   let browser = await launchBrowser();
   let done = 0;
 
-  console.log(`\n⚡ Pool de capture : ${concurrency} worker(s) | ${tasks.length} tâche(s) | mode ${options.mode}`);
+  if (!options.quietBatchLogs) {
+    logCapturePoolStart(concurrency, tasks.length, options.mode);
+  }
 
   try {
     await Promise.all(
@@ -629,15 +650,16 @@ export const runCaptureBatch = async (
     );
 
     stats.durationMs = Math.round(performance.now() - startedAt);
-    const avgMs = stats.durationMs / tasks.length;
-    console.log(
-      `\n⏱️  Génération terminée en ${formatDurationMs(stats.durationMs)} (${tasks.length} tâche(s), ~${formatDurationMs(avgMs)}/tâche)`,
-    );
+    if (!options.quietBatchLogs) {
+      logCaptureTimerEnd(stats.durationMs, tasks.length);
+    }
 
     return { success: true, stats, logs, storiesWithDiff };
   } catch (err) {
     stats.durationMs = Math.round(performance.now() - startedAt);
-    console.log(`\n⏱️  Génération interrompue après ${formatDurationMs(stats.durationMs)}`);
+    if (!options.quietBatchLogs) {
+      console.log(`\n⏱️  Génération interrompue après ${formatDurationMs(stats.durationMs)}`);
+    }
     return {
       success: false,
       stats,

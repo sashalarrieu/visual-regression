@@ -9,6 +9,7 @@
  *   visual-regression compare    → uniquement la comparaison (vr:compare)
  *   visual-regression app        → uniquement l'interface Web VR (vr:app)
  *   visual-regression benchmark [max] → benchmark concurrency 1..max (défaut 16, vr:benchmark)
+ *   visual-regression test-incremental [--check-only] → vérifie Session 3 puis compare (vr:test-incremental)
  */
 import { spawn } from "child_process";
 import { existsSync, realpathSync } from "fs";
@@ -84,6 +85,11 @@ switch (subcommand) {
     scriptArgs = process.argv.slice(3);
     break;
   }
+  case "test-incremental": {
+    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-test-incremental.ts");
+    scriptArgs = process.argv.slice(3);
+    break;
+  }
   case "app": {
     // Interface web VR (Expo). Ne pas forcer CI=1 : Metro désactive le hot reload en mode CI.
     const expoArgs = ["expo", "start", "--web", "--port", String(EXPO_PORT)];
@@ -109,7 +115,7 @@ if (scriptPath) {
   const tsxCli = getTsxCliPath();
   const useNpxFallback = !tsxCli;
   // compare, server et benchmark s'exécutent avec cwd = racine du projet hôte.
-  const hostCwdSubcommands = new Set(["compare", "server", "benchmark"]);
+  const hostCwdSubcommands = new Set(["compare", "server", "benchmark", "test-incremental"]);
   const cwd = hostCwdSubcommands.has(subcommand) ? hostRoot : packageRootReal;
   const child = tsxCli
     ? spawn("node", [tsxCli, scriptPath, ...scriptArgs], {

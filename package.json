@@ -42,6 +42,7 @@
     "vr:server": "node bin/visual-regression.mjs server",
     "vr:compare": "node bin/visual-regression.mjs compare",
     "vr:benchmark": "node bin/visual-regression.mjs benchmark",
+    "vr:test-incremental": "node bin/visual-regression.mjs test-incremental",
     "vr:app": "node bin/visual-regression.mjs app",
     "vr:kill-ports": "npx kill-port 2804 2805",
     "lint": "eslint .",

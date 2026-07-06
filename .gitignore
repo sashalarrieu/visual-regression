@@ -8,3 +8,4 @@ dist/
 public/Screenshots
 
 storybook-static/
+.vr-cache/
