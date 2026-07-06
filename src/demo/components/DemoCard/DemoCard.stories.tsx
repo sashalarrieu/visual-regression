@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-webpack5";
 
-import { DemoCard } from "./components/DemoCard";
+import { DemoCard } from "./DemoCard";
 
 const meta = {
   title: "Demo/Card",

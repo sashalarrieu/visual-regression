@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-webpack5";
 
-import { DemoProfileHeader } from "./components/DemoProfileHeader";
+import { DemoProfileHeader } from "./DemoProfileHeader";
 
 const meta = {
   title: "Demo/ProfileHeader",
