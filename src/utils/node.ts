@@ -2,6 +2,7 @@
  * Utilitaires Node/Bun uniquement (scripts VR).
  * Ne pas importer depuis l'app React/Expo (web) — utilise import.meta et createRequire.
  */
+import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -25,7 +26,6 @@ export const getNodeTsxArgs = (scriptPath: string): { command: string; args: str
  * Chemin vers le CLI tsx (node + cli.mjs) pour spawn sans shell et hériter stdout correctement (Windows).
  */
 export const getTsxCliPath = (packageRoot: string, projectRoot: string): string | null => {
-  const { existsSync } = require("fs") as typeof import("fs");
   const candidates = [
     path.join(packageRoot, "node_modules", "tsx", "dist", "cli.mjs"),
     path.join(projectRoot, "node_modules", "tsx", "dist", "cli.mjs"),

@@ -61,7 +61,8 @@ const killPort = (port: number) => {
       netstat.stdout?.on("data", (d: Buffer) => (out += d.toString()));
       netstat.on("close", (code: number) => {
         if (code !== 0) return;
-        const lines = out.split("\n").filter(l => l.trim().includes(`:${port}`));
+        const portPattern = new RegExp(`:${port}(\\s|$)`);
+        const lines = out.split("\n").filter(l => portPattern.test(l.trim()));
         const pids = new Set<string>();
         for (const line of lines) {
           const m = line.trim().split(/\s+/);
