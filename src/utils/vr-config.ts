@@ -28,7 +28,10 @@ const parsePositiveEnv = (value: string | undefined): number | undefined => {
 
 const envBool = (value: string | undefined): boolean | undefined => {
   if (value === undefined) return undefined;
-  return value === "1" || value.toLowerCase() === "true";
+  const lower = value.toLowerCase();
+  if (value === "1" || lower === "true" || lower === "yes") return true;
+  if (value === "0" || lower === "false" || lower === "no") return false;
+  return undefined;
 };
 
 const parseEnvCompareMode = (): VrCompareMode | undefined => {
@@ -60,7 +63,7 @@ export const getDefaultVrConfig = (): VrConfig => ({
     manifestPath: ".vr-cache/manifest.json",
   },
   launcher: {
-    runInitialCompare: false,
+    runInitialCompare: true,
     storybookStatic: false,
   },
   storybook: {

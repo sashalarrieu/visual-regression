@@ -1,6 +1,14 @@
 /**
  * Constantes et valeurs fixes du package @setshao/visual-regression.
  * Partagées entre l'UI (src) et les scripts (scripts/).
+ *
+ * Configuration dynamique (devices, compare.mode, storybook.url, concurrency…) :
+ * voir vr.config.cjs + resolveVrConfig() dans src/utils/vr-config.ts.
+ *
+ * Overrides env (scripts Node) :
+ *   VR_PROJECT_ROOT, VR_CONCURRENCY, VR_MAX_TEST_TIME, VR_COMPARE_MODE,
+ *   VR_COMPARE_BASE, VR_COMPARE_SCOPE, VR_THRESHOLD, VR_RUN_INITIAL_COMPARE,
+ *   VR_STORYBOOK_URL, VR_STORYBOOK_STATIC, VR_SHARD_INDEX, VR_SHARD_TOTAL
  */
 
 import type { DeviceStyle } from "@app-types/types";
@@ -16,6 +24,7 @@ export const VR_SERVER_PORT = 2805;
 export const LOCAL_URL = "http://localhost";
 export const VR_SERVER_URL = `${LOCAL_URL}:${VR_SERVER_PORT}`;
 export const EXPO_URL = `${LOCAL_URL}:${EXPO_PORT}`;
+/** URL Storybook par défaut (UI). Les scripts utilisent resolveVrConfig().storybook.url. */
 export const STORYBOOK_URL = `${LOCAL_URL}:${STORYBOOK_PORT}`;
 
 /** Style utilisé quand le device n'est pas trouvé dans la config. */
@@ -40,8 +49,6 @@ export const STORY_BASE_URI = `${STORYBOOK_URL}/iframe.html?id=`;
 
 /** URL iframe Storybook pour une story (viewMode=story évite la page docs). */
 export const getStoryIframeUrl = (storyId: string): string => `${STORY_BASE_URI}${storyId}&viewMode=story`;
-export const MAX_TEST_TIME = 10000; // 10 sec
-export const THRESHOLD = 0;
 
 // --- Tags stories (ignore / force VR) ---
 

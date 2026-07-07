@@ -57,7 +57,7 @@ module.exports = {
     manifestPath: ".vr-cache/manifest.json",
   },
   launcher: {
-    runInitialCompare: false,
+    runInitialCompare: true,
     storybookStatic: false,
   },
   storybook: {

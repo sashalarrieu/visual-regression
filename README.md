@@ -64,7 +64,7 @@ module.exports = {
   // Sections optionnelles (défauts du package si absentes) :
   capture: { concurrency: 8, maxTestTime: 10_000 },
   compare: { mode: "incremental", base: "origin/main", threshold: 0 },
-  launcher: { runInitialCompare: false, storybookStatic: false },
+  launcher: { runInitialCompare: true, storybookStatic: false },
   storybook: { url: "http://localhost:6006" },
 };
 ```
@@ -139,9 +139,11 @@ Le package contient les scripts dans `scripts/`. Depuis le **projet hôte**, ajo
 
 | Script       | Rôle |
 |-------------|------|
-| `vr`        | Lance tout : serveur VR + Storybook + Expo en mode VR + comparaison initiale |
+| `vr`        | Lance tout : serveur VR + Storybook + Expo + comparaison incrémentale initiale (désactivable) |
 | `vr:server` | Lance uniquement le serveur VR (port 2805) |
 | `vr:compare`| Lance la comparaison Playwright (régénération des screenshots) |
+| `vr:benchmark` | Mesure la concurrency optimale sur 1 machine (`1..16`) |
+| `vr:benchmark-shards` | Simule le sharding CI (shardTotal × concurrency) sans lancer toute la matrix |
 | `vr:app`    | Lance l’app Expo en mode régression (port 2804) |
 | `vr:kill-ports` | Libère les ports 2804 et 2805 |
 
@@ -168,10 +170,39 @@ Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du pr
 | `VR_COMPARE_MODE` | `"incremental"` ou `"full"` |
 | `VR_COMPARE_BASE` | Ref git pour le diff (ex. `origin/main`) |
 | `VR_THRESHOLD` | Seuil pixelmatch |
-| `VR_RUN_INITIAL_COMPARE` | `true` / `1` pour lancer la comparaison au `yarn vr` |
+| `VR_RUN_INITIAL_COMPARE` | `true` / `1` force la comparaison au `yarn vr` ; `false` / `0` la désactive (défaut config : `true`) |
 | `VR_STORYBOOK_STATIC` | `true` / `1` pour Storybook build + serve |
 | `VR_STORYBOOK_URL` | URL Storybook (défaut : `http://localhost:6006`) |
-| `VR_SHARD_INDEX` / `VR_SHARD_TOTAL` | Sharding CI (env uniquement) |
+| `VR_SHARD_INDEX` / `VR_SHARD_TOTAL` | Sharding CI (env uniquement, index 0-based). Ex. `VR_SHARD_INDEX=0 VR_SHARD_TOTAL=4 yarn vr:compare` |
+
+### Benchmark performance (concurrency + sharding CI)
+
+Workflow recommandé pour dimensionner la CI :
+
+```bash
+# 1. Trouver la concurrency optimale sur 1 machine (Storybook requis)
+yarn vr:benchmark
+
+# 2. Simuler le sharding CI (rapide, pas de matrix réelle)
+yarn vr:benchmark-shards --ms-per-task 1800 --concurrency 12,15,16
+
+# Ou calibrer ms/tâche automatiquement (20 captures)
+yarn vr:benchmark-shards --calibrate --full
+```
+
+Options utiles de `vr:benchmark-shards` :
+
+| Option | Description |
+|--------|-------------|
+| `[maxShards]` ou `--max-shards N` | Tester shardTotal de 1 à N (défaut 8) |
+| `--setup-ms N` | Coût fixe par job CI en ms (défaut 180000 = 3 min) |
+| `--ms-per-task N` | Durée moyenne par capture (issue de `vr:benchmark`) |
+| `--concurrency 12,15,16` | Liste de concurrencies à tester |
+| `--full` | Toutes les tâches (défaut) |
+| `--incremental` | Périmètre TurboSnap actuel |
+| `--calibrate` | Mesure ms/tâche via un échantillon de 20 captures |
+
+Validez ensuite la config recommandée en vraie CI matrix avec `VR_SHARD_INDEX` / `VR_SHARD_TOTAL`.
 
 ---
 

@@ -20,12 +20,12 @@ todos:
   - id: dependency-graph
     content: "Créer vr-dependency-graph.ts : trace via preview-stats.json (TurboSnap), fallback analyse imports statique, mapping storyIds"
     status: pending
-  - id: skip-initial-compare
-    content: "Modifier vr-launcher.ts : pas de compare au yarn vr par défaut, rebuild index seulement"
-    status: pending
+  - id: config-initial-compare
+    content: "Modifier vr-launcher.ts : compare initiale au yarn vr par défaut (runInitialCompare: true), désactivable via config ou VR_RUN_INITIAL_COMPARE=0"
+    status: completed
   - id: sharding
     content: Ajouter filtrage VR_SHARD_INDEX / VR_SHARD_TOTAL dans le pipeline de tasks
-    status: pending
+    status: completed
   - id: static-storybook
     content: Supporter VR_STORYBOOK_STATIC + génération preview-stats.json au build (storybook build --stats-json) pour le graphe TurboSnap
     status: pending
@@ -158,7 +158,7 @@ module.exports = {
     manifestPath: ".vr-cache/manifest.json", // fallback hash sans git
   },
   launcher: {
-    runInitialCompare: false, // lancer compare au yarn vr ?
+    runInitialCompare: true, // lancer compare incrémentale au yarn vr (défaut)
     storybookStatic: false, // storybook build + serve au lieu de dev
   },
   storybook: {
@@ -196,7 +196,7 @@ valeur finale = env var (VR_*)  >  vr.config.cjs  >  défauts package
 | Stats Webpack        | `compare.statsFile`          | —                                   | `storybook-static/preview-stats.json`  |
 | Manifest hash        | `compare.manifestPath`       | —                                   | `.vr-cache/manifest.json`              |
 | Seuil diff           | `compare.threshold`          | `VR_THRESHOLD`                      | `0`                                    |
-| Compare au lancement | `launcher.runInitialCompare` | `VR_RUN_INITIAL_COMPARE`            | `false`                                |
+| Compare au lancement | `launcher.runInitialCompare` | `VR_RUN_INITIAL_COMPARE`            | `true`                                 |
 | Storybook statique   | `launcher.storybookStatic`   | `VR_STORYBOOK_STATIC`               | `false`                                |
 | URL Storybook        | `storybook.url`              | `VR_STORYBOOK_URL`                  | `http://localhost:6006`                |
 | Freeze animations    | `stabilize.freezeAnimations` | —                                   | `true`                                 |
@@ -556,24 +556,28 @@ Gain : la majorité des runs incrémentaux n'ont que quelques vraies diffs à an
 
 ---
 
-## Phase 5 — Skip comparaison initiale au `yarn vr` (point 7)
+## Phase 5 — Comparaison initiale configurable au `yarn vr` (point 7)
 
 Modifier [`src/scripts/vr-launcher.ts`](src/scripts/vr-launcher.ts) :
 
-- Lire `resolveVrConfig().launcher.runInitialCompare` (défaut `false`)
-- Override env : `VR_RUN_INITIAL_COMPARE=1` force la comparaison initiale
-- Par défaut : **ne plus lancer** `compare-visual-regressions.ts` au démarrage
-- Après le skip : appeler quand même `POST /regressions/rebuild` pour indexer les screenshots existants
-- Log clair : `Comparaison initiale ignorée (launcher.runInitialCompare ou VR_RUN_INITIAL_COMPARE=1 pour forcer)`
+- Lire `resolveVrConfig().launcher.runInitialCompare` (défaut **`true`**)
+- Override env : `VR_RUN_INITIAL_COMPARE=0` ou `false` désactive la comparaison initiale ; `1` ou `true` la force
+- **Par défaut** : lancer `compare-visual-regressions.ts` au démarrage (mode incrémental — TurboSnap filtre les tâches)
+- Si désactivé (`runInitialCompare: false` ou `VR_RUN_INITIAL_COMPARE=0`) : appeler quand même `POST /regressions/rebuild` pour indexer les screenshots existants
+- Log clair :
+  - compare lancée : `Comparaison initiale (incrémentale)…`
+  - compare ignorée : `Comparaison initiale ignorée (launcher.runInitialCompare: false ou VR_RUN_INITIAL_COMPARE=0)`
 
 Mettre à jour `[bin/visual-regression.mjs](bin/visual-regression.mjs)` commentaires + `[README.md](README.md)`.
 
 Workflow dev recommandé documenté :
 
 ```
-yarn vr          → infra seule (serveur + Storybook + app)
+yarn vr          → infra + compare incrémentale initiale (défaut)
 yarn vr:compare  → comparaison incrémentale à la demande
 ```
+
+Pour démarrer sans compare (ex. debug infra seule) : `launcher.runInitialCompare: false` dans `vr.config.cjs` ou `VR_RUN_INITIAL_COMPARE=0 yarn vr`.
 
 ---
 
@@ -644,7 +648,7 @@ Réduit les latences sur stories avec appels externes (analytics, fonts CDN, etc
 
 ### [`src/scripts/vr-launcher.ts`](src/scripts/vr-launcher.ts)
 
-- Skip compare selon `launcher.runInitialCompare` (phase 5)
+- Compare initiale selon `launcher.runInitialCompare` (phase 5, défaut `true`)
 - Storybook statique selon `launcher.storybookStatic`
 
 ---
@@ -741,7 +745,7 @@ flowchart TD
   P2c[Phase 2c manifest fallback]
   P3[Phase 3 Attente intelligente]
   P4[Phase 4 Compare images]
-  P5[Phase 5 Skip compare yarn vr]
+  P5[Phase 5 Compare initiale yarn vr]
   P6[Phase 6 Sharding]
   P7[Phase 7 Storybook static + stats-json]
   P8[Phase 8 Integration serveur CLI README]
@@ -776,7 +780,7 @@ flowchart TD
    - Modifier `.storybook/preview.tsx` → global trigger → capture tout
    - `VR_COMPARE_MODE=full` → recapture tout
 2. **Parallélisme** : logs montrent jusqu'à `VR_CONCURRENCY` captures simultanées (défaut ~8) ; temps total nettement inférieur au séquentiel ; avec 1 device et 12 tâches, plusieurs stories capturées en parallèle sur le même contexte
-3. **`yarn vr`** : démarre sans compare ; UI charge l'index existant
+3. **`yarn vr`** : lance la compare incrémentale initiale par défaut ; avec `runInitialCompare: false`, démarre sans compare et l'UI charge l'index existant via rebuild
 4. **Sharding** : `VR_SHARD_INDEX=0 VR_SHARD_TOTAL=2` → ~50% des tasks
 5. **Régression** : `compareSelectedStories` et `compareByType` fonctionnent via l'UI
 6. **Config** : `vr.config.cjs` chargé correctement ; `VR_CONCURRENCY=2` override `capture.concurrency: 8` ; message clair si `vr-devices.config.cjs` encore présent

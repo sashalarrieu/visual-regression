@@ -4,12 +4,17 @@
  * À lancer depuis la racine du projet hôte (où se trouve vr.config.cjs).
  *
  * Usage:
- *   visual-regression           → lance tout (serveur + Storybook + Expo + comparaison)
+ *   visual-regression           → lance tout (serveur + Storybook + Expo + compare incrémentale)
  *   visual-regression server     → uniquement le serveur VR (vr:server)
  *   visual-regression compare    → uniquement la comparaison (vr:compare)
  *   visual-regression app        → uniquement l'interface Web VR (vr:app)
  *   visual-regression benchmark [max] → benchmark concurrency 1..max (défaut 16, vr:benchmark)
- *   visual-regression test-incremental [--check-only] → vérifie Session 3 puis compare (vr:test-incremental)
+ *   visual-regression benchmark-shards [opts] → simulation sharding CI (vr:benchmark-shards)
+ *   visual-regression test-incremental [--check-only] → vérifie TurboSnap puis compare (vr:test-incremental)
+ *
+ * Env utiles :
+ *   VR_RUN_INITIAL_COMPARE=0    → yarn vr sans compare initiale (rebuild index seulement)
+ *   VR_SHARD_INDEX=0 VR_SHARD_TOTAL=4 → shard CI pour vr:compare
  */
 import { spawn } from "child_process";
 import { existsSync, realpathSync } from "fs";
@@ -85,6 +90,11 @@ switch (subcommand) {
     scriptArgs = process.argv.slice(3);
     break;
   }
+  case "benchmark-shards": {
+    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-benchmark-shards.ts");
+    scriptArgs = process.argv.slice(3);
+    break;
+  }
   case "test-incremental": {
     scriptPath = path.join(packageRootReal, "src", "scripts", "vr-test-incremental.ts");
     scriptArgs = process.argv.slice(3);
@@ -115,7 +125,7 @@ if (scriptPath) {
   const tsxCli = getTsxCliPath();
   const useNpxFallback = !tsxCli;
   // compare, server et benchmark s'exécutent avec cwd = racine du projet hôte.
-  const hostCwdSubcommands = new Set(["compare", "server", "benchmark", "test-incremental"]);
+  const hostCwdSubcommands = new Set(["compare", "server", "benchmark", "benchmark-shards", "test-incremental"]);
   const cwd = hostCwdSubcommands.has(subcommand) ? hostRoot : packageRootReal;
   const child = tsxCli
     ? spawn("node", [tsxCli, scriptPath, ...scriptArgs], {

@@ -29,6 +29,7 @@ import {
   waitForStorybookStories,
 } from "@utils/node";
 import { filterCaptureTasks, getChangedFiles, shouldWipePublicDir, updateManifest } from "@utils/vr-incremental";
+import { filterTasksByShard } from "@utils/vr-sharding";
 
 export { deleteAllVisualRegressionsFiles } from "@scripts/vr-capture-engine";
 
@@ -463,16 +464,25 @@ const compareVisualRegressions = async () => {
     console.log(`\n📂 Aucun fichier modifié détecté (git)`);
   }
 
-  const { tasks, skipped, reason } = filterCaptureTasks(allTasks, config, stories, {
+  const {
+    tasks: incrementalTasks,
+    skipped,
+    reason,
+  } = filterCaptureTasks(allTasks, config, stories, {
     projectRoot: PROJECT_ROOT,
     publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR,
     changedFiles,
   });
 
-  const wipePublicDir = shouldWipePublicDir(config, { tasks, skipped, reason });
+  const { tasks, skipped: shardSkipped } = filterTasksByShard(incrementalTasks);
+  const totalSkipped = skipped + shardSkipped;
+
+  const wipePublicDir = shouldWipePublicDir(config, { tasks, skipped: totalSkipped, reason });
 
   if (reason === "incremental") {
-    console.log(`\n📦 Mode incrémental : ${tasks.length}/${allTasks.length} tâche(s) à capturer (${skipped} skipped)`);
+    console.log(
+      `\n📦 Mode incrémental : ${tasks.length}/${allTasks.length} tâche(s) à capturer (${totalSkipped} skipped)`,
+    );
   }
 
   console.log(
