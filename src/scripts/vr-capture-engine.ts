@@ -365,11 +365,44 @@ export const clearStoryScreenshots = (componentDir: string, deviceName: string, 
   }
 };
 
+const isAllowedCaptureRequest = (requestUrl: string, storybookUrl: string): boolean => {
+  if (requestUrl.startsWith("data:") || requestUrl.startsWith("blob:")) return true;
+
+  const base = storybookUrl.replace(/\/$/, "");
+  if (requestUrl.startsWith(base)) return true;
+
+  try {
+    const req = new URL(requestUrl);
+    const allowed = new URL(storybookUrl);
+    if (req.origin === allowed.origin) return true;
+    const localHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
+    if (localHosts.has(req.hostname) && localHosts.has(allowed.hostname) && req.port === allowed.port) {
+      return true;
+    }
+  } catch {
+    // URL invalide — bloquer
+  }
+
+  return false;
+};
+
+/** Bloque les requêtes hors Storybook (analytics, CDN, etc.). */
+const setupNetworkBlock = async (context: BrowserContext, storybookUrl: string): Promise<void> => {
+  await context.route("**/*", route => {
+    if (isAllowedCaptureRequest(route.request().url(), storybookUrl)) {
+      route.continue();
+    } else {
+      route.abort();
+    }
+  });
+};
+
 const getOrCreateContext = async (
   browser: Browser,
   deviceName: string,
   deviceConfig: DeviceConfig,
   cache: Map<string, BrowserContext>,
+  storybookUrl: string,
 ): Promise<BrowserContext> => {
   const cached = cache.get(deviceName);
   if (cached) return cached;
@@ -379,6 +412,7 @@ const getOrCreateContext = async (
     deviceScaleFactor: deviceConfig.deviceScaleFactor,
     isMobile: deviceConfig.mobile ?? false,
   });
+  await setupNetworkBlock(context, storybookUrl);
   cache.set(deviceName, context);
   return context;
 };
@@ -564,7 +598,7 @@ const runSingleTask = async ({
   }
 
   const paths = buildScreenshotPaths(task.componentDir, task.deviceName, task.storyId);
-  const context = await getOrCreateContext(browser, task.deviceName, deviceConfig, contextCache);
+  const context = await getOrCreateContext(browser, task.deviceName, deviceConfig, contextCache, config.storybook.url);
   const page = await context.newPage();
 
   try {

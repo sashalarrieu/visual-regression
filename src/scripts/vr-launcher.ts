@@ -9,7 +9,6 @@ import {
   LOCAL_URL,
   LOG_COLORS,
   STORYBOOK_PORT,
-  STORYBOOK_URL,
   VR_SERVER_PORT,
   VR_SERVER_URL,
 } from "@constants/constants";
@@ -104,8 +103,39 @@ const killPort = (port: number) => {
   }
 };
 
+const runShellCommand = (command: string, args: string[], cwd: string): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const proc = spawn(command, args, {
+      stdio: "inherit",
+      shell: true,
+      cwd,
+      env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
+    });
+    proc.on("error", reject);
+    proc.on("close", code => resolve(code ?? 1));
+  });
+
+const parseStorybookPort = (storybookUrl: string): number => {
+  try {
+    const port = new URL(storybookUrl).port;
+    return port ? Number(port) : STORYBOOK_PORT;
+  } catch {
+    return STORYBOOK_PORT;
+  }
+};
+
+const needsStaticStorybookBuild = (statsRelativePath: string): boolean => {
+  if (process.env.VR_STORYBOOK_STATIC_REBUILD === "1") return true;
+  const staticDir = path.join(PROJECT_ROOT, "storybook-static");
+  return !existsSync(path.join(staticDir, "index.html")) || !existsSync(path.join(PROJECT_ROOT, statsRelativePath));
+};
+
 const main = async () => {
   assertVrConfig(PROJECT_ROOT);
+  const vrConfig = resolveVrConfig(PROJECT_ROOT);
+  const storybookUrl = vrConfig.storybook.url;
+  const storybookPort = parseStorybookPort(storybookUrl);
+  const useStaticStorybook = vrConfig.launcher.storybookStatic;
 
   log("blue", "🚀", "Démarrage de l'environnement Visual Regressions");
 
@@ -113,7 +143,7 @@ const main = async () => {
 
   const expoAvailable = await isPortAvailable(EXPO_PORT);
   const vrServerAvailable = await isPortAvailable(VR_SERVER_PORT);
-  const storybookAvailable = await isPortAvailable(STORYBOOK_PORT);
+  const storybookAvailable = await isPortAvailable(storybookPort);
 
   if (!expoAvailable) {
     log("yellow", "⚠️", `Le port ${EXPO_PORT} est déjà utilisé`);
@@ -129,12 +159,12 @@ const main = async () => {
 
   let storybookAlreadyRunning = false;
   if (!storybookAvailable) {
-    const storiesIndexed = await waitForStorybookStories(1, 3);
+    const storiesIndexed = await waitForStorybookStories(1, 3, PROJECT_ROOT);
     if (storiesIndexed) {
       storybookAlreadyRunning = true;
     } else {
-      log("yellow", "⚠️", `Port ${STORYBOOK_PORT} occupé mais index Storybook vide — redémarrage`);
-      killPort(STORYBOOK_PORT);
+      log("yellow", "⚠️", `Port ${storybookPort} occupé mais index Storybook vide — redémarrage`);
+      killPort(storybookPort);
       await new Promise(resolve => setTimeout(resolve, process.platform === "win32" ? 3500 : 2000));
     }
   }
@@ -166,10 +196,58 @@ const main = async () => {
 
   if (storybookAlreadyRunning) {
     log("green", "✅", "Storybook prêt (instance existante)");
-  } else {
-    log("blue", "📚", "Démarrage de Storybook");
+  } else if (useStaticStorybook) {
+    log("blue", "📚", "Storybook statique (build + serve)");
 
-    storybook = spawn("cross-env", ["STORYBOOK_ENV=web", "storybook", "dev", "-p", String(STORYBOOK_PORT)], {
+    if (needsStaticStorybookBuild(vrConfig.compare.statsFile)) {
+      log("blue", "🔨", "Build Storybook (--stats-json)…");
+      const buildCode = await runShellCommand("yarn", ["storybook:build:stats"], PROJECT_ROOT);
+      if (buildCode !== 0) {
+        log("red", "❌", "Échec du build Storybook statique");
+        vrServer.kill();
+        process.exit(1);
+      }
+    } else {
+      log(
+        "blue",
+        "⏭️",
+        "Build Storybook ignoré (storybook-static/ à jour — VR_STORYBOOK_STATIC_REBUILD=1 pour forcer)",
+      );
+    }
+
+    storybook = spawn("npx", ["serve", "storybook-static", "-l", String(storybookPort)], {
+      stdio: "inherit",
+      shell: true,
+      cwd: PROJECT_ROOT,
+      env: { ...process.env, STORYBOOK_ENV: "web" },
+    });
+
+    storybook.on("error", err => {
+      log("red", "❌", `Erreur serveur Storybook statique: ${err.message}`);
+      vrServer.kill();
+      process.exit(1);
+    });
+
+    const storybookReady = await waitForServer(storybookPort, 60);
+    if (!storybookReady) {
+      log("red", "❌", "Storybook statique n'a pas démarré à temps");
+      vrServer.kill();
+      process.exit(1);
+    }
+
+    const storiesIndexed = await waitForStorybookStories(1, 90, PROJECT_ROOT);
+    if (!storiesIndexed) {
+      log("red", "❌", "Storybook statique n'a pas indexé les stories à temps");
+      vrServer.kill();
+      if (storybook) storybook.kill();
+      process.exit(1);
+    }
+
+    log("green", "✅", "Storybook statique prêt");
+  } else {
+    log("blue", "📚", "Démarrage de Storybook (dev)");
+
+    storybook = spawn("cross-env", ["STORYBOOK_ENV=web", "storybook", "dev", "-p", String(storybookPort)], {
       stdio: "inherit",
       shell: true,
       cwd: PROJECT_ROOT,
@@ -182,14 +260,14 @@ const main = async () => {
       process.exit(1);
     });
 
-    const storybookReady = await waitForServer(STORYBOOK_PORT, 60);
+    const storybookReady = await waitForServer(storybookPort, 60);
     if (!storybookReady) {
       log("red", "❌", "Storybook n'a pas démarré à temps");
       vrServer.kill();
       process.exit(1);
     }
 
-    const storiesIndexed = await waitForStorybookStories(1, 90);
+    const storiesIndexed = await waitForStorybookStories(1, 90, PROJECT_ROOT);
     if (!storiesIndexed) {
       log("red", "❌", "Storybook n'a pas indexé les stories à temps");
       vrServer.kill();
@@ -202,7 +280,7 @@ const main = async () => {
     log("green", "✅", "Storybook prêt");
   }
 
-  const launcherConfig = resolveVrConfig(PROJECT_ROOT).launcher;
+  const launcherConfig = vrConfig.launcher;
 
   const rebuildIndex = async (): Promise<void> => {
     try {
@@ -222,7 +300,7 @@ const main = async () => {
     log("green", "🎉", "Environnement VR prêt !");
     log("blue", "🌐", `Interface VR disponible sur ${EXPO_URL}`);
     log("blue", "🔧", `Serveur VR API sur ${VR_SERVER_URL}`);
-    log("blue", "📚", `Storybook disponible sur ${STORYBOOK_URL}`);
+    log("blue", "📚", `Storybook disponible sur ${storybookUrl}`);
   };
 
   const runInitialCompareJob = (): Promise<number> => {

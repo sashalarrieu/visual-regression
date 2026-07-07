@@ -16,6 +16,8 @@
  * Env utiles :
  *   VR_RUN_INITIAL_COMPARE=0    → yarn vr sans compare initiale (rebuild index seulement)
  *   VR_SHARD_INDEX=0 VR_SHARD_TOTAL=4 → shard CI pour vr:compare
+ *   VR_STORYBOOK_STATIC=1       → Storybook build + serve au lieu de dev (yarn vr)
+ *   VR_STORYBOOK_STATIC_REBUILD=1 → force rebuild storybook-static au lancement
  */
 import { spawn } from "child_process";
 import { existsSync, realpathSync } from "fs";

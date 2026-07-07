@@ -38,6 +38,7 @@
     "storybook": "cross-env STORYBOOK_ENV=web storybook dev -p 6006",
     "storybook:build": "cross-env STORYBOOK_ENV=web storybook build",
     "storybook:build:stats": "cross-env STORYBOOK_ENV=web storybook build --stats-json",
+    "vr:storybook:static": "yarn storybook:build:stats && npx serve storybook-static -l 6006",
     "sync-vr": "node ../scripts/sync-vr-and-start.mjs",
     "vr": "node bin/visual-regression.mjs",
     "vr:server": "node bin/visual-regression.mjs server",

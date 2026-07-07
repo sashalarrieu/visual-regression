@@ -184,6 +184,7 @@ Le package contient les scripts dans `scripts/`. Depuis le **projet hôte**, ajo
 | `vr:benchmark` | Mesure la concurrency optimale sur 1 machine (`1..16`) |
 | `vr:benchmark-shards` | Simule le sharding CI (shardTotal × concurrency) sans lancer toute la matrix |
 | `vr:test-validation` | Checklist Phases 0–8 (`--static-only` sans Storybook) |
+| `vr:storybook:static` | Build Storybook + stats (`preview-stats.json`) puis serve sur le port 6006 |
 | `vr:app`    | Lance l’app Expo en mode régression (port 2804) |
 | `vr:kill-ports` | Libère les ports 2804 et 2805 |
 
@@ -212,7 +213,8 @@ Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du pr
 | `VR_COMPARE_BASE` | Ref git pour le diff (ex. `origin/main`) |
 | `VR_THRESHOLD` | Seuil pixelmatch |
 | `VR_RUN_INITIAL_COMPARE` | `true` / `1` force la comparaison au `yarn vr` ; `false` / `0` la désactive (défaut config : `true`) |
-| `VR_STORYBOOK_STATIC` | `true` / `1` pour Storybook build + serve |
+| `VR_STORYBOOK_STATIC` | `true` / `1` pour Storybook build + serve au `yarn vr` (au lieu de `storybook dev`) |
+| `VR_STORYBOOK_STATIC_REBUILD` | `1` force le rebuild de `storybook-static/` au lancement statique |
 | `VR_STORYBOOK_URL` | URL Storybook (défaut : `http://localhost:6006`) |
 | `VR_SHARD_INDEX` / `VR_SHARD_TOTAL` | Sharding CI (env uniquement, index 0-based). Ex. `VR_SHARD_INDEX=0 VR_SHARD_TOTAL=4 yarn vr:compare` |
 
