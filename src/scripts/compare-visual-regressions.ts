@@ -15,6 +15,7 @@ import {
 import type { CaptureTask } from "@scripts/vr-capture-engine";
 import {
   deleteAllVisualRegressionsFiles,
+  deleteVisualRegressionsFilesForDevice,
   logCapturePoolStart,
   logCaptureTasks,
   logCaptureTimerEnd,
@@ -31,7 +32,7 @@ import {
 import { filterCaptureTasks, getChangedFiles, shouldWipePublicDir, updateManifest } from "@utils/vr-incremental";
 import { filterTasksByShard } from "@utils/vr-sharding";
 
-export { deleteAllVisualRegressionsFiles } from "@scripts/vr-capture-engine";
+export { deleteAllVisualRegressionsFiles, deleteVisualRegressionsFilesForDevice } from "@scripts/vr-capture-engine";
 
 const PROJECT_ROOT = getProjectRoot();
 const SCRIPT_DIR_COMPARE = path.dirname(fileURLToPath(import.meta.url));
@@ -337,7 +338,11 @@ export const compareAllStories = async (
   deviceName?: string,
   options?: CompareAllStoriesOptions,
 ): Promise<{ success: boolean; error?: string }> => {
-  deleteAllVisualRegressionsFiles();
+  if (deviceName) {
+    deleteVisualRegressionsFilesForDevice(deviceName);
+  } else {
+    deleteAllVisualRegressionsFiles();
+  }
   options?.onDirectoryWiped?.();
 
   const tasks = await buildTasksForAllStories(deviceName);

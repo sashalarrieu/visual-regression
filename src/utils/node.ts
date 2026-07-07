@@ -6,8 +6,8 @@ import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import type { DeviceConfig, DeviceDisplayConfig, VRDeviceConfigItem } from "@app-types/types";
-import { SCREENSHOTS_DIR, STORYBOOK_URL } from "@constants/constants";
+import type { DeviceConfig, DeviceDisplayConfig, VRDeviceConfigItem, VrPublicConfig } from "@app-types/types";
+import { SCREENSHOTS_DIR } from "@constants/constants";
 import { resolveVrConfig } from "@utils/vr-config";
 
 export { assertVrConfig, loadVrConfig, resolveVrConfig, VR_CONFIG_FILENAME } from "@utils/vr-config";
@@ -72,10 +72,12 @@ export const getDevicesConfig = (devices: VRDeviceConfigItem[]): Record<string, 
     ]),
   );
 
+export const getStorybookUrl = (root?: string): string => resolveVrConfig(root ?? getProjectRoot()).storybook.url;
+
 /** Compte les stories indexées (hors pages docs). */
-export const countStorybookStories = async (): Promise<number> => {
+export const countStorybookStories = async (root?: string): Promise<number> => {
   try {
-    const res = await fetch(`${STORYBOOK_URL}/index.json`);
+    const res = await fetch(`${getStorybookUrl(root)}/index.json`);
     if (!res.ok) return 0;
     const data = (await res.json()) as { entries?: Record<string, { type?: string }> };
     return Object.entries(data.entries ?? {}).filter(([id, entry]) => entry.type === "story" && !id.endsWith("--docs"))
@@ -86,9 +88,9 @@ export const countStorybookStories = async (): Promise<number> => {
 };
 
 /** Attend que Storybook ait indexé au moins minStories stories. */
-export const waitForStorybookStories = async (minStories = 1, maxAttempts = 90): Promise<boolean> => {
+export const waitForStorybookStories = async (minStories = 1, maxAttempts = 90, root?: string): Promise<boolean> => {
   for (let i = 0; i < maxAttempts; i++) {
-    const count = await countStorybookStories();
+    const count = await countStorybookStories(root);
     if (count >= minStories) return true;
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
@@ -103,4 +105,20 @@ export const getDevicesDisplayConfig = (root: string): DeviceDisplayConfig[] => 
     icon: d.icon ?? "help-outline",
     color: d.color ?? "newTheme_danger",
   }));
+};
+
+/** Config publique pour l'UI et les outils (GET /regressions/config). */
+export const getVrPublicConfig = (root: string): VrPublicConfig => {
+  const config = resolveVrConfig(root);
+  return {
+    compareMode: config.compare.mode,
+    compareScope: config.compare.scope,
+    compareBase: config.compare.base,
+    captureConcurrency: config.capture.concurrency,
+    captureMaxTestTime: config.capture.maxTestTime,
+    compareThreshold: config.compare.threshold,
+    launcherRunInitialCompare: config.launcher.runInitialCompare,
+    storybookUrl: config.storybook.url,
+    deviceCount: config.devices.length,
+  };
 };

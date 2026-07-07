@@ -11,6 +11,7 @@
  *
  * Prérequis : Storybook démarré (yarn storybook ou yarn vr).
  */
+import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
 
 import { FORCE_VR_TAG, IGNORE_VR_TAG } from "@constants/constants";
@@ -107,6 +108,31 @@ const main = async () => {
 
   console.log("\n─────────── Résultat ───────────");
   console.log(`🏆 Optimal : concurrency = ${best.concurrency} (${formatMs(best.durationMs)})`);
+
+  try {
+    const cacheDir = path.join(PROJECT_ROOT, ".vr-cache");
+    mkdirSync(cacheDir, { recursive: true });
+    const msPerTask = best.durationMs / tasks.length;
+    writeFileSync(
+      path.join(cacheDir, "benchmark-last.json"),
+      JSON.stringify(
+        {
+          updatedAt: new Date().toISOString(),
+          concurrency: best.concurrency,
+          durationMs: best.durationMs,
+          taskCount: tasks.length,
+          msPerTask,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    console.log(`   Cache : .vr-cache/benchmark-last.json (${Math.round(msPerTask)} ms/tâche)`);
+  } catch {
+    // ignore cache write errors
+  }
+
   console.log("\nTop 5 :");
   sorted.slice(0, 5).forEach((r, i) => {
     const delta = r.durationMs - best.durationMs;

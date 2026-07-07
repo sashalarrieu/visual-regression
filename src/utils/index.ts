@@ -6,9 +6,19 @@ import { FORCE_VR_TAG, IGNORE_VR_TAG, STORYBOOK_URL, UNKNOWN_DEVICE_STYLE, VR_SE
  */
 
 /** Compte les stories Storybook éligibles à la VR (même filtre que compareAllStories). */
-export const fetchStorybookStoryCount = async (): Promise<number> => {
+export const fetchStorybookStoryCount = async (serverUrl: string = VR_SERVER_URL): Promise<number> => {
   try {
-    const res = await fetch(`${STORYBOOK_URL}/index.json`);
+    let storybookUrl = STORYBOOK_URL;
+    try {
+      const configRes = await fetch(`${serverUrl}/regressions/config`);
+      if (configRes.ok) {
+        const cfg = (await configRes.json()) as { storybookUrl?: string };
+        if (cfg.storybookUrl) storybookUrl = cfg.storybookUrl;
+      }
+    } catch {
+      // serveur VR indisponible — fallback constante locale
+    }
+    const res = await fetch(`${storybookUrl}/index.json`);
     if (!res.ok) return 0;
     const data = (await res.json()) as { entries?: Record<string, { type?: string; tags?: string[] }> };
     return Object.entries(data.entries ?? {}).filter(([id, entry]) => {

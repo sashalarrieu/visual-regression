@@ -25,6 +25,7 @@ import type { DeviceConfig, LogsType, VrConfig } from "@app-types/types";
 import {
   DIFF_SCREENSHOT_NAME,
   NEW_SCREENSHOT_NAME,
+  SCREENSHOT_EXTENSION,
   SCREENSHOT_NAME,
   SCREENSHOTS_DIR,
   TEMP_SCREENSHOT_NAME,
@@ -76,6 +77,50 @@ export const deleteAllVisualRegressionsFiles = (): void => {
       return;
     }
   }
+};
+
+const stripVrScreenshotPrefix = (fileName: string): string => {
+  if (fileName.startsWith(DIFF_SCREENSHOT_NAME)) return fileName.slice(DIFF_SCREENSHOT_NAME.length);
+  if (fileName.startsWith(NEW_SCREENSHOT_NAME)) return fileName.slice(NEW_SCREENSHOT_NAME.length);
+  if (fileName.startsWith(TEMP_SCREENSHOT_NAME)) return fileName.slice(TEMP_SCREENSHOT_NAME.length);
+  return fileName;
+};
+
+const screenshotFileBelongsToDevice = (fileName: string, deviceName: string): boolean => {
+  if (!fileName.endsWith(SCREENSHOT_EXTENSION)) return false;
+  return stripVrScreenshotPrefix(fileName).startsWith(`${deviceName}-`);
+};
+
+const deleteDeviceScreenshotsInDir = (dir: string, deviceName: string): void => {
+  if (!existsSync(dir)) return;
+
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      deleteDeviceScreenshotsInDir(fullPath, deviceName);
+      try {
+        if (readdirSync(fullPath).length === 0) rmdirSync(fullPath);
+      } catch {
+        // ignore
+      }
+      continue;
+    }
+
+    if (!screenshotFileBelongsToDevice(entry.name, deviceName)) continue;
+    try {
+      rmSync(fullPath, { force: true });
+    } catch (err) {
+      console.warn(`⚠️  Erreur lors de la suppression de ${fullPath}:`, err);
+    }
+  }
+};
+
+/**
+ * Supprime uniquement les artefacts VR d'un device dans public/Screenshots/ (y compris deleted/).
+ */
+export const deleteVisualRegressionsFilesForDevice = (deviceName: string): void => {
+  if (!deviceName || !existsSync(PUBLIC_SCREENSHOTS_DIR)) return;
+  deleteDeviceScreenshotsInDir(PUBLIC_SCREENSHOTS_DIR, deviceName);
 };
 
 /** Options de lancement Chromium : timeout augmenté et args Windows. */

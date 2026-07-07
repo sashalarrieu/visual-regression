@@ -202,6 +202,90 @@ const main = async () => {
     log("green", "✅", "Storybook prêt");
   }
 
+  const launcherConfig = resolveVrConfig(PROJECT_ROOT).launcher;
+
+  const rebuildIndex = async (): Promise<void> => {
+    try {
+      const res = await fetch(`${VR_SERVER_URL}/regressions/rebuild`, { method: "POST" });
+      if (res.ok) {
+        const body = (await res.json()) as { diffCount?: number; newCount?: number };
+        const diffs = body.diffCount ?? 0;
+        const news = body.newCount ?? 0;
+        log("blue", "🔄", `Index des régressions reconstruit: ${diffs} diff(s), ${news} nouveau(x) screenshot(s)`);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const printReadyMessage = (): void => {
+    log("green", "🎉", "Environnement VR prêt !");
+    log("blue", "🌐", `Interface VR disponible sur ${EXPO_URL}`);
+    log("blue", "🔧", `Serveur VR API sur ${VR_SERVER_URL}`);
+    log("blue", "📚", `Storybook disponible sur ${STORYBOOK_URL}`);
+  };
+
+  const runInitialCompareJob = (): Promise<number> => {
+    const compareScriptInProject = path.join(
+      PROJECT_ROOT,
+      "node_modules",
+      "@setshao",
+      "visual-regression",
+      "src",
+      "scripts",
+      "compare-visual-regressions.ts",
+    );
+    const compareScript = existsSync(compareScriptInProject)
+      ? compareScriptInProject
+      : path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
+    log("blue", "🔍", "Comparaison initiale (incrémentale)…");
+
+    const compareEnv = { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT, VR_RUN_COMPARE: "1" };
+    const tsxCli = getTsxCliPath(PACKAGE_ROOT, PROJECT_ROOT);
+    const { command: compareCommand, args: compareArgs } = getNodeTsxArgs(compareScript);
+    if (tsxCli !== null) {
+      log("blue", "📌", "Script comparaison: node + tsx (stdio direct)");
+    } else {
+      log("yellow", "📌", "Script comparaison: npx tsx (fallback)");
+    }
+
+    return new Promise((resolve, reject) => {
+      const compare =
+        tsxCli !== null
+          ? spawn("node", [tsxCli, compareScript], {
+              stdio: "inherit",
+              cwd: PROJECT_ROOT,
+              env: compareEnv,
+              shell: false,
+            })
+          : spawn(compareCommand, compareArgs, {
+              stdio: "inherit",
+              cwd: PROJECT_ROOT,
+              env: compareEnv,
+              ...spawnShellOption,
+            });
+
+      compare.on("error", err => reject(err));
+      compare.on("close", code => resolve(code ?? 1));
+    });
+  };
+
+  // Compare avant Expo : évite que Metro surveille public/Screenshots pendant les captures
+  if (!launcherConfig.runInitialCompare) {
+    log("blue", "⏭️", "Comparaison initiale ignorée (launcher.runInitialCompare: false ou VR_RUN_INITIAL_COMPARE=0)");
+  } else {
+    try {
+      const code = await runInitialCompareJob();
+      if (code === 0) {
+        log("green", "✅", "Comparaison initiale terminée");
+      } else {
+        log("yellow", "⚠️", `Comparaison terminée avec le code ${code}`);
+      }
+    } catch (err) {
+      log("red", "❌", `Erreur comparaison initiale: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   log("blue", "📱", "Démarrage de l'interface VR (Expo depuis le package)");
 
   const expoArgs = ["expo", "start", "--web", "--port", String(EXPO_PORT)];
@@ -236,84 +320,8 @@ const main = async () => {
   }
 
   log("green", "✅", "Expo prêt");
-
-  const launcherConfig = resolveVrConfig(PROJECT_ROOT).launcher;
-
-  const rebuildIndex = async (): Promise<void> => {
-    try {
-      const res = await fetch(`${VR_SERVER_URL}/regressions/rebuild`, { method: "POST" });
-      if (res.ok) {
-        const body = (await res.json()) as { diffCount?: number; newCount?: number };
-        const diffs = body.diffCount ?? 0;
-        const news = body.newCount ?? 0;
-        log("blue", "🔄", `Index des régressions reconstruit: ${diffs} diff(s), ${news} nouveau(x) screenshot(s)`);
-      }
-    } catch {
-      // ignore
-    }
-  };
-
-  const printReadyMessage = (): void => {
-    log("green", "🎉", "Environnement VR prêt !");
-    log("blue", "🌐", `Interface VR disponible sur ${EXPO_URL}`);
-    log("blue", "🔧", `Serveur VR API sur ${VR_SERVER_URL}`);
-    log("blue", "📚", `Storybook disponible sur ${STORYBOOK_URL}`);
-  };
-
-  if (!launcherConfig.runInitialCompare) {
-    log("blue", "⏭️", "Comparaison initiale ignorée (launcher.runInitialCompare: false ou VR_RUN_INITIAL_COMPARE=0)");
-    await rebuildIndex();
-    printReadyMessage();
-  } else {
-    // Préférer le script dans le projet hôte pour que Storybook (buildIndex) résolve les presets depuis le projet
-    const compareScriptInProject = path.join(
-      PROJECT_ROOT,
-      "node_modules",
-      "@setshao",
-      "visual-regression",
-      "src",
-      "scripts",
-      "compare-visual-regressions.ts",
-    );
-    const compareScript = existsSync(compareScriptInProject)
-      ? compareScriptInProject
-      : path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
-    log("blue", "🔍", "Comparaison initiale (incrémentale)…");
-
-    const compareEnv = { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT, VR_RUN_COMPARE: "1" };
-    const tsxCli = getTsxCliPath(PACKAGE_ROOT, PROJECT_ROOT);
-    const { command: compareCommand, args: compareArgs } = getNodeTsxArgs(compareScript);
-    if (tsxCli !== null) {
-      log("blue", "📌", "Script comparaison: node + tsx (stdio direct)");
-    } else {
-      log("yellow", "📌", "Script comparaison: npx tsx (fallback)");
-    }
-    const compare =
-      tsxCli !== null
-        ? spawn("node", [tsxCli, compareScript], {
-            stdio: "inherit",
-            cwd: PROJECT_ROOT,
-            env: compareEnv,
-            shell: false,
-          })
-        : spawn(compareCommand, compareArgs, {
-            stdio: "inherit",
-            cwd: PROJECT_ROOT,
-            env: compareEnv,
-            ...spawnShellOption,
-          });
-
-    compare.on("close", async code => {
-      if (code === 0) {
-        log("green", "✅", "Comparaison initiale terminée");
-        await rebuildIndex();
-        printReadyMessage();
-      } else {
-        log("yellow", "⚠️", `Comparaison terminée avec le code ${code}`);
-        await rebuildIndex();
-      }
-    });
-  }
+  await rebuildIndex();
+  printReadyMessage();
 
   process.on("SIGINT", () => {
     log("yellow", "⚠️", "Arrêt en cours");

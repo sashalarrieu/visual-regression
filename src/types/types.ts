@@ -125,6 +125,19 @@ export type VRDeviceConfigItem = {
 
 export type VrCompareMode = "incremental" | "full";
 
+/** Config publique exposée par GET /regressions/config (sans secrets). */
+export type VrPublicConfig = {
+  compareMode: VrCompareMode;
+  compareScope: VrChangedFilesScope;
+  compareBase: string;
+  captureConcurrency: number;
+  captureMaxTestTime: number;
+  compareThreshold: number;
+  launcherRunInitialCompare: boolean;
+  storybookUrl: string;
+  deviceCount: number;
+};
+
 /** Périmètre des fichiers modifiés pour le mode incrémental. */
 export type VrChangedFilesScope = "all" | "branch" | "working-tree";
 

@@ -31,7 +31,7 @@ todos:
     status: pending
   - id: server-integration
     content: Adapter vr-server.ts, constants.ts, bin/visual-regression.mjs, types — charger vr.config.cjs partout, documenter dans README
-    status: pending
+    status: completed
   - id: steady-snap
     content: "Phase 9 (après validation 0-8) : vr-steadysnap.ts — freeze animations, network quiet, burst sélectif, retry flake — voir plan"
     status: pending

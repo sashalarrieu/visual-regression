@@ -6,4 +6,7 @@ const { getDefaultConfig } = require("expo/metro-config");
 
 const config = getDefaultConfig(__dirname);
 
+// Screenshots VR : churn élevé pendant compare — évite ENOENT FallbackWatcher (Windows)
+config.resolver.blockList.push(/[\\/]public[\\/]Screenshots[\\/].*/);
+
 module.exports = config;

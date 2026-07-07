@@ -91,6 +91,45 @@ Pas de rétrocompatibilité silencieuse : le package affiche un message explicit
 
 `valeur finale = variable d'environnement (VR_*) > vr.config.cjs > défauts du package`
 
+Sections principales de `vr.config.cjs` :
+
+| Section | Rôle |
+|---------|------|
+| `devices` | Viewports Playwright + affichage UI (obligatoire) |
+| `capture.concurrency` | Pool parallèle Playwright (défaut ~15 sur demo) |
+| `capture.maxTestTime` | Timeout attente story stable |
+| `compare.mode` | `"incremental"` (défaut) ou `"full"` |
+| `compare.scope` | `"all"` (CI) ou `"working-tree"` (test local sur branche feature) |
+| `compare.base` | Ref git pour le diff (ex. `origin/main`) |
+| `compare.globalTriggers` | Fichiers modifiés → run complet |
+| `compare.statsFile` | `preview-stats.json` pour TurboSnap |
+| `launcher.runInitialCompare` | Compare au `yarn vr` (défaut `true`) |
+| `storybook.url` | URL Storybook (override `VR_STORYBOOK_URL`) |
+
+### Mode incrémental et TurboSnap
+
+Par défaut, seules les stories impactées par les fichiers modifiés sont recapturées :
+
+1. Détection git (`compare.base` + working tree) ou manifest `.vr-cache/manifest.json`
+2. Graphe Webpack via `storybook-static/preview-stats.json` (généré par `yarn storybook:build:stats`)
+3. Fallback analyse imports statiques si stats absentes
+
+Global triggers (`.storybook/**`, `package.json`, `yarn.lock`, `vr.config.cjs`) forcent un run complet.
+
+L'UI expose les actions **régénération volontaire** en mode full via le serveur VR :
+- `POST /compare/selected` → `compareSelectedStories`
+- `POST /compare/by-type` → `compareByType` (new / diff / rejected)
+- `POST /compare/all-stories` → `compareAllStories`
+
+`POST /compare` lance la comparaison selon `compare.mode` (incrémental par défaut).
+
+### API serveur VR (config)
+
+| Route | Description |
+|-------|-------------|
+| `GET /regressions/config` | Config publique résolue (`compareMode`, `storybookUrl`, `captureConcurrency`, …) |
+| `GET /regressions/config/devices` | Devices pour l'UI |
+
 ---
 
 ## Installation
@@ -144,6 +183,7 @@ Le package contient les scripts dans `scripts/`. Depuis le **projet hôte**, ajo
 | `vr:compare`| Lance la comparaison Playwright (régénération des screenshots) |
 | `vr:benchmark` | Mesure la concurrency optimale sur 1 machine (`1..16`) |
 | `vr:benchmark-shards` | Simule le sharding CI (shardTotal × concurrency) sans lancer toute la matrix |
+| `vr:test-validation` | Checklist Phases 0–8 (`--static-only` sans Storybook) |
 | `vr:app`    | Lance l’app Expo en mode régression (port 2804) |
 | `vr:kill-ports` | Libère les ports 2804 et 2805 |
 
@@ -168,6 +208,7 @@ Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du pr
 | `VR_CONCURRENCY` | Override de `capture.concurrency` |
 | `VR_MAX_TEST_TIME` | Override de `capture.maxTestTime` (ms) |
 | `VR_COMPARE_MODE` | `"incremental"` ou `"full"` |
+| `VR_COMPARE_SCOPE` | `"all"`, `"branch"` ou `"working-tree"` (périmètre git incrémental) |
 | `VR_COMPARE_BASE` | Ref git pour le diff (ex. `origin/main`) |
 | `VR_THRESHOLD` | Seuil pixelmatch |
 | `VR_RUN_INITIAL_COMPARE` | `true` / `1` force la comparaison au `yarn vr` ; `false` / `0` la désactive (défaut config : `true`) |
@@ -203,6 +244,15 @@ Options utiles de `vr:benchmark-shards` :
 | `--calibrate` | Mesure ms/tâche via un échantillon de 20 captures |
 
 Validez ensuite la config recommandée en vraie CI matrix avec `VR_SHARD_INDEX` / `VR_SHARD_TOTAL`.
+
+### Validation Phases 0–8
+
+```bash
+yarn vr:test-validation              # checklist complète (Storybook requis pour partie dynamique)
+yarn vr:test-validation --static-only  # config, exports, TurboSnap fichier, sharding — sans Storybook
+```
+
+Couvre : `vr.config.cjs`, overrides env, TurboSnap, sharding, exports compare UI, incrémental sans changement.
 
 ---
 

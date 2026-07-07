@@ -43,6 +43,7 @@ import {
   getProjectPaths,
   getProjectRoot,
   getScriptDir,
+  getVrPublicConfig,
   resolveVrConfig,
   spawnShellOption,
 } from "@utils/node";
@@ -856,6 +857,17 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
     return;
   }
 
+  // 📖 GET /regressions/config - Config VR publique résolue (vr.config.cjs + env)
+  if (req.method === "GET" && url.pathname === "/regressions/config") {
+    try {
+      sendJson(res, getVrPublicConfig(PROJECT_ROOT));
+    } catch (err) {
+      console.error("❌ Error fetching VR config:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
   // 📖 GET /regressions/deleted - Récupérer les suppressions
   if (req.method === "GET" && url.pathname === "/regressions/deleted") {
     try {
@@ -1029,7 +1041,8 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
     try {
       refreshIndex({ notify: true, allowEmpty: true });
       const compareScript = path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
-      console.log("🔍 Lancement comparaison VR");
+      const compareMode = resolveVrConfig(PROJECT_ROOT).compare.mode;
+      console.log(`🔍 Lancement comparaison VR (mode ${compareMode})`);
       const { command, args } = getNodeTsxArgs(compareScript);
       const compareProcess = spawn(command, args, {
         env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
