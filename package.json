@@ -37,6 +37,7 @@
   "scripts": {
     "storybook": "cross-env STORYBOOK_ENV=web storybook dev -p 6006",
     "storybook:build": "cross-env STORYBOOK_ENV=web storybook build",
+    "storybook:build:stats": "cross-env STORYBOOK_ENV=web storybook build --stats-json",
     "sync-vr": "node ../scripts/sync-vr-and-start.mjs",
     "vr": "node bin/visual-regression.mjs",
     "vr:server": "node bin/visual-regression.mjs server",

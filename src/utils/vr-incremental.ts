@@ -16,6 +16,7 @@ import {
   SCREENSHOTS_DIR,
 } from "@constants/constants";
 import type { CaptureTask } from "@scripts/vr-capture-engine";
+import { resolveAffectedStoryIds } from "@utils/vr-dependency-graph";
 
 export type StoryIndexEntry = {
   id: string;
@@ -212,19 +213,6 @@ export const isGlobalTrigger = (changedFiles: string[], config: VrConfig): boole
 
 const storyHasForceVrTag = (story: StoryIndexEntry): boolean => (story.tags ?? []).includes(FORCE_VR_TAG);
 
-/** Session 3 : matching naïf (importPath + dossier composant). Graphe Webpack en Session 4. */
-const isStoryAffectedByChanges = (story: StoryIndexEntry, changedFiles: string[]): boolean => {
-  const importPath = normalizePath(story.importPath);
-  const componentDir = normalizePath(path.dirname(importPath));
-
-  return changedFiles.some(changed => {
-    const file = normalizePath(changed);
-    if (file === importPath) return true;
-    if (file.startsWith(`${componentDir}/`)) return true;
-    return false;
-  });
-};
-
 const hasBaseline = (projectRoot: string, task: CaptureTask): boolean => {
   const baselinePath = path.join(
     projectRoot,
@@ -245,8 +233,7 @@ const hasPendingVrInPublic = (publicScreenshotsDir: string, task: CaptureTask): 
 const storyById = (stories: StoryIndexEntry[]): Map<string, StoryIndexEntry> => new Map(stories.map(s => [s.id, s]));
 
 /**
- * Filtre les tâches de capture (mode incrémental).
- * Sans graphe Webpack : seuls importPath + fichiers du dossier composant sont considérés.
+ * Filtre les tâches de capture (mode incrémental + TurboSnap via preview-stats.json).
  */
 export const filterCaptureTasks = (
   allTasks: CaptureTask[],
@@ -256,6 +243,8 @@ export const filterCaptureTasks = (
     projectRoot: string;
     publicScreenshotsDir: string;
     changedFiles: ChangedFilesResult;
+    /** Force rebuild preview-stats.json (ex. après global trigger). */
+    forceStatsRebuild?: boolean;
   },
 ): FilterCaptureTasksResult => {
   if (config.compare.mode === "full") {
@@ -271,6 +260,10 @@ export const filterCaptureTasks = (
     console.log(`\n🌐 Global trigger détecté (${triggers.join(", ")}) — capture complète`);
     return { tasks: allTasks, skipped: 0, reason: "global-trigger" };
   }
+
+  const affectedStoryIds = resolveAffectedStoryIds(options.changedFiles.files, stories, options.projectRoot, config, {
+    forceStatsRebuild: options.forceStatsRebuild,
+  });
 
   const index = storyById(stories);
   const filtered: CaptureTask[] = [];
@@ -298,7 +291,7 @@ export const filterCaptureTasks = (
       continue;
     }
 
-    if (isStoryAffectedByChanges(story, options.changedFiles.files)) {
+    if (affectedStoryIds.has(task.storyId)) {
       filtered.push(task);
       continue;
     }

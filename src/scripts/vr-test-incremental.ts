@@ -1,5 +1,5 @@
 /**
- * Vérifie les prérequis du mode incrémental (Session 3) puis lance vr:compare.
+ * Vérifie les prérequis du mode incrémental (Session 3–4) puis lance vr:compare.
  *
  * Usage :
  *   yarn vr:test-incremental              → checks + compare si OK
@@ -39,7 +39,7 @@ const showHelp = process.argv.includes("--help") || process.argv.includes("-h");
 
 const printHelp = (): void => {
   console.log(`
-Test du mode incrémental VR (Session 3)
+Test du mode incrémental VR (Session 3–4, TurboSnap)
 
 Usage:
   yarn vr:test-incremental              Vérifie les prérequis puis lance yarn vr:compare
@@ -112,7 +112,7 @@ const buildAllTasks = (stories: StoryIndexEntry[]): CaptureTask[] => {
 };
 
 const runChecks = async (): Promise<boolean> => {
-  console.log("\n🧪 Test mode incrémental VR (Session 3)\n");
+  console.log("\n🧪 Test mode incrémental VR (Session 3–4, TurboSnap)\n");
 
   const config = resolveVrConfig(PROJECT_ROOT);
   const checks: CheckResult[] = [];
