@@ -7,7 +7,7 @@ import { createRequire } from "module";
 import os from "os";
 import path from "path";
 
-import type { VrConfig, VrConfigFile, VrCompareMode } from "@app-types/types";
+import type { VrConfig, VrConfigFile, VrCompareMode, VrChangedFilesScope } from "@app-types/types";
 
 const _require = createRequire(import.meta.url);
 
@@ -37,6 +37,12 @@ const parseEnvCompareMode = (): VrCompareMode | undefined => {
   return undefined;
 };
 
+const parseEnvCompareScope = (): VrChangedFilesScope | undefined => {
+  const value = process.env.VR_COMPARE_SCOPE;
+  if (value === "all" || value === "branch" || value === "working-tree") return value;
+  return undefined;
+};
+
 export const getDefaultVrConfig = (): VrConfig => ({
   devices: [],
   capture: {
@@ -46,6 +52,7 @@ export const getDefaultVrConfig = (): VrConfig => ({
   compare: {
     mode: "incremental",
     base: "origin/main",
+    scope: "all",
     includeWorkingTree: true,
     threshold: 0,
     globalTriggers: [...DEFAULT_GLOBAL_TRIGGERS],
@@ -132,6 +139,7 @@ export const resolveVrConfig = (root?: string): VrConfig => {
   const envMaxTestTime = parsePositiveEnv(process.env.VR_MAX_TEST_TIME);
   const envThreshold = process.env.VR_THRESHOLD !== undefined ? Number(process.env.VR_THRESHOLD) : undefined;
   const compareMode = parseEnvCompareMode();
+  const compareScope = parseEnvCompareScope();
   const envCompareBase = process.env.VR_COMPARE_BASE;
   const envStorybookUrl = process.env.VR_STORYBOOK_URL;
   const envRunInitialCompare = envBool(process.env.VR_RUN_INITIAL_COMPARE);
@@ -147,6 +155,7 @@ export const resolveVrConfig = (root?: string): VrConfig => {
     compare: {
       ...config.compare,
       ...(compareMode !== undefined ? { mode: compareMode } : {}),
+      ...(compareScope !== undefined ? { scope: compareScope } : {}),
       ...(envCompareBase ? { base: envCompareBase } : {}),
       ...(envThreshold !== undefined && Number.isFinite(envThreshold) ? { threshold: envThreshold } : {}),
     },

@@ -27,7 +27,7 @@ todos:
     content: Ajouter filtrage VR_SHARD_INDEX / VR_SHARD_TOTAL dans le pipeline de tasks
     status: pending
   - id: static-storybook
-    content: "Supporter VR_STORYBOOK_STATIC + génération preview-stats.json au build (storybook build --stats-json) pour le graphe TurboSnap"
+    content: Supporter VR_STORYBOOK_STATIC + génération preview-stats.json au build (storybook build --stats-json) pour le graphe TurboSnap
     status: pending
   - id: server-integration
     content: Adapter vr-server.ts, constants.ts, bin/visual-regression.mjs, types — charger vr.config.cjs partout, documenter dans README
@@ -75,8 +75,6 @@ flowchart LR
   end
 ```
 
-
-
 - Config actuelle : `vr-devices.config.cjs` exporte un **tableau** de devices uniquement — pas de paramètres moteur centralisés
 - Boucle séquentielle `stories × devices` dupliquée dans 4 fonctions : `compareVisualRegressions`, `compareSelectedStories`, `compareAllStories`, `compareByType` (`[src/scripts/compare-visual-regressions.ts](src/scripts/compare-visual-regressions.ts)`)
 - Chaque capture : `newContext()` → `goto` → `waitForTimeout(300)` → screenshot → `close()`
@@ -117,8 +115,6 @@ flowchart TB
   end
 ```
 
-
-
 ---
 
 ## Phase 0 — Fichier de config unifié `vr.config.cjs`
@@ -143,39 +139,40 @@ module.exports = {
     // ...
   ],
   capture: {
-    concurrency: 8,       // pool global (défaut : min(cpus, 8))
-    maxTestTime: 10_000,  // timeout par capture (ms)
+    concurrency: 8, // pool global (défaut : min(cpus, 8))
+    maxTestTime: 10_000, // timeout par capture (ms)
   },
   compare: {
-    mode: "incremental",       // "incremental" | "full"
-    base: "origin/main",       // ref git pour diff commits (CI)
-    includeWorkingTree: true,  // inclure unstaged + staged (défaut true — dev local)
+    mode: "incremental", // "incremental" | "full"
+    base: "origin/main", // ref git pour diff commits (CI)
+    includeWorkingTree: true, // inclure unstaged + staged (défaut true — dev local)
     threshold: 0,
-    globalTriggers: [          // changement → run complet (évite faux négatifs)
+    globalTriggers: [
+      // changement → run complet (évite faux négatifs)
       ".storybook/**",
       "package.json",
       "yarn.lock",
       "vr.config.cjs",
     ],
-    statsFile: "storybook-static/preview-stats.json",  // graphe Webpack TurboSnap
-    manifestPath: ".vr-cache/manifest.json",           // fallback hash sans git
+    statsFile: "storybook-static/preview-stats.json", // graphe Webpack TurboSnap
+    manifestPath: ".vr-cache/manifest.json", // fallback hash sans git
   },
   launcher: {
-    runInitialCompare: false,  // lancer compare au yarn vr ?
-    storybookStatic: false,    // storybook build + serve au lieu de dev
+    runInitialCompare: false, // lancer compare au yarn vr ?
+    storybookStatic: false, // storybook build + serve au lieu de dev
   },
   storybook: {
-    url: "http://localhost:6006",  // override URL Storybook
+    url: "http://localhost:6006", // override URL Storybook
   },
   // Phase 9 — réservé dès la v1 (valeurs par défaut, enrichi après validation)
   stabilize: {
-    freezeAnimations: true,   // v1 : freeze CSS simple activé dès Phase 3
-    waitNetworkQuietMs: 0,      // Phase 9 : fenêtre réseau quiet (ms)
-    waitFonts: true,            // Phase 3
-    burstCapture: false,        // Phase 9 : burst désactivé par défaut (perf)
+    freezeAnimations: true, // v1 : freeze CSS simple activé dès Phase 3
+    waitNetworkQuietMs: 0, // Phase 9 : fenêtre réseau quiet (ms)
+    waitFonts: true, // Phase 3
+    burstCapture: false, // Phase 9 : burst désactivé par défaut (perf)
     burstFrames: 3,
     burstIntervalMs: 100,
-    flakeRetryThreshold: 50,    // Phase 9 : retry si diff suspect (pixels)
+    flakeRetryThreshold: 50, // Phase 9 : retry si diff suspect (pixels)
     maxStabilizeTime: 5_000,
   },
 };
@@ -187,24 +184,24 @@ module.exports = {
 valeur finale = env var (VR_*)  >  vr.config.cjs  >  défauts package
 ```
 
-| Paramètre | Clé `vr.config.cjs` | Override env | Défaut package |
-|---|---|---|---|
-| Devices | `devices` | — | (obligatoire) |
-| Concurrence | `capture.concurrency` | `VR_CONCURRENCY` | `min(cpus, 8)` |
-| Timeout capture | `capture.maxTestTime` | `VR_MAX_TEST_TIME` | `10000` |
-| Mode compare | `compare.mode` | `VR_COMPARE_MODE` | `"incremental"` |
-| Base git | `compare.base` | `VR_COMPARE_BASE` | `"origin/main"` |
-| Working tree | `compare.includeWorkingTree` | — | `true` |
-| Global triggers | `compare.globalTriggers` | — | voir défauts ci-dessus |
-| Stats Webpack | `compare.statsFile` | — | `storybook-static/preview-stats.json` |
-| Manifest hash | `compare.manifestPath` | — | `.vr-cache/manifest.json` |
-| Seuil diff | `compare.threshold` | `VR_THRESHOLD` | `0` |
-| Compare au lancement | `launcher.runInitialCompare` | `VR_RUN_INITIAL_COMPARE` | `false` |
-| Storybook statique | `launcher.storybookStatic` | `VR_STORYBOOK_STATIC` | `false` |
-| URL Storybook | `storybook.url` | `VR_STORYBOOK_URL` | `http://localhost:6006` |
-| Freeze animations | `stabilize.freezeAnimations` | — | `true` |
-| Burst capture | `stabilize.burstCapture` | — | `false` (Phase 9) |
-| Shard index/total | — | `VR_SHARD_INDEX` / `VR_SHARD_TOTAL` | — (CI uniquement, pas dans le fichier) |
+| Paramètre            | Clé `vr.config.cjs`          | Override env                        | Défaut package                         |
+| -------------------- | ---------------------------- | ----------------------------------- | -------------------------------------- |
+| Devices              | `devices`                    | —                                   | (obligatoire)                          |
+| Concurrence          | `capture.concurrency`        | `VR_CONCURRENCY`                    | `min(cpus, 8)`                         |
+| Timeout capture      | `capture.maxTestTime`        | `VR_MAX_TEST_TIME`                  | `10000`                                |
+| Mode compare         | `compare.mode`               | `VR_COMPARE_MODE`                   | `"incremental"`                        |
+| Base git             | `compare.base`               | `VR_COMPARE_BASE`                   | `"origin/main"`                        |
+| Working tree         | `compare.includeWorkingTree` | —                                   | `true`                                 |
+| Global triggers      | `compare.globalTriggers`     | —                                   | voir défauts ci-dessus                 |
+| Stats Webpack        | `compare.statsFile`          | —                                   | `storybook-static/preview-stats.json`  |
+| Manifest hash        | `compare.manifestPath`       | —                                   | `.vr-cache/manifest.json`              |
+| Seuil diff           | `compare.threshold`          | `VR_THRESHOLD`                      | `0`                                    |
+| Compare au lancement | `launcher.runInitialCompare` | `VR_RUN_INITIAL_COMPARE`            | `false`                                |
+| Storybook statique   | `launcher.storybookStatic`   | `VR_STORYBOOK_STATIC`               | `false`                                |
+| URL Storybook        | `storybook.url`              | `VR_STORYBOOK_URL`                  | `http://localhost:6006`                |
+| Freeze animations    | `stabilize.freezeAnimations` | —                                   | `true`                                 |
+| Burst capture        | `stabilize.burstCapture`     | —                                   | `false` (Phase 9)                      |
+| Shard index/total    | —                            | `VR_SHARD_INDEX` / `VR_SHARD_TOTAL` | — (CI uniquement, pas dans le fichier) |
 
 Les paramètres **CI/session** (`VR_SHARD_*`, `VR_PROJECT_ROOT`) restent **env uniquement** — jamais dans le fichier.
 
@@ -239,11 +236,12 @@ type VrConfig = {
   };
 };
 
-function loadVrConfig(root: string): VrConfig   // charge vr.config.cjs
-function resolveVrConfig(root: string): VrConfig  // merge env > fichier > défauts
+function loadVrConfig(root: string): VrConfig; // charge vr.config.cjs
+function resolveVrConfig(root: string): VrConfig; // merge env > fichier > défauts
 ```
 
 Remplacer dans [`src/utils/node.ts`](src/utils/node.ts) :
+
 - `VR_DEVICES_CONFIG_FILENAME` → `VR_CONFIG_FILENAME = "vr.config.cjs"`
 - `loadVrDevicesConfig()` → `resolveVrConfig().devices` (ou export dédiés)
 - Validation : `devices` tableau non vide obligatoire ; autres sections optionnelles avec défauts
@@ -257,7 +255,7 @@ Remplacer dans [`src/utils/node.ts`](src/utils/node.ts) :
    - [`src/utils/node.ts`](src/utils/node.ts), [`src/types/types.ts`](src/types/types.ts)
    - [`src/scripts/vr-server.ts`](src/scripts/vr-server.ts), [`src/VisualRegressions.tsx`](src/VisualRegressions.tsx)
    - [`README.md`](README.md)
-4. Message d'erreur explicite si `vr-devices.config.cjs` détecté : *« Renommez en vr.config.cjs et enveloppez les devices dans un objet »*
+4. Message d'erreur explicite si `vr-devices.config.cjs` détecté : _« Renommez en vr.config.cjs et enveloppez les devices dans un objet »_
 5. Pas de rétrocompat silencieuse — migration claire, une seule source de vérité
 
 ---
@@ -292,6 +290,7 @@ runCaptureBatch(tasks: CaptureTask[], options): Promise<{ success: boolean; stat
 **Unité de travail** : une tâche = `(storyId, deviceName)`, pas un device entier.
 
 **Pourquoi pas 1 worker/device ?**
+
 - 1 device → 0 parallélisme sur les stories (tout séquentiel)
 - 100 devices → 100 contextes simultanés → risque OOM / crash Chromium
 
@@ -321,26 +320,26 @@ function resolveConcurrency(taskCount: number, config: VrConfig): number {
 }
 ```
 
-| Source | Rôle |
-|---|---|
-| `vr.config.cjs` → `capture.concurrency` | Défaut d'équipe versionné |
-| `VR_CONCURRENCY` (env) | Override ponctuel machine/CI |
+| Source                                  | Rôle                         |
+| --------------------------------------- | ---------------------------- |
+| `vr.config.cjs` → `capture.concurrency` | Défaut d'équipe versionné    |
+| `VR_CONCURRENCY` (env)                  | Override ponctuel machine/CI |
 
 **Exemples de comportement :**
 
-| Config | Comportement |
-|---|---|
-| 1 device, 100 stories, N=8 | 8 captures en parallèle sur le même device, puis les suivantes |
-| 100 devices, 10 stories, N=8 | 8 tâches en parallèle réparties sur les devices disponibles |
-| 4 devices, 20 stories (80 tâches) | file de 80 tâches drainée par 8 workers continus |
+| Config                            | Comportement                                                   |
+| --------------------------------- | -------------------------------------------------------------- |
+| 1 device, 100 stories, N=8        | 8 captures en parallèle sur le même device, puis les suivantes |
+| 100 devices, 10 stories, N=8      | 8 tâches en parallèle réparties sur les devices disponibles    |
+| 4 devices, 20 stories (80 tâches) | file de 80 tâches drainée par 8 workers continus               |
 
 **Cycle de vie des ressources :**
 
-| Ressource | Stratégie | Coût |
-|---|---|---|
-| `Browser` | 1 pour tout le run | Élevé |
-| `BrowserContext` | 1 par device, cache lazy | Moyen |
-| `Page` | 1 par tâche, fermée après capture | Faible |
+| Ressource        | Stratégie                         | Coût   |
+| ---------------- | --------------------------------- | ------ |
+| `Browser`        | 1 pour tout le run                | Élevé  |
+| `BrowserContext` | 1 par device, cache lazy          | Moyen  |
+| `Page`           | 1 par tâche, fermée après capture | Faible |
 
 En fin de batch : fermer tous les contextes du cache, puis le browser.
 
@@ -367,14 +366,12 @@ await Promise.all(tasks.map(task => semaphore.run(async () => {
 
 `[compare-visual-regressions.ts](src/scripts/compare-visual-regressions.ts)` devient un orchestrateur léger :
 
-
-| Fonction                   | Changement                                                             |
-| -------------------------- | ---------------------------------------------------------------------- |
+| Fonction                   | Changement                                                                 |
+| -------------------------- | -------------------------------------------------------------------------- |
 | `compareVisualRegressions` | Construit tasks → `filterCaptureTasks()` (TurboSnap) → `runCaptureBatch()` |
-| `compareSelectedStories`   | Tasks depuis la sélection → batch (toujours full pour la sélection UI) |
-| `compareAllStories`        | Tasks complètes → batch full + wipe                                    |
-| `compareByType`            | Tasks depuis `deleted/` → batch full ciblé                             |
-
+| `compareSelectedStories`   | Tasks depuis la sélection → batch (toujours full pour la sélection UI)     |
+| `compareAllStories`        | Tasks complètes → batch full + wipe                                        |
+| `compareByType`            | Tasks depuis `deleted/` → batch full ciblé                                 |
 
 Supprimer les 4 boucles `for` dupliquées (~200 lignes).
 
@@ -386,12 +383,12 @@ Inspiré de [Chromatic TurboSnap](https://www.chromatic.com/docs/turbosnap/) : d
 
 ### Limites de l'approche naïve (git + importPath seul)
 
-| Limite | Exemple |
-|---|---|
+| Limite                                  | Exemple                                                             |
+| --------------------------------------- | ------------------------------------------------------------------- |
 | `importPath` = fichier story uniquement | Modifier `DemoButton.tsx` sans toucher `.stories.tsx` → skip à tort |
-| `git diff HEAD~1` seulement | Modifications non commitées → skip à tort |
-| Pas de graphe de deps | Changer un atom partagé → stories dépendantes non recapturées |
-| Pas de global triggers | Changer `.storybook/preview.tsx` → aucune recapture |
+| `git diff HEAD~1` seulement             | Modifications non commitées → skip à tort                           |
+| Pas de graphe de deps                   | Changer un atom partagé → stories dépendantes non recapturées       |
+| Pas de global triggers                  | Changer `.storybook/preview.tsx` → aucune recapture                 |
 
 ### Architecture TurboSnap local
 
@@ -466,12 +463,7 @@ Si un fichier modifié matche un glob de `compare.globalTriggers` → **run comp
 Défauts :
 
 ```js
-globalTriggers: [
-  ".storybook/**",
-  "package.json",
-  "yarn.lock",
-  "vr.config.cjs",
-]
+globalTriggers: [".storybook/**", "package.json", "yarn.lock", "vr.config.cjs"];
 ```
 
 Configurable dans `vr.config.cjs` (thèmes globaux, tokens, etc.).
@@ -480,14 +472,14 @@ Configurable dans `vr.config.cjs` (thèmes globaux, tokens, etc.).
 
 Une tâche `(storyId, device)` est **capturée** si au moins une condition :
 
-| # | Condition |
-|---|---|
-| 1 | `compare.mode === "full"` ou bouton UI « tout régénérer » |
-| 2 | Fichier modifié matche un `globalTrigger` |
-| 3 | Story dans le graphe de deps des fichiers modifiés (TurboSnap) |
-| 4 | Baseline `src/.../Screenshots/{device}-{storyId}.screenshot.png` absente |
-| 5 | Fichier `__new__` / `__diff__` existant dans `public/Screenshots/` |
-| 6 | Tag `force-vr` sur la story |
+| #   | Condition                                                                |
+| --- | ------------------------------------------------------------------------ |
+| 1   | `compare.mode === "full"` ou bouton UI « tout régénérer »                |
+| 2   | Fichier modifié matche un `globalTrigger`                                |
+| 3   | Story dans le graphe de deps des fichiers modifiés (TurboSnap)           |
+| 4   | Baseline `src/.../Screenshots/{device}-{storyId}.screenshot.png` absente |
+| 5   | Fichier `__new__` / `__diff__` existant dans `public/Screenshots/`       |
+| 6   | Tag `force-vr` sur la story                                              |
 
 Sinon → **skip** avec log : `⏭️ skipped: {device}-{storyId} (unchanged)`.
 
@@ -522,16 +514,15 @@ traceViaStaticImports(changedFiles, storyIndex): Set<string>       // fallback
 
 ### Scénarios couverts
 
-| Scénario | Résultat |
-|---|---|
-| Commit puis compare (CI) | Diff base...HEAD + graphe deps |
-| Modifie sans commit (dev) | Working tree inclus (`includeWorkingTree: true`) |
-| Modifie composant, pas le .stories | Graphe deps remonte vers les stories |
-| Première install / pas de baseline | Capture tout (règle #4) |
-| Change `.storybook/preview.tsx` | Global trigger → capture tout |
-| Pas de git | Manifest hash ; si absent → warn + full |
-| Veut tout refaire | `VR_COMPARE_MODE=full` ou bouton UI |
-
+| Scénario                           | Résultat                                         |
+| ---------------------------------- | ------------------------------------------------ |
+| Commit puis compare (CI)           | Diff base...HEAD + graphe deps                   |
+| Modifie sans commit (dev)          | Working tree inclus (`includeWorkingTree: true`) |
+| Modifie composant, pas le .stories | Graphe deps remonte vers les stories             |
+| Première install / pas de baseline | Capture tout (règle #4)                          |
+| Change `.storybook/preview.tsx`    | Global trigger → capture tout                    |
+| Pas de git                         | Manifest hash ; si absent → warn + full          |
+| Veut tout refaire                  | `VR_COMPARE_MODE=full` ou bouton UI              |
 
 ---
 
@@ -679,12 +670,12 @@ flowchart TD
   L1 --> L2 --> L3 --> L4
 ```
 
-| Couche | Contenu | Phase |
-|---|---|---|
-| Prévention | Storybook statique, blocage réseau externe, freeze CSS | 3 + 7 |
-| Stabilisation | network quiet, images loaded, `data-vr-ready` | **9a** |
-| Burst | N frames + sélection consensus | **9b** (opt-in) |
-| Retry | recapture si diff < seuil flake | **9c** |
+| Couche        | Contenu                                                | Phase           |
+| ------------- | ------------------------------------------------------ | --------------- |
+| Prévention    | Storybook statique, blocage réseau externe, freeze CSS | 3 + 7           |
+| Stabilisation | network quiet, images loaded, `data-vr-ready`          | **9a**          |
+| Burst         | N frames + sélection consensus                         | **9b** (opt-in) |
+| Retry         | recapture si diff < seuil flake                        | **9c**          |
 
 ### 9a — Enrichir `waitForStoryStable()`
 
@@ -709,11 +700,13 @@ Tag story optionnel : `burst-vr` pour forcer burst sur une story flaky.
 `stabilize.burstCapture: false` par défaut — **ne pas** activer globalement (coût × N frames).
 
 Activation :
+
 - globalement via `vr.config.cjs` si besoin
 - par story via tag `burst-vr`
 - **retry automatique** : si comparaison échoue avec diff < `flakeRetryThreshold` pixels → 1 recapture avec burst avant de déclarer VR
 
 Algorithme burst :
+
 1. N screenshots espacés de `burstIntervalMs`
 2. Comparer pixel à pixel entre frames
 3. Choisir la frame consensus (ou 2 frames consécutives identiques)
@@ -772,8 +765,6 @@ flowchart TD
   gate -->|non| P8
 ```
 
-
-
 ---
 
 ## Validation (Phases 0–8 — v1)
@@ -799,28 +790,25 @@ flowchart TD
 
 ## Fichiers principaux touchés
 
-
-| Fichier | Action |
-|---|---|
-| [`vr.config.cjs`](vr.config.cjs) | **Créer** — remplace `vr-devices.config.cjs` (devices + paramètres moteur) |
-| [`src/utils/vr-config.ts`](src/utils/vr-config.ts) | **Créer** — `loadVrConfig()` + `resolveVrConfig()` |
-| [`src/scripts/vr-capture-engine.ts`](src/scripts/vr-capture-engine.ts) | **Créer** — moteur capture/compare |
-| [`src/utils/vr-incremental.ts`](src/utils/vr-incremental.ts) | **Créer** — changed files, global triggers, filterCaptureTasks, manifest |
-| [`src/utils/vr-dependency-graph.ts`](src/utils/vr-dependency-graph.ts) | **Créer** — TurboSnap via preview-stats.json + fallback imports statiques |
-| [`.vr-cache/manifest.json`](.vr-cache/manifest.json) | **Généré** — hashes fichiers pour fallback sans git |
-| [`storybook-static/preview-stats.json`](storybook-static/preview-stats.json) | **Généré** — graphe Webpack au build Storybook |
-| [`src/scripts/compare-visual-regressions.ts`](src/scripts/compare-visual-regressions.ts) | **Refactor** — délègue au moteur |
-| [`src/utils/node.ts`](src/utils/node.ts) | Migrer chargement config vers `vr-config.ts` |
-| [`src/types/types.ts`](src/types/types.ts) | Types `VrConfig`, mise à jour commentaires |
-| [`bin/visual-regression.mjs`](bin/visual-regression.mjs) | Vérifie `vr.config.cjs` |
-| [`src/scripts/vr-launcher.ts`](src/scripts/vr-launcher.ts) | Lit `launcher.*` depuis config |
-| [`src/constants/constants.ts`](src/constants/constants.ts) | URL Storybook via config résolue |
-| [`src/scripts/vr-server.ts`](src/scripts/vr-server.ts) | Devices + modes full explicites |
-| [`src/VisualRegressions.tsx`](src/VisualRegressions.tsx) | Message d'aide → `vr.config.cjs` |
-| [`README.md`](README.md) | Documenter `vr.config.cjs`, TurboSnap local, hiérarchie env > fichier > défauts, migration |
-| [`.gitignore`](.gitignore) | Ajouter `.vr-cache/` (manifest local) |
-| [`.storybook/preview.tsx`](.storybook/preview.tsx) | Option `data-vr-ready` (Phase 3) ; flag `VR_CAPTURE` (Phase 9) |
-| `vr-devices.config.cjs` | **Supprimer** après migration |
-| [`src/utils/vr-steadysnap.ts`](src/utils/vr-steadysnap.ts) | **Créer Phase 9** — stabilisation avancée, burst, retry flake |
-
-
+| Fichier                                                                                  | Action                                                                                     |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| [`vr.config.cjs`](vr.config.cjs)                                                         | **Créer** — remplace `vr-devices.config.cjs` (devices + paramètres moteur)                 |
+| [`src/utils/vr-config.ts`](src/utils/vr-config.ts)                                       | **Créer** — `loadVrConfig()` + `resolveVrConfig()`                                         |
+| [`src/scripts/vr-capture-engine.ts`](src/scripts/vr-capture-engine.ts)                   | **Créer** — moteur capture/compare                                                         |
+| [`src/utils/vr-incremental.ts`](src/utils/vr-incremental.ts)                             | **Créer** — changed files, global triggers, filterCaptureTasks, manifest                   |
+| [`src/utils/vr-dependency-graph.ts`](src/utils/vr-dependency-graph.ts)                   | **Créer** — TurboSnap via preview-stats.json + fallback imports statiques                  |
+| [`.vr-cache/manifest.json`](.vr-cache/manifest.json)                                     | **Généré** — hashes fichiers pour fallback sans git                                        |
+| [`storybook-static/preview-stats.json`](storybook-static/preview-stats.json)             | **Généré** — graphe Webpack au build Storybook                                             |
+| [`src/scripts/compare-visual-regressions.ts`](src/scripts/compare-visual-regressions.ts) | **Refactor** — délègue au moteur                                                           |
+| [`src/utils/node.ts`](src/utils/node.ts)                                                 | Migrer chargement config vers `vr-config.ts`                                               |
+| [`src/types/types.ts`](src/types/types.ts)                                               | Types `VrConfig`, mise à jour commentaires                                                 |
+| [`bin/visual-regression.mjs`](bin/visual-regression.mjs)                                 | Vérifie `vr.config.cjs`                                                                    |
+| [`src/scripts/vr-launcher.ts`](src/scripts/vr-launcher.ts)                               | Lit `launcher.*` depuis config                                                             |
+| [`src/constants/constants.ts`](src/constants/constants.ts)                               | URL Storybook via config résolue                                                           |
+| [`src/scripts/vr-server.ts`](src/scripts/vr-server.ts)                                   | Devices + modes full explicites                                                            |
+| [`src/VisualRegressions.tsx`](src/VisualRegressions.tsx)                                 | Message d'aide → `vr.config.cjs`                                                           |
+| [`README.md`](README.md)                                                                 | Documenter `vr.config.cjs`, TurboSnap local, hiérarchie env > fichier > défauts, migration |
+| [`.gitignore`](.gitignore)                                                               | Ajouter `.vr-cache/` (manifest local)                                                      |
+| [`.storybook/preview.tsx`](.storybook/preview.tsx)                                       | Option `data-vr-ready` (Phase 3) ; flag `VR_CAPTURE` (Phase 9)                             |
+| `vr-devices.config.cjs`                                                                  | **Supprimer** après migration                                                              |
+| [`src/utils/vr-steadysnap.ts`](src/utils/vr-steadysnap.ts)                               | **Créer Phase 9** — stabilisation avancée, burst, retry flake                              |

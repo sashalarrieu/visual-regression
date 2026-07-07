@@ -29,6 +29,9 @@ import {
 const PROJECT_ROOT = getProjectRoot();
 const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR } = getProjectPaths(PROJECT_ROOT);
 
+/** Scope git pour ce script : working tree uniquement (ignore les commits branche vs origin/main). */
+const TEST_COMPARE_SCOPE = "working-tree" as const;
+
 /** Fichier demo suggéré pour un test incrémental isolé. */
 const SUGGESTED_DEMO_FILE = "src/demo/components/DemoButton/DemoButton.tsx";
 
@@ -48,14 +51,16 @@ Usage:
 Prérequis vérifiés:
   • Storybook accessible (yarn storybook ou yarn vr)
   • compare.mode = incremental dans vr.config.cjs
-  • Aucun global trigger dans les fichiers modifiés (vr.config.cjs, package.json, .storybook/**, …)
-  • Au moins un fichier source modifié (working tree ou branche vs ${"origin/main"})
+  • Aucun global trigger dans le working tree (vr.config.cjs, package.json, .storybook/**, …)
+  • Au moins un fichier modifié localement (non commité ou staged)
   • Baselines demo présentes dans src/**/Screenshots/
 
+Note: scope working-tree — les commits branche vs origin/main sont ignorés.
+Pour CI/PR, utilisez compare.scope = all (défaut) dans vr.config.cjs.
+
 Pour un test propre:
-  1. git commit (working tree clean)
-  2. Modifier uniquement ${SUGGESTED_DEMO_FILE}
-  3. yarn vr:test-incremental
+  1. Modifier uniquement ${SUGGESTED_DEMO_FILE} (commit ou non)
+  2. yarn vr:test-incremental
 `);
 };
 
@@ -117,6 +122,11 @@ const runChecks = async (): Promise<boolean> => {
   const config = resolveVrConfig(PROJECT_ROOT);
   const checks: CheckResult[] = [];
 
+  checks.push({
+    ok: true,
+    message: `✅ Scope git : ${TEST_COMPARE_SCOPE} (working tree — commits branche vs ${config.compare.base} ignorés)`,
+  });
+
   // Storybook
   const storybookReady = await waitForStorybookStories(1, 15);
   checks.push({
@@ -135,7 +145,15 @@ const runChecks = async (): Promise<boolean> => {
         : `❌ compare.mode = ${config.compare.mode} — attendu "incremental" (ou VR_COMPARE_MODE=incremental)`,
   });
 
-  const changed = getChangedFiles(PROJECT_ROOT, config);
+  const changed = getChangedFiles(PROJECT_ROOT, config, { scope: TEST_COMPARE_SCOPE });
+
+  const branchChanged = getChangedFiles(PROJECT_ROOT, config, { scope: "all" });
+  const branchTriggers = getGlobalTriggerMatches(branchChanged.files, config);
+  if (branchTriggers.length > 0 && getGlobalTriggerMatches(changed.files, config).length === 0) {
+    console.log(
+      `\nℹ️  Votre branche contient des global triggers vs ${config.compare.base} (${branchTriggers.slice(0, 4).join(", ")}${branchTriggers.length > 4 ? "…" : ""}) — ignorés pour ce test local.`,
+    );
+  }
 
   if (changed.requiresFullRun) {
     checks.push({
@@ -259,6 +277,7 @@ const main = async () => {
   }
 
   console.log("🚀 Lancement de la comparaison incrémentale…\n");
+  process.env.VR_COMPARE_SCOPE = TEST_COMPARE_SCOPE;
   await compareVisualRegressions();
 };
 

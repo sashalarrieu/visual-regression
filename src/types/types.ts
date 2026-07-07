@@ -125,6 +125,9 @@ export type VRDeviceConfigItem = {
 
 export type VrCompareMode = "incremental" | "full";
 
+/** Périmètre des fichiers modifiés pour le mode incrémental. */
+export type VrChangedFilesScope = "all" | "branch" | "working-tree";
+
 /** Configuration VR résolue (fichier + env + défauts). */
 export type VrConfig = {
   devices: VRDeviceConfigItem[];
@@ -135,6 +138,8 @@ export type VrConfig = {
   compare: {
     mode: VrCompareMode;
     base: string;
+    /** all = branche + working tree (CI) ; working-tree = dev local sur branche feature */
+    scope: VrChangedFilesScope;
     includeWorkingTree: boolean;
     threshold: number;
     globalTriggers: string[];

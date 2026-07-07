@@ -34,7 +34,7 @@ export const DemoButton = ({ label, variant = "primary", disabled = false, onPre
 export const DemoButtonGroup = () => (
   <View style={styles.group}>
     <DemoButton
-      label="Test"
+      label="Label"
       variant="primary"
     />
     <DemoButton

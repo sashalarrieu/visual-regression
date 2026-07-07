@@ -7,7 +7,7 @@ import { createHash } from "crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 
-import type { VrConfig } from "@app-types/types";
+import type { VrConfig, VrChangedFilesScope } from "@app-types/types";
 import {
   DIFF_SCREENSHOT_NAME,
   FORCE_VR_TAG,
@@ -59,23 +59,31 @@ const parseGitOutput = (output: string | null): string[] => {
 };
 
 /** Fichiers modifiés via git (base + working tree + untracked src/**). */
-export const getChangedFilesFromGit = (projectRoot: string, config: VrConfig): string[] => {
+export const getChangedFilesFromGit = (
+  projectRoot: string,
+  config: VrConfig,
+  scope: VrChangedFilesScope = config.compare.scope ?? "all",
+): string[] => {
   const { compare } = config;
   const changed = new Set<string>();
 
-  for (const file of parseGitOutput(runGit(projectRoot, `diff --name-only ${compare.base}...HEAD`))) {
-    changed.add(file);
+  if (scope === "all" || scope === "branch") {
+    for (const file of parseGitOutput(runGit(projectRoot, `diff --name-only ${compare.base}...HEAD`))) {
+      changed.add(file);
+    }
   }
 
-  if (compare.includeWorkingTree) {
-    for (const file of parseGitOutput(runGit(projectRoot, "diff --name-only HEAD"))) {
-      changed.add(file);
-    }
-    for (const file of parseGitOutput(runGit(projectRoot, "diff --name-only --cached"))) {
-      changed.add(file);
-    }
-    for (const file of parseGitOutput(runGit(projectRoot, "ls-files --others --exclude-standard -- src/"))) {
-      changed.add(file);
+  if (scope === "all" || scope === "working-tree") {
+    if (compare.includeWorkingTree) {
+      for (const file of parseGitOutput(runGit(projectRoot, "diff --name-only HEAD"))) {
+        changed.add(file);
+      }
+      for (const file of parseGitOutput(runGit(projectRoot, "diff --name-only --cached"))) {
+        changed.add(file);
+      }
+      for (const file of parseGitOutput(runGit(projectRoot, "ls-files --others --exclude-standard -- src/"))) {
+        changed.add(file);
+      }
     }
   }
 
@@ -156,9 +164,15 @@ export const getChangedFilesFromManifest = (projectRoot: string, config: VrConfi
 };
 
 /** Combine git ou manifest. */
-export const getChangedFiles = (projectRoot: string, config: VrConfig): ChangedFilesResult => {
+export const getChangedFiles = (
+  projectRoot: string,
+  config: VrConfig,
+  options?: { scope?: VrChangedFilesScope },
+): ChangedFilesResult => {
+  const scope = options?.scope ?? config.compare.scope ?? "all";
+
   if (isGitRepo(projectRoot)) {
-    const files = getChangedFilesFromGit(projectRoot, config);
+    const files = getChangedFilesFromGit(projectRoot, config, scope);
     return { files, source: "git" };
   }
 
