@@ -155,6 +155,8 @@ export type VrConfig = {
     scope: VrChangedFilesScope;
     includeWorkingTree: boolean;
     threshold: number;
+    /** Recaptures max quand une diff est détectée (anti-flake). */
+    diffVerificationMaxAttempts: number;
     globalTriggers: string[];
     statsFile: string;
     manifestPath: string;
@@ -173,9 +175,14 @@ export type VrConfig = {
     burstCapture: boolean;
     burstFrames: number;
     burstIntervalMs: number;
-    flakeRetryThreshold: number;
     maxStabilizeTime: number;
   };
+};
+
+/** Overrides VR par story (`parameters.vr` dans CSF) — fusionnés sur vr.config.cjs. */
+export type VrStoryParameters = {
+  stabilize?: Partial<VrConfig["stabilize"]>;
+  diffVerificationMaxAttempts?: number;
 };
 
 /** Sections optionnelles de vr.config.cjs (fichier brut). */

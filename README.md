@@ -103,8 +103,71 @@ Sections principales de `vr.config.cjs` :
 | `compare.base` | Ref git pour le diff (ex. `origin/main`) |
 | `compare.globalTriggers` | Fichiers modifiés → run complet |
 | `compare.statsFile` | `preview-stats.json` pour TurboSnap |
+| `compare.diffVerificationMaxAttempts` | Recaptures max si diff (défaut `3`, env `VR_DIFF_VERIFY_MAX_ATTEMPTS`) |
 | `launcher.runInitialCompare` | Compare au `yarn vr` (défaut `true`) |
 | `storybook.url` | URL Storybook (override `VR_STORYBOOK_URL`) |
+| `stabilize.*` | SteadySnap — voir section dédiée ci-dessous |
+
+### SteadySnap (anti-flake)
+
+Stabilisation des captures inspirée de [Chromatic SteadySnap](https://www.chromatic.com/blog/steadysnap/) — équivalent self-hosted, burst **opt-in** par défaut.
+
+| Clé | Défaut | Rôle |
+|-----|--------|------|
+| `stabilize.freezeAnimations` | `true` | Freeze CSS animations/transitions |
+| `stabilize.waitFonts` | `true` | Attend `document.fonts.ready` |
+| `stabilize.waitNetworkQuietMs` | `0` | Fenêtre sans requête réseau (ms) avant capture |
+| `stabilize.maxStabilizeTime` | `5000` | Plafond attente stabilisation |
+| `stabilize.burstCapture` | `false` | Burst N frames pour toutes les stories |
+| `stabilize.burstFrames` | `3` | Nombre de frames burst |
+| `stabilize.burstIntervalMs` | `100` | Intervalle entre frames burst |
+
+**Tags Storybook :**
+
+- `live-animation-vr` — **opt-out** : conserve Reanimated en capture (défaut = figé via preview)
+- `burst-vr` — burst SteadySnap côté Playwright (stories animées non figées)
+- `skip-play-vr` — n'exécute pas `play()` en capture (opt-out du decorator preview)
+- `ignore-vr` / `force-vr` — exclusion / inclusion forcée au compare
+
+**Storybook preview :** en capture (`vr-capture=1`), le decorator applique `ReducedMotionConfig` (Reanimated figé à l'état initial). Un second decorator exécute `play()` puis pose `data-vr-ready="true"` sur `#storybook-root`.
+
+**Stories `play()` :** exécutées automatiquement avant chaque screenshot VR. Playwright attend `data-vr-ready="true"` sur les stories taguées `play-fn`.
+
+**Vérification diff :** si une capture diffère de la baseline, le moteur relance jusqu'à match ou `compare.diffVerificationMaxAttempts` (défaut 3). Override global : `VR_DIFF_VERIFY_MAX_ATTEMPTS`.
+
+**Overrides par story (`parameters.vr`)** — fusionnés sur `vr.config.cjs` (meta ou story CSF) :
+
+| Clé | Rôle |
+|-----|------|
+| `parameters.vr.stabilize.*` | Sous-ensemble de `stabilize` (ex. `burstIntervalMs`, `maxStabilizeTime`) |
+| `parameters.vr.diffVerificationMaxAttempts` | Recaptures max pour cette story uniquement |
+
+Définir `burstIntervalMs` ou `burstFrames` active automatiquement le burst pour la story (sans tag `burst-vr`).
+
+```tsx
+export const SlowIncrementToThree: Story = {
+  parameters: {
+    vr: {
+      stabilize: { burstIntervalMs: 1000 },
+      diffVerificationMaxAttempts: 5,
+    },
+  },
+  play: async ({ canvasElement, step }) => { /* … */ },
+};
+```
+
+**Attente custom :** ajouter `data-vr-ready="true"` sur `#storybook-root` quand la story est prête (stories lourdes).
+
+```js
+compare: {
+  diffVerificationMaxAttempts: 3,
+},
+stabilize: {
+  freezeAnimations: true,
+  waitNetworkQuietMs: 300,
+  burstCapture: false,
+},
+```
 
 ### Mode incrémental et TurboSnap
 

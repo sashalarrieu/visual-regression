@@ -10,7 +10,7 @@ const meta = {
   parameters: {
     docs: {
       description: {
-        component: "Enchaînement multi-étapes via `play()` — interactions séquentielles pour SteadySnap.",
+        component: "Enchaînement multi-étapes via `play()` — exécuté en capture VR avant screenshot.",
       },
     },
   },

@@ -10,7 +10,7 @@ const meta = {
   parameters: {
     docs: {
       description: {
-        component: "Stories avec `play()` qui modifient l'état avant la capture VR — scénario flake / SteadySnap.",
+        component: "Stories avec `play()` — exécuté automatiquement en capture VR avant le screenshot.",
       },
     },
   },
@@ -42,8 +42,15 @@ export const AfterThreeClicks: Story = {
   },
 };
 
-/** play() avec délais entre clics — risque de capture intermédiaire sans stabilisation. */
+/** play() avec délais entre clics — burst espacé via parameters.vr. */
 export const SlowIncrementToThree: Story = {
+  parameters: {
+    vr: {
+      stabilize: {
+        burstIntervalMs: 1000,
+      },
+    },
+  },
   play: async ({ canvasElement, step }) => {
     await step("Clics espacés (200 ms)", async () => {
       for (let i = 0; i < 3; i++) {

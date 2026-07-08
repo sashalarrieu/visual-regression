@@ -10,7 +10,7 @@ const meta = {
   parameters: {
     docs: {
       description: {
-        component: "Overlay conditionnel déclenché par `play()` — changement de layout pour la VR.",
+        component: "Overlay conditionnel déclenché par `play()` — exécuté en capture VR avant screenshot.",
       },
     },
   },

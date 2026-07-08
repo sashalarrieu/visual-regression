@@ -58,6 +58,7 @@ export const getDefaultVrConfig = (): VrConfig => ({
     scope: "all",
     includeWorkingTree: true,
     threshold: 0,
+    diffVerificationMaxAttempts: 3,
     globalTriggers: [...DEFAULT_GLOBAL_TRIGGERS],
     statsFile: "storybook-static/preview-stats.json",
     manifestPath: ".vr-cache/manifest.json",
@@ -76,7 +77,6 @@ export const getDefaultVrConfig = (): VrConfig => ({
     burstCapture: false,
     burstFrames: 3,
     burstIntervalMs: 100,
-    flakeRetryThreshold: 50,
     maxStabilizeTime: 5_000,
   },
 });
@@ -147,6 +147,7 @@ export const resolveVrConfig = (root?: string): VrConfig => {
   const envStorybookUrl = process.env.VR_STORYBOOK_URL;
   const envRunInitialCompare = envBool(process.env.VR_RUN_INITIAL_COMPARE);
   const envStorybookStatic = envBool(process.env.VR_STORYBOOK_STATIC);
+  const envDiffVerifyMaxAttempts = parsePositiveEnv(process.env.VR_DIFF_VERIFY_MAX_ATTEMPTS);
 
   return {
     ...config,
@@ -161,6 +162,7 @@ export const resolveVrConfig = (root?: string): VrConfig => {
       ...(compareScope !== undefined ? { scope: compareScope } : {}),
       ...(envCompareBase ? { base: envCompareBase } : {}),
       ...(envThreshold !== undefined && Number.isFinite(envThreshold) ? { threshold: envThreshold } : {}),
+      ...(envDiffVerifyMaxAttempts !== undefined ? { diffVerificationMaxAttempts: envDiffVerifyMaxAttempts } : {}),
     },
     launcher: {
       ...config.launcher,

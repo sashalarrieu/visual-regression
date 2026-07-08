@@ -31,6 +31,25 @@ import {
   TEMP_SCREENSHOT_NAME,
 } from "@constants/constants";
 import { getDevicesConfig, getProjectPaths, getProjectRoot, resolveVrConfig } from "@utils/node";
+import {
+  formatDiffConfirmedLog,
+  formatDiffVerifyRetryLog,
+  formatFlakeSuppressedLog,
+  shouldRetryDiffVerification,
+} from "@utils/vr-diff-verify";
+import {
+  appendVrCaptureParam,
+  captureWithBurst,
+  getStoryTags,
+  NetworkQuietTracker,
+  waitForStoryStable,
+} from "@utils/vr-steadysnap";
+import {
+  getStoryDiffVerificationMaxAttempts,
+  readStoryVrParameters,
+  resolveEffectiveVrConfig,
+  shouldUseBurstCapture,
+} from "@utils/vr-story-config";
 
 const PROJECT_ROOT = getProjectRoot();
 const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR } = getProjectPaths(PROJECT_ROOT);
@@ -268,39 +287,13 @@ export const logCaptureTimerEnd = (durationMs: number, taskCount: number): void 
 };
 
 export const getStoryIframeUrl = (storybookUrl: string, storyId: string): string =>
-  `${storybookUrl.replace(/\/$/, "")}/iframe.html?id=${storyId}&viewMode=story`;
+  appendVrCaptureParam(`${storybookUrl.replace(/\/$/, "")}/iframe.html?id=${storyId}&viewMode=story`);
 
-/** Attente composite v1 : root visible, fonts, contenu rendu, freeze CSS optionnel. */
-export const waitForStoryStable = async (page: Page, config: VrConfig): Promise<void> => {
-  const timeout = config.capture.maxTestTime;
+export type CompareScreenshotOutcome = "match" | "new" | "diff" | "missing_temp";
 
-  await page.waitForSelector("#storybook-root >> visible=true", { timeout });
-
-  if (config.stabilize.waitFonts) {
-    await page.evaluate(async () => {
-      if (document.fonts?.ready) {
-        await document.fonts.ready;
-      }
-    });
-  }
-
-  await page.waitForFunction(() => (document.querySelector("#storybook-root")?.children.length ?? 0) > 0, { timeout });
-
-  if (config.stabilize.freezeAnimations) {
-    await page.addStyleTag({
-      content: `
-        *, *::before, *::after {
-          animation-duration: 0s !important;
-          animation-delay: 0s !important;
-          transition-duration: 0s !important;
-          transition-delay: 0s !important;
-        }
-      `,
-    });
-    await page.evaluate(
-      () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
-    );
-  }
+export type CompareScreenshotResult = {
+  outcome: CompareScreenshotOutcome;
+  diffPixels: number;
 };
 
 export async function launchBrowser(): Promise<Browser> {
@@ -447,16 +440,16 @@ export const compareScreenshots = ({
   storiesWithDiff: string[];
   logs: LogsType;
   threshold: number;
-}): void => {
+}): CompareScreenshotResult => {
   if (!existsSync(tempScreenshotPath)) {
     addLogs({ log: `🚫 No temp screenshot found for ${tempScreenshotPath}`, logs });
-    return;
+    return { outcome: "missing_temp", diffPixels: 0 };
   }
 
   if (!existsSync(screenshotPath)) {
     renameSync(tempScreenshotPath, newScreenshotPath);
     addLogs({ log: `❇️  New screenshot for ${screenshotPath}`, type: "new", logs });
-    return;
+    return { outcome: "new", diffPixels: 0 };
   }
 
   const baselineBuffer = readFileSync(screenshotPath);
@@ -469,7 +462,7 @@ export const compareScreenshots = ({
       // ignore
     }
     console.log(`✅ No visual regression for ${storyId}`);
-    return;
+    return { outcome: "match", diffPixels: 0 };
   }
 
   const img1 = PNG.sync.read(baselineBuffer);
@@ -491,7 +484,7 @@ export const compareScreenshots = ({
       storiesWithDiff.push(diffScreenshotPath);
     }
     addLogs({ log: `⚠️  Visual regression for ${storyId} (size mismatch)`, type: "vr", logs });
-    return;
+    return { outcome: "diff", diffPixels: Number.MAX_SAFE_INTEGER };
   }
 
   const diff = new PNG({ width: img1.width, height: img1.height });
@@ -505,7 +498,7 @@ export const compareScreenshots = ({
       storiesWithDiff.push(diffScreenshotPath);
     }
     addLogs({ log: `⚠️  Visual regression for ${storyId} (${numDiffPixels} pixels)`, type: "vr", logs });
-    return;
+    return { outcome: "diff", diffPixels: numDiffPixels };
   }
 
   try {
@@ -514,6 +507,27 @@ export const compareScreenshots = ({
     // ignore
   }
   console.log(`✅ No visual regression for ${storyId}`);
+  return { outcome: "match", diffPixels: 0 };
+};
+
+const writeStoryScreenshot = async ({
+  page,
+  tempScreenshotPath,
+  config,
+  useBurst,
+}: {
+  page: Page;
+  tempScreenshotPath: string;
+  config: VrConfig;
+  useBurst: boolean;
+}): Promise<void> => {
+  mkdirSync(path.dirname(tempScreenshotPath), { recursive: true });
+  const locator = page.locator("#storybook-root");
+  if (useBurst) {
+    await captureWithBurst(page, locator, config, tempScreenshotPath);
+    return;
+  }
+  await locator.screenshot({ path: tempScreenshotPath });
 };
 
 const captureStoryScreenshot = async ({
@@ -524,6 +538,10 @@ const captureStoryScreenshot = async ({
   storybookUrl,
   config,
   logs,
+  useBurst,
+  networkTracker,
+  storyTags,
+  skipGoto = false,
 }: {
   page: Page;
   storyId: string;
@@ -532,7 +550,11 @@ const captureStoryScreenshot = async ({
   storybookUrl: string;
   config: VrConfig;
   logs: LogsType;
-}): Promise<void> => {
+  useBurst: boolean;
+  networkTracker: NetworkQuietTracker;
+  storyTags: string[];
+  skipGoto?: boolean;
+}): Promise<boolean> => {
   const maxTestTime = config.capture.maxTestTime;
   const timer = setTimeout(() => {
     addLogs({
@@ -542,8 +564,12 @@ const captureStoryScreenshot = async ({
   }, maxTestTime);
 
   try {
-    await page.goto(getStoryIframeUrl(storybookUrl, storyId), { waitUntil: "load", timeout: maxTestTime });
-    await waitForStoryStable(page, config);
+    if (!skipGoto) {
+      networkTracker.attach(page);
+      await page.goto(getStoryIframeUrl(storybookUrl, storyId), { waitUntil: "load", timeout: maxTestTime });
+    }
+
+    await waitForStoryStable(page, config, networkTracker, storyTags);
 
     const storyNotFound = await page.getByText(/Couldn't find story/i).count();
     if (storyNotFound > 0) {
@@ -551,13 +577,14 @@ const captureStoryScreenshot = async ({
         log: `📸 Storybook n'a pas rendu la story ${storyId} (${deviceName}) — index Storybook vide ou story introuvable`,
         logs,
       });
-      return;
+      return false;
     }
 
-    mkdirSync(path.dirname(tempScreenshotPath), { recursive: true });
-    await page.locator("#storybook-root").screenshot({ path: tempScreenshotPath });
+    await writeStoryScreenshot({ page, tempScreenshotPath, config, useBurst });
+    return true;
   } catch {
     addLogs({ log: `📸 Failed to capture screenshot for ${storyId} (${deviceName})`, logs });
+    return false;
   } finally {
     clearTimeout(timer);
   }
@@ -566,6 +593,28 @@ const captureStoryScreenshot = async ({
 const isBrowserClosedError = (error: unknown): boolean => {
   const msg = error instanceof Error ? error.message : String(error);
   return /target page, context or browser has been closed/i.test(msg) || /browser has been closed/i.test(msg);
+};
+
+const clearDiffArtifacts = ({
+  paths,
+  screenshotKey,
+  storiesWithDiff,
+  logs,
+}: {
+  paths: ScreenshotPaths;
+  screenshotKey: string;
+  storiesWithDiff: string[];
+  logs: LogsType;
+}): void => {
+  try {
+    if (existsSync(paths.tempScreenshotPath)) unlinkSync(paths.tempScreenshotPath);
+    if (existsSync(paths.diffScreenshotPath)) unlinkSync(paths.diffScreenshotPath);
+    const diffIdx = storiesWithDiff.indexOf(paths.diffScreenshotPath);
+    if (diffIdx >= 0) storiesWithDiff.splice(diffIdx, 1);
+  } catch {
+    // ignore cleanup
+  }
+  logs.vrs = logs.vrs.filter(log => !log.includes(screenshotKey));
 };
 
 const runSingleTask = async ({
@@ -600,29 +649,69 @@ const runSingleTask = async ({
   const paths = buildScreenshotPaths(task.componentDir, task.deviceName, task.storyId);
   const context = await getOrCreateContext(browser, task.deviceName, deviceConfig, contextCache, config.storybook.url);
   const page = await context.newPage();
+  const networkTracker = new NetworkQuietTracker();
+  const storyTags = await getStoryTags(task.storyId, config.storybook.url);
+  const screenshotKey = `${task.deviceName}-${task.storyId}`;
 
   try {
-    await captureStoryScreenshot({
-      page,
-      storyId: task.storyId,
-      deviceName: task.deviceName,
-      tempScreenshotPath: paths.tempScreenshotPath,
-      storybookUrl: config.storybook.url,
-      config,
-      logs,
+    networkTracker.attach(page);
+    await page.goto(getStoryIframeUrl(config.storybook.url, task.storyId), {
+      waitUntil: "load",
+      timeout: config.capture.maxTestTime,
     });
 
-    compareScreenshots({
-      storyId: `${task.deviceName}-${task.storyId}`,
-      screenshotPath: paths.screenshotPath,
-      publicScreenshotPath: paths.publicScreenshotPath,
-      newScreenshotPath: paths.newScreenshotPath,
-      tempScreenshotPath: paths.tempScreenshotPath,
-      diffScreenshotPath: paths.diffScreenshotPath,
-      storiesWithDiff,
-      logs,
-      threshold: config.compare.threshold,
-    });
+    const storyVr = await readStoryVrParameters(page, task.storyId);
+    const effectiveConfig = resolveEffectiveVrConfig(config, storyVr);
+    const useBurst = shouldUseBurstCapture(effectiveConfig, storyTags, storyVr);
+    const maxDiffAttempts = getStoryDiffVerificationMaxAttempts(config, storyVr);
+
+    let attempt = 1;
+    let compareResult: CompareScreenshotResult = { outcome: "missing_temp", diffPixels: 0 };
+
+    while (true) {
+      const captured = await captureStoryScreenshot({
+        page,
+        storyId: task.storyId,
+        deviceName: task.deviceName,
+        tempScreenshotPath: paths.tempScreenshotPath,
+        storybookUrl: config.storybook.url,
+        config: effectiveConfig,
+        logs,
+        useBurst,
+        networkTracker,
+        storyTags,
+        skipGoto: attempt === 1,
+      });
+
+      if (!captured) return;
+
+      compareResult = compareScreenshots({
+        storyId: screenshotKey,
+        screenshotPath: paths.screenshotPath,
+        publicScreenshotPath: paths.publicScreenshotPath,
+        newScreenshotPath: paths.newScreenshotPath,
+        tempScreenshotPath: paths.tempScreenshotPath,
+        diffScreenshotPath: paths.diffScreenshotPath,
+        storiesWithDiff,
+        logs,
+        threshold: effectiveConfig.compare.threshold,
+      });
+
+      if (!shouldRetryDiffVerification(attempt, compareResult.outcome, maxDiffAttempts)) {
+        if (compareResult.outcome === "diff" && attempt >= maxDiffAttempts) {
+          console.log(formatDiffConfirmedLog(maxDiffAttempts, screenshotKey));
+        }
+        break;
+      }
+
+      console.log(formatDiffVerifyRetryLog(attempt + 1, maxDiffAttempts, screenshotKey));
+      clearDiffArtifacts({ paths, screenshotKey, storiesWithDiff, logs });
+      attempt++;
+    }
+
+    if (compareResult.outcome === "match" && attempt > 1) {
+      console.log(formatFlakeSuppressedLog(attempt, screenshotKey));
+    }
   } finally {
     await page.close().catch(() => undefined);
   }

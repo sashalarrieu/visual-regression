@@ -9,6 +9,7 @@
  *   VR_PROJECT_ROOT, VR_CONCURRENCY, VR_MAX_TEST_TIME, VR_COMPARE_MODE,
  *   VR_COMPARE_BASE, VR_COMPARE_SCOPE, VR_THRESHOLD, VR_RUN_INITIAL_COMPARE,
  *   VR_STORYBOOK_URL, VR_STORYBOOK_STATIC, VR_STORYBOOK_STATIC_REBUILD,
+ *   VR_DIFF_VERIFY_MAX_ATTEMPTS,
  *   VR_SHARD_INDEX, VR_SHARD_TOTAL
  */
 
@@ -55,6 +56,14 @@ export const getStoryIframeUrl = (storyId: string): string => `${STORY_BASE_URI}
 
 export const IGNORE_VR_TAG = "ignore-vr";
 export const FORCE_VR_TAG = "force-vr";
+/** Active le burst SteadySnap sur une story flaky (override `stabilize.burstCapture: false`). */
+export const BURST_VR_TAG = "burst-vr";
+/** En capture VR : conserve les animations Reanimated (opt-out du freeze global preview). */
+export const LIVE_ANIMATION_VR_TAG = "live-animation-vr";
+/** En capture VR : n'exécute pas `play()` (opt-out du decorator preview). */
+export const SKIP_PLAY_VR_TAG = "skip-play-vr";
+/** Tag Storybook auto-appliqué aux stories avec `play()`. */
+export const PLAY_FN_TAG = "play-fn";
 
 // --- Logs console (launcher) ---
 

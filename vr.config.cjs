@@ -52,6 +52,7 @@ module.exports = {
     base: "origin/main",
     includeWorkingTree: true,
     threshold: 0,
+    diffVerificationMaxAttempts: 3,
     globalTriggers: [".storybook/**", "package.json", "yarn.lock", "vr.config.cjs"],
     statsFile: "storybook-static/preview-stats.json",
     manifestPath: ".vr-cache/manifest.json",
@@ -70,7 +71,6 @@ module.exports = {
     burstCapture: false,
     burstFrames: 3,
     burstIntervalMs: 100,
-    flakeRetryThreshold: 50,
     maxStabilizeTime: 5000,
   },
 };

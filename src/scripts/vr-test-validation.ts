@@ -1,5 +1,5 @@
 /**
- * Checklist de validation Phases 0–8 (plan d'optimisation VR).
+ * Checklist de validation Phases 0–9 (plan d'optimisation VR).
  *
  * Usage :
  *   yarn vr:test-validation              → checks statiques + Storybook si dispo
@@ -9,7 +9,7 @@
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 
-import { FORCE_VR_TAG, IGNORE_VR_TAG } from "@constants/constants";
+import { FORCE_VR_TAG, IGNORE_VR_TAG, LIVE_ANIMATION_VR_TAG } from "@constants/constants";
 import { compareAllStories, compareByType, compareSelectedStories } from "@scripts/compare-visual-regressions";
 import type { CaptureTask } from "@scripts/vr-capture-engine";
 import {
@@ -22,8 +22,11 @@ import {
   waitForStorybookStories,
 } from "@utils/node";
 import { buildImportersGraph } from "@utils/vr-dependency-graph";
+import { getDiffVerificationMaxAttempts, shouldRetryDiffVerification } from "@utils/vr-diff-verify";
 import { filterCaptureTasks, getChangedFiles, type StoryIndexEntry } from "@utils/vr-incremental";
 import { estimateCiWallClockMs, partitionTasksByShardTotal } from "@utils/vr-sharding";
+import { appendVrCaptureParam, expectsVrStoryPlay, waitForStoryStable } from "@utils/vr-steadysnap";
+import { normalizeStoryVrParameters, resolveEffectiveVrConfig, shouldUseBurstCapture } from "@utils/vr-story-config";
 
 const PROJECT_ROOT = getProjectRoot();
 const LEGACY_CONFIG = "vr-devices.config.cjs";
@@ -35,7 +38,7 @@ const showHelp = process.argv.includes("--help") || process.argv.includes("-h");
 
 const printHelp = (): void => {
   console.log(`
-Validation Phases 0–8 — @setshao/visual-regression
+Validation Phases 0–9 — @setshao/visual-regression
 
 Usage:
   yarn vr:test-validation              Checks statiques + Storybook si disponible
@@ -168,6 +171,109 @@ const runStaticChecks = (): CheckResult[] => {
     ),
   );
 
+  results.push(
+    check(
+      typeof waitForStoryStable === "function" &&
+        typeof shouldUseBurstCapture === "function" &&
+        typeof expectsVrStoryPlay === "function" &&
+        typeof appendVrCaptureParam === "function",
+      "SteadySnap : exports vr-steadysnap OK",
+      "SteadySnap : exports manquants",
+    ),
+  );
+
+  results.push(
+    check(
+      config.compare.diffVerificationMaxAttempts >= 1,
+      `Diff verify : diffVerificationMaxAttempts=${config.compare.diffVerificationMaxAttempts}`,
+      "Diff verify : diffVerificationMaxAttempts invalide",
+    ),
+  );
+
+  results.push(
+    check(
+      typeof getDiffVerificationMaxAttempts === "function" &&
+        typeof shouldRetryDiffVerification === "function" &&
+        shouldRetryDiffVerification(1, "diff", 3) &&
+        !shouldRetryDiffVerification(3, "diff", 3) &&
+        !shouldRetryDiffVerification(1, "match", 3),
+      "Diff verify : logique shouldRetryDiffVerification OK",
+      "Diff verify : shouldRetryDiffVerification échoué",
+    ),
+  );
+
+  results.push(
+    check(
+      config.stabilize.burstCapture === false,
+      `SteadySnap : burstCapture=${config.stabilize.burstCapture}`,
+      "SteadySnap : defaults stabilize invalides",
+    ),
+  );
+
+  results.push(
+    check(
+      appendVrCaptureParam("http://localhost:6006/iframe.html?id=demo--x").includes("vr-capture=1"),
+      "SteadySnap : param vr-capture=1 sur iframe URL",
+      "SteadySnap : appendVrCaptureParam échoué",
+    ),
+  );
+
+  results.push(
+    check(
+      shouldUseBurstCapture(config, ["burst-vr"]) && !shouldUseBurstCapture(config, []),
+      "SteadySnap : tag burst-vr active le burst",
+      "SteadySnap : shouldUseBurstCapture échoué",
+    ),
+  );
+
+  results.push(
+    check(
+      shouldUseBurstCapture(config, [], { stabilize: { burstIntervalMs: 1000 } }) &&
+        !shouldUseBurstCapture(config, [], null),
+      "SteadySnap : parameters.vr.stabilize.burstIntervalMs active le burst",
+      "SteadySnap : override burstIntervalMs échoué",
+    ),
+  );
+
+  const merged = resolveEffectiveVrConfig(config, {
+    stabilize: { burstIntervalMs: 1000 },
+    diffVerificationMaxAttempts: 5,
+  });
+  results.push(
+    check(
+      merged.stabilize.burstIntervalMs === 1000 &&
+        merged.compare.diffVerificationMaxAttempts === 5 &&
+        merged.stabilize.freezeAnimations === config.stabilize.freezeAnimations,
+      "Story config : resolveEffectiveVrConfig fusionne overrides partiels",
+      "Story config : resolveEffectiveVrConfig échoué",
+    ),
+  );
+
+  results.push(
+    check(
+      normalizeStoryVrParameters({ stabilize: { burstIntervalMs: 1000 }, diffVerificationMaxAttempts: 2 }) !== null &&
+        normalizeStoryVrParameters({ foo: "bar" }) === null,
+      "Story config : normalizeStoryVrParameters OK",
+      "Story config : normalizeStoryVrParameters échoué",
+    ),
+  );
+
+  results.push(
+    check(
+      expectsVrStoryPlay(["play-fn"]) && !expectsVrStoryPlay(["play-fn", "skip-play-vr"]),
+      "SteadySnap : attente play-fn / skip-play-vr OK",
+      "SteadySnap : expectsVrStoryPlay échoué",
+    ),
+  );
+
+  results.push(
+    check(
+      LIVE_ANIMATION_VR_TAG === "live-animation-vr",
+      "SteadySnap : tag live-animation-vr défini",
+      "SteadySnap : tag live-animation-vr manquant",
+    ),
+  );
+
   return results;
 };
 
@@ -268,7 +374,7 @@ const main = async () => {
     process.exit(0);
   }
 
-  console.log("\n🧪 Validation Phases 0–8\n");
+  console.log("\n🧪 Validation Phases 0–9\n");
 
   const checks = runStaticChecks();
 
@@ -282,7 +388,7 @@ const main = async () => {
   checks.forEach(c => console.log(c.message));
 
   const allOk = checks.every(c => c.ok);
-  console.log(allOk ? "\n✅ Validation Phases 0–8 OK.\n" : "\n❌ Points à corriger ci-dessus.\n");
+  console.log(allOk ? "\n✅ Validation Phases 0–9 OK.\n" : "\n❌ Points à corriger ci-dessus.\n");
   process.exit(allOk ? 0 : 1);
 };
 

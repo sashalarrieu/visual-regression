@@ -46,7 +46,7 @@ todos:
     status: completed
   - id: steady-snap
     content: "Phase 9 (après validation 0-8) : vr-steadysnap.ts — freeze animations, network quiet, burst sélectif, retry flake — voir plan"
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -91,7 +91,7 @@ Comportement retenu pour l'incrémental : **mode incrémental par défaut** ; le
 | 6 Sharding | ✅ | `vr-sharding.ts`, `VR_SHARD_*` |
 | 7 Storybook statique | ✅ | `vr:storybook:static`, launcher `storybookStatic`, `context.route` |
 | 8 Intégration serveur | ✅ | `GET /regressions/config`, README, `vr:test-validation` |
-| 9 SteadySnap | ⏳ | Config `stabilize.*` réservée ; `vr-steadysnap.ts` à créer |
+| 9 SteadySnap | ✅ | `vr-steadysnap.ts`, burst opt-in, retry flake, `burst-vr` tag |
 
 ```mermaid
 flowchart LR
@@ -832,4 +832,4 @@ flowchart TD
 | [`.gitignore`](.gitignore)                                                               | ✅ `.vr-cache/`, `storybook-static/`                                                       |
 | [`.storybook/preview.tsx`](.storybook/preview.tsx)                                       | ✅ Reanimated ; ⏳ flag `VR_CAPTURE` (Phase 9)                                             |
 | `vr-devices.config.cjs`                                                                  | ✅ Supprimé                                                                                |
-| [`src/utils/vr-steadysnap.ts`](src/utils/vr-steadysnap.ts)                               | ⏳ **Phase 9** — stabilisation avancée, burst, retry flake                                   |
+| [`src/utils/vr-steadysnap.ts`](src/utils/vr-steadysnap.ts)                               | ✅ SteadySnap — stabilisation, burst, retry flake                                          |
