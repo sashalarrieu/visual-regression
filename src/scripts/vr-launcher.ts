@@ -1,4 +1,5 @@
 // scripts/vr-launcher.ts (package @setshao/visual-regression)
+import type { ChildProcess } from "child_process";
 import { spawn } from "child_process";
 import { existsSync } from "fs";
 import path from "path";
@@ -26,6 +27,7 @@ import {
 import { getCaptureDaemonUrl } from "@utils/vr-capture-backend";
 import { waitForCaptureDaemon } from "@utils/vr-capture-remote";
 import { composeDown, composeUp, isDockerAvailable } from "@utils/vr-docker";
+import { getStorybookMode, startStorybook, stopStorybook } from "@utils/vr-storybook-runtime";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
 const PACKAGE_ROOT = path.join(SCRIPT_DIR, "..", "..");
@@ -65,13 +67,40 @@ const killPort = (port: number) => {
       netstat.stdout?.on("data", (d: Buffer) => (out += d.toString()));
       netstat.on("close", (code: number) => {
         if (code !== 0) return;
-        const portPattern = new RegExp(`:${port}(\\s|$)`);
-        const lines = out.split("\n").filter(l => portPattern.test(l.trim()));
+        const portPattern = new RegExp(`:${port}$`);
+        const lines = out
+          .split("\n")
+          .map(l => l.trim())
+          .filter(line => line.startsWith("TCP") || line.startsWith("UDP"));
         const pids = new Set<string>();
         for (const line of lines) {
-          const m = line.trim().split(/\s+/);
-          const pid = m[m.length - 1];
-          if (pid && /^\d+$/.test(pid) && pid !== "0") pids.add(pid);
+          const cols = line.split(/\s+/);
+          // netstat -ano (Windows):
+          // TCP <local_addr> <foreign_addr> <state> <pid>
+          // UDP <local_addr> *:* <pid>
+          const proto = cols[0];
+          const isTcp = proto === "TCP";
+          const localAddress = cols[1] ?? "";
+          const foreignAddress = isTcp ? (cols[2] ?? "") : "";
+          const state = isTcp ? (cols[3] ?? "") : "";
+          const pid = cols[cols.length - 1];
+
+          // Windows peut localiser l'état TCP (ex: "ÉCOUTE"), donc on ne dépend
+          // pas uniquement de "LISTENING". Le couple foreign "*:0"/"0.0.0.0:0"
+          // correspond à un socket en écoute.
+          const hasListeningForeignAddress =
+            foreignAddress === "0.0.0.0:0" || foreignAddress === "[::]:0" || foreignAddress === "*:*";
+          const isListening = !isTcp || state === "LISTENING" || hasListeningForeignAddress;
+          if (!portPattern.test(localAddress) || !isListening) {
+            continue;
+          }
+
+          if (pid && /^\d+$/.test(pid) && pid !== "0") {
+            const numericPid = Number(pid);
+            if (numericPid !== process.pid && numericPid !== process.ppid) {
+              pids.add(pid);
+            }
+          }
         }
         for (const pid of pids) {
           try {
@@ -92,8 +121,14 @@ const killPort = (port: number) => {
     const proc = spawn("lsof", ["-ti", `:${port}`], { stdio: ["ignore", "pipe", "ignore"] });
     proc.on("error", () => log("red", "❌", `Impossible de libérer le port ${port} (lsof non disponible)`));
     proc.stdout?.on("data", (data: Buffer) => {
-      const pid = data.toString().trim();
-      if (pid) {
+      const pids = data
+        .toString()
+        .split(/\r?\n/)
+        .map(v => v.trim())
+        .filter(v => /^\d+$/.test(v))
+        .filter(v => Number(v) !== process.pid && Number(v) !== process.ppid);
+
+      for (const pid of pids) {
         try {
           spawn("kill", ["-9", pid], { stdio: "ignore" });
           log("green", "✅", `Port ${port} libéré (PID: ${pid})`);
@@ -147,6 +182,10 @@ const main = async () => {
   // Le nettoyage/réutilisation du sidecar est géré plus bas via un test de santé du daemon
   // (ne PAS killPort ces ports → tuerait le proxy Docker).
   const daemonAvailable = await isPortAvailable(CAPTURE_DAEMON_PORT);
+  let localStorybookProcess: ChildProcess | null = null;
+  let useDockerSidecar = true;
+  const allowExplicitLocalCaptureFallback =
+    (process.env.VR_CAPTURE_BACKEND || "").toLowerCase() === "local" || process.env.VR_FORCE_LOCAL_CAPTURE === "1";
 
   log("blue", "🔧", "Démarrage du serveur VR");
 
@@ -171,51 +210,90 @@ const main = async () => {
 
   log("green", "✅", "Serveur VR prêt");
 
+  const startLocalCaptureFallback = async (reason: string): Promise<void> => {
+    if (!allowExplicitLocalCaptureFallback) {
+      throw new Error(
+        `${reason}. Docker est obligatoire par défaut pour 'yarn vr'. ` +
+          "Pour désactiver Docker explicitement: VR_CAPTURE_BACKEND=local yarn vr " +
+          "(ou VR_FORCE_LOCAL_CAPTURE=1 yarn vr).",
+      );
+    }
+    useDockerSidecar = false;
+    process.env.VR_CAPTURE_BACKEND = "local";
+    log("yellow", "⚠️", `Mode fallback local activé: ${reason}`);
+    const mode = getStorybookMode();
+    const storybook = await startStorybook({
+      projectRoot: PROJECT_ROOT,
+      port: storybookPort,
+      mode,
+      waitMaxAttempts: 120,
+    });
+    localStorybookProcess = storybook.process;
+    if (!storybook.ready) {
+      throw new Error(`Storybook local non prêt sur ${storybookUrl}`);
+    }
+    log("green", "✅", `Storybook local prêt (${storybookUrl}, mode=${storybook.mode})`);
+  };
+
   // --- Sidecar Docker de capture (Storybook + daemon Playwright) ---
   if (!isDockerAvailable()) {
-    log("red", "❌", "Docker est requis pour la capture VR mais n'est pas disponible.");
-    log("yellow", "💡", "Installez Docker Desktop puis relancez. Toutes les captures s'exécutent dans le conteneur.");
-    vrServer.kill();
-    process.exit(1);
-  }
-
-  // Le conteneur choisit son mode Storybook via VR_STORYBOOK_MODE.
-  if (useStaticStorybook || process.env.VR_STORYBOOK_STATIC === "1") {
-    process.env.VR_STORYBOOK_MODE = "static";
-  }
-
-  // Réutiliser un sidecar déjà sain → redémarrage de `yarn vr` rapide et fiable
-  // (Storybook prend les changements de code via HMR sur le bind mount, pas besoin
-  // de recréer le conteneur). On ne recrée que si le sidecar est absent ou cassé.
-  const sidecarBusy = !storybookAvailable || !daemonAvailable;
-  const existingDaemonHealthy = sidecarBusy ? await waitForCaptureDaemon(1) : false;
-
-  if (existingDaemonHealthy) {
-    log("green", "✅", `Sidecar de capture déjà actif — réutilisation (${getCaptureDaemonUrl()})`);
+    await startLocalCaptureFallback("Docker indisponible");
   } else {
-    if (sidecarBusy) {
-      log("yellow", "⚠️", `Port ${storybookPort}/${CAPTURE_DAEMON_PORT} occupé par un sidecar non sain — recréation`);
-      await composeDown(PROJECT_ROOT).catch(() => undefined);
-      await new Promise(resolve => setTimeout(resolve, 1500));
+    // Le conteneur choisit son mode Storybook via VR_STORYBOOK_MODE.
+    if (useStaticStorybook || process.env.VR_STORYBOOK_STATIC === "1") {
+      process.env.VR_STORYBOOK_MODE = "static";
     }
 
-    log("blue", "🐳", "Démarrage du sidecar de capture (Docker)");
-    const composeCode = await composeUp(PROJECT_ROOT);
-    if (composeCode !== 0) {
-      log("red", "❌", `docker compose up a échoué (code ${composeCode})`);
-      vrServer.kill();
-      process.exit(1);
-    }
+    // Réutiliser un sidecar déjà sain → redémarrage de `yarn vr` rapide et fiable
+    // (Storybook prend les changements de code via HMR sur le bind mount, pas besoin
+    // de recréer le conteneur). On ne recrée que si le sidecar est absent ou cassé.
+    const sidecarBusy = !storybookAvailable || !daemonAvailable;
+    const existingDaemonHealthy = sidecarBusy ? await waitForCaptureDaemon(1) : false;
 
-    log("blue", "⏳", "Attente du daemon de capture (Storybook + Playwright — le 1er build peut être long)");
-    const daemonReady = await waitForCaptureDaemon(300);
-    if (!daemonReady) {
-      log("red", "❌", `Daemon de capture injoignable sur ${getCaptureDaemonUrl()}`);
-      await composeDown(PROJECT_ROOT).catch(() => undefined);
-      vrServer.kill();
-      process.exit(1);
+    if (existingDaemonHealthy) {
+      log("green", "✅", `Sidecar de capture déjà actif — réutilisation (${getCaptureDaemonUrl()})`);
+    } else {
+      if (sidecarBusy) {
+        log("yellow", "⚠️", `Port ${storybookPort}/${CAPTURE_DAEMON_PORT} occupé par un sidecar non sain — recréation`);
+        await composeDown(PROJECT_ROOT).catch(() => undefined);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
+
+      log("blue", "🐳", "Démarrage du sidecar de capture (Docker)");
+      let composeCode = await composeUp(PROJECT_ROOT);
+      if (composeCode !== 0) {
+        log(
+          "yellow",
+          "⚠️",
+          `docker compose up a échoué (code ${composeCode}) — tentative de libération des ports ${storybookPort}/${CAPTURE_DAEMON_PORT}`,
+        );
+        killPort(storybookPort);
+        killPort(CAPTURE_DAEMON_PORT);
+        await new Promise(resolve => setTimeout(resolve, process.platform === "win32" ? 3500 : 2000));
+        composeCode = await composeUp(PROJECT_ROOT);
+      }
+
+      if (composeCode !== 0) {
+        await startLocalCaptureFallback(`docker compose up a échoué (code ${composeCode})`);
+      } else {
+        log("blue", "⏳", "Attente du daemon de capture (Storybook + Playwright — le 1er build peut être long)");
+        let daemonReady = await waitForCaptureDaemon(300);
+        if (!daemonReady) {
+          log("yellow", "⚠️", "Daemon non prêt après démarrage — rebuild forcé du sidecar");
+          await composeDown(PROJECT_ROOT).catch(() => undefined);
+          const rebuildCode = await composeUp(PROJECT_ROOT, true);
+          if (rebuildCode === 0) {
+            log("blue", "⏳", "Attente du daemon après rebuild forcé");
+            daemonReady = await waitForCaptureDaemon(300);
+          }
+          if (!daemonReady) {
+            await composeDown(PROJECT_ROOT).catch(() => undefined);
+            await startLocalCaptureFallback("daemon de capture injoignable");
+          }
+        }
+        log("green", "✅", `Sidecar de capture prêt (${getCaptureDaemonUrl()})`);
+      }
     }
-    log("green", "✅", `Sidecar de capture prêt (${getCaptureDaemonUrl()})`);
   }
 
   // Storybook est forwardé depuis le conteneur : vérifier qu'il répond côté hôte.
@@ -246,8 +324,13 @@ const main = async () => {
     log("green", "🎉", "Environnement VR prêt !");
     log("blue", "🌐", `Interface VR disponible sur ${EXPO_URL}`);
     log("blue", "🔧", `Serveur VR API sur ${VR_SERVER_URL}`);
-    log("blue", "📚", `Storybook (conteneur) disponible sur ${storybookUrl}`);
-    log("blue", "🐳", `Daemon de capture sur ${getCaptureDaemonUrl()}`);
+    if (useDockerSidecar) {
+      log("blue", "📚", `Storybook (conteneur) disponible sur ${storybookUrl}`);
+      log("blue", "🐳", `Daemon de capture sur ${getCaptureDaemonUrl()}`);
+    } else {
+      log("blue", "📚", `Storybook (local) disponible sur ${storybookUrl}`);
+      log("yellow", "⚠️", "Capture locale active (fallback) : Docker non utilisé pour cette session");
+    }
   };
 
   const runInitialCompareJob = (): Promise<number> => {
@@ -328,7 +411,10 @@ const main = async () => {
   expo.on("error", err => {
     log("red", "❌", `Erreur Expo: ${err.message}`);
     vrServer.kill();
-    void composeDown(PROJECT_ROOT);
+    stopStorybook(localStorybookProcess);
+    if (useDockerSidecar) {
+      void composeDown(PROJECT_ROOT);
+    }
     process.exit(1);
   });
 
@@ -336,7 +422,10 @@ const main = async () => {
   if (!expoReady) {
     log("red", "❌", "Expo n'a pas démarré à temps");
     vrServer.kill();
-    void composeDown(PROJECT_ROOT);
+    stopStorybook(localStorybookProcess);
+    if (useDockerSidecar) {
+      void composeDown(PROJECT_ROOT);
+    }
     process.exit(1);
   }
 
@@ -351,8 +440,11 @@ const main = async () => {
     log("yellow", "⚠️", `Arrêt en cours (${signal})`);
     expo.kill();
     vrServer.kill();
+    stopStorybook(localStorybookProcess);
     try {
-      await composeDown(PROJECT_ROOT);
+      if (useDockerSidecar) {
+        await composeDown(PROJECT_ROOT);
+      }
     } catch {
       // ignore
     }

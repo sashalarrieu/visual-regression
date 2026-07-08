@@ -17,7 +17,7 @@ WORKDIR /work
 
 # Seul l'entrypoint est copié dans l'image ; le code arrive via volume mount.
 COPY entrypoint.sh /usr/local/bin/vr-entrypoint.sh
-RUN chmod +x /usr/local/bin/vr-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/vr-entrypoint.sh && chmod +x /usr/local/bin/vr-entrypoint.sh
 
 # 6006 = Storybook, 2810 = daemon de capture.
 EXPOSE 6006 2810

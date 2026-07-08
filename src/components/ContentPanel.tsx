@@ -117,7 +117,12 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
           color={deviceColor}
         />
         <Box gap="s">
-          <Typo variant="paragraphe_regular">Régénération de l'image en cours...</Typo>
+          <Typo
+            variant="paragraphe_regular"
+            textAlign="center"
+          >
+            Régénération de l'image en cours...
+          </Typo>
           <ScreenshotDetails
             deviceName={deviceName}
             storyId={storyId}

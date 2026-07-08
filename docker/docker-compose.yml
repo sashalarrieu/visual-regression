@@ -2,7 +2,7 @@
 # VR_PROJECT_ROOT est injecté par la CLI (racine du projet hôte à monter sur /work).
 services:
   vr-capture:
-    image: ${VR_DOCKER_IMAGE:-ghcr.io/setshao/vr-capture:1.61.1}
+    image: ${VR_DOCKER_IMAGE:-vr-capture:1.61.1}
     build:
       context: .
       dockerfile: Dockerfile
