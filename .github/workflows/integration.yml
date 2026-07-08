@@ -1,0 +1,49 @@
+name: VR Integration
+
+on:
+  pull_request:
+    paths:
+      - "src/scripts/**"
+      - "src/utils/**"
+      - "docker/**"
+      - "bin/**"
+      - "vr.config.cjs"
+      - "package.json"
+      - "yarn.lock"
+      - ".storybook/**"
+      - "src/demo/**"
+
+jobs:
+  vr-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache dependencies and Storybook build
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            storybook-static
+          key: vr-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            vr-${{ runner.os }}-
+
+      - name: Run VR compare (Docker)
+        run: |
+          docker compose \
+            -f docker/docker-compose.ci.yml \
+            up --build --abort-on-container-exit --exit-code-from vr-capture
+        env:
+          VR_PROJECT_ROOT: ${{ github.workspace }}
+          VR_COMPARE_MODE: full
+
+      - name: Upload VR artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vr-screenshots
+          path: src/demo/**/Screenshots/
