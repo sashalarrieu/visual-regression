@@ -82,7 +82,7 @@
     "@babel/preset-env": "^7.24.0",
     "@babel/preset-react": "^7.24.0",
     "@babel/preset-typescript": "^7.24.0",
-    "@eslint/compat": "^1.2.4",
+    "@eslint/compat": "^2.1.0",
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.17.0",
     "@expo/vector-icons": "15.0.3",
