@@ -12,6 +12,11 @@
  *   visual-regression benchmark-shards [opts] → simulation sharding CI (vr:benchmark-shards)
  *   visual-regression test-incremental [--check-only] → vérifie TurboSnap puis compare (vr:test-incremental)
  *   visual-regression test-validation [--static-only] → checklist Phases 0–8 (vr:test-validation)
+ *   visual-regression capture-up       → démarre le sidecar Docker de capture (vr:capture:up)
+ *   visual-regression capture-down     → arrête le sidecar Docker (vr:capture:down)
+ *   visual-regression capture-status   → état du sidecar + health daemon (vr:capture:status)
+ *   visual-regression capture-daemon   → (interne conteneur) daemon de capture
+ *   visual-regression capture-oneshot  → (interne conteneur) capture one-shot CI
  *
  * Env utiles :
  *   VR_RUN_INITIAL_COMPARE=0    → yarn vr sans compare initiale (rebuild index seulement)
@@ -108,6 +113,24 @@ switch (subcommand) {
     scriptArgs = process.argv.slice(3);
     break;
   }
+  case "capture-daemon": {
+    // Daemon de capture (exécuté DANS le conteneur). cwd = projet hôte (/work).
+    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-capture-daemon.ts");
+    break;
+  }
+  case "capture-oneshot": {
+    // Capture one-shot (CI, DANS le conteneur). cwd = projet hôte (/work).
+    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-capture-oneshot.ts");
+    break;
+  }
+  case "capture-up":
+  case "capture-down":
+  case "capture-status": {
+    // Contrôle du sidecar Docker depuis l'hôte.
+    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-capture-control.ts");
+    scriptArgs = [subcommand.replace("capture-", "")];
+    break;
+  }
   case "app": {
     // Interface web VR (Expo). Ne pas forcer CI=1 : Metro désactive le hot reload en mode CI.
     const expoArgs = ["expo", "start", "--web", "--port", String(EXPO_PORT)];
@@ -140,6 +163,11 @@ if (scriptPath) {
     "benchmark-shards",
     "test-incremental",
     "test-validation",
+    "capture-daemon",
+    "capture-oneshot",
+    "capture-up",
+    "capture-down",
+    "capture-status",
   ]);
   const cwd = hostCwdSubcommands.has(subcommand) ? hostRoot : packageRootReal;
   const child = tsxCli

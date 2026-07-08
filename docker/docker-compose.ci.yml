@@ -1,0 +1,28 @@
+# Variante CI du sidecar de capture VR.
+# Storybook statique (build unique, plus déterministe). L'entrypoint lance
+# automatiquement la capture one-shot (VR_ENTRYPOINT_CMD=capture-oneshot). Usage :
+#   docker compose -f docker/docker-compose.ci.yml up --build \
+#     --abort-on-container-exit --exit-code-from vr-capture
+services:
+  vr-capture:
+    image: ${VR_DOCKER_IMAGE:-ghcr.io/setshao/vr-capture:1.61.1}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    volumes:
+      - "${VR_PROJECT_ROOT:-..}:/work"
+      - vr_node_modules:/work/node_modules
+    environment:
+      VR_DOCKER: "1"
+      VR_PROJECT_ROOT: /work
+      VR_CAPTURE_BACKEND: local
+      VR_STORYBOOK_MODE: static
+      VR_ENTRYPOINT_CMD: capture-oneshot
+      VR_COMPARE_MODE: "${VR_COMPARE_MODE:-incremental}"
+      VR_SHARD_INDEX: "${VR_SHARD_INDEX:-}"
+      VR_SHARD_TOTAL: "${VR_SHARD_TOTAL:-}"
+    working_dir: /work
+
+volumes:
+  vr_node_modules:

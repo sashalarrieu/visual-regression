@@ -31,6 +31,8 @@ import {
   TEMP_SCREENSHOT_NAME,
 } from "@constants/constants";
 import { getDevicesConfig, getProjectPaths, getProjectRoot, resolveVrConfig } from "@utils/node";
+import { isDockerCaptureBackend } from "@utils/vr-capture-backend";
+import { runCaptureBatchRemote } from "@utils/vr-capture-remote";
 import {
   formatDiffConfirmedLog,
   formatDiffVerifyRetryLog,
@@ -142,13 +144,37 @@ export const deleteVisualRegressionsFilesForDevice = (deviceName: string): void 
   deleteDeviceScreenshotsInDir(PUBLIC_SCREENSHOTS_DIR, deviceName);
 };
 
+/**
+ * Args Chromium déterministes appliqués en environnement de capture reproductible
+ * (Docker / Linux). Figent GPU, couleur et rendu des polices pour un rendu
+ * identique quelle que soit la machine hôte.
+ */
+const CHROMIUM_DETERMINISTIC_ARGS = [
+  "--no-sandbox",
+  "--disable-setuid-sandbox",
+  "--disable-dev-shm-usage",
+  "--disable-gpu",
+  "--disable-software-rasterizer",
+  "--force-color-profile=srgb",
+  "--font-render-hinting=none",
+  "--disable-lcd-text",
+  "--disable-background-networking",
+];
+
 /** Options de lancement Chromium : timeout augmenté et args Windows. */
 const CHROMIUM_LAUNCH_OPTIONS = {
   timeout: 300_000,
   headless: true,
-  ...(process.platform === "win32" && {
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+  ...((process.platform === "win32" || process.platform === "linux") && {
+    args: CHROMIUM_DETERMINISTIC_ARGS,
   }),
+};
+
+/** Lancement en conteneur de capture : Chromium bundlé + args déterministes. */
+const DOCKER_LAUNCH_OPTIONS = {
+  headless: true,
+  timeout: 300_000,
+  args: CHROMIUM_DETERMINISTIC_ARGS,
 };
 
 const WINDOWS_CHANNEL_LAUNCH = {
@@ -196,6 +222,11 @@ export type CaptureBatchResult = {
   logs: LogsType;
   storiesWithDiff: string[];
   error?: string;
+  /**
+   * Sortie console produite pendant le batch (rempli par le daemon Docker afin
+   * que l'hôte puisse rejouer les logs de capture dans la console `yarn vr`).
+   */
+  consoleOutput?: string[];
 };
 
 type ScreenshotPaths = {
@@ -271,7 +302,7 @@ const formatDurationMs = (ms: number): string => {
 
 /** Affiche le démarrage du pool (workers + tâches). */
 export const logCapturePoolStart = (concurrency: number, taskCount: number, mode: string): void => {
-  console.log(`\n⚡ Pool de capture : ${concurrency} worker(s) | ${taskCount} tâche(s) | mode ${mode}`);
+  console.log(`\n⚡️ Pool de capture : ${concurrency} worker(s) | ${taskCount} tâche(s) | mode ${mode}`);
 };
 
 /** Affiche la durée totale de génération. */
@@ -297,6 +328,11 @@ export type CompareScreenshotResult = {
 };
 
 export async function launchBrowser(): Promise<Browser> {
+  // En conteneur de capture : toujours Chromium bundlé + args déterministes,
+  // jamais Edge/Chrome système (garantit un rendu reproductible).
+  if (process.env.VR_DOCKER === "1") {
+    return chromium.launch(DOCKER_LAUNCH_OPTIONS);
+  }
   if (process.platform === "win32") {
     const channels: ("chrome" | "msedge")[] = ["msedge", "chrome"];
     for (const channel of channels) {
@@ -751,6 +787,12 @@ export const runCaptureBatch = async (
 
   if (tasks.length === 0) {
     return { success: false, stats, logs, storiesWithDiff, error: "Aucune tâche de capture" };
+  }
+
+  // Backend Docker (défaut) : toute capture est déléguée au daemon du sidecar.
+  // Aucune capture Playwright locale n'est effectuée sur l'hôte.
+  if (isDockerCaptureBackend()) {
+    return runCaptureBatchRemote(tasks, options);
   }
 
   const config = resolveVrConfig(PROJECT_ROOT);

@@ -21,8 +21,10 @@ import {
   VR_CONFIG_FILENAME,
   waitForStorybookStories,
 } from "@utils/node";
+import { getCaptureBackend, isDockerCaptureBackend } from "@utils/vr-capture-backend";
 import { buildImportersGraph } from "@utils/vr-dependency-graph";
 import { getDiffVerificationMaxAttempts, shouldRetryDiffVerification } from "@utils/vr-diff-verify";
+import { getComposeFile, getDockerImage } from "@utils/vr-docker";
 import { filterCaptureTasks, getChangedFiles, type StoryIndexEntry } from "@utils/vr-incremental";
 import { estimateCiWallClockMs, partitionTasksByShardTotal } from "@utils/vr-sharding";
 import { appendVrCaptureParam, expectsVrStoryPlay, waitForStoryStable } from "@utils/vr-steadysnap";
@@ -273,6 +275,79 @@ const runStaticChecks = (): CheckResult[] => {
       "SteadySnap : tag live-animation-vr manquant",
     ),
   );
+
+  results.push(...runDockerChecks());
+
+  return results;
+};
+
+/** Version Playwright extraite du package (devDependencies), sans préfixe ^~. */
+const getPackagePlaywrightVersion = (dockerDir: string): string | null => {
+  const pkgPath = path.join(dockerDir, "..", "package.json");
+  if (!existsSync(pkgPath)) return null;
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const raw = pkg.devDependencies?.playwright ?? pkg.dependencies?.playwright;
+    return raw ? raw.replace(/^[\^~]/, "") : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Vérifications de la chaîne Docker (capture obligatoire en conteneur). */
+const runDockerChecks = (): CheckResult[] => {
+  const results: CheckResult[] = [];
+  const composeFile = getComposeFile();
+  const dockerDir = path.dirname(composeFile);
+  const dockerfile = path.join(dockerDir, "Dockerfile");
+  const entrypoint = path.join(dockerDir, "entrypoint.sh");
+
+  results.push(
+    check(
+      existsSync(dockerfile) && existsSync(composeFile) && existsSync(entrypoint),
+      "Docker : Dockerfile + docker-compose.yml + entrypoint.sh présents",
+      "Docker : fichiers docker/ manquants",
+    ),
+  );
+
+  results.push(
+    check(
+      getCaptureBackend() === "docker" && isDockerCaptureBackend(),
+      "Docker : backend de capture par défaut = docker",
+      `Docker : backend inattendu (${getCaptureBackend()})`,
+    ),
+  );
+
+  const prevBackend = process.env.VR_CAPTURE_BACKEND;
+  process.env.VR_CAPTURE_BACKEND = "local";
+  const localOk = !isDockerCaptureBackend();
+  if (prevBackend === undefined) delete process.env.VR_CAPTURE_BACKEND;
+  else process.env.VR_CAPTURE_BACKEND = prevBackend;
+  results.push(
+    check(
+      localOk,
+      "Docker : VR_CAPTURE_BACKEND=local désactive le backend Docker",
+      "Docker : override VR_CAPTURE_BACKEND=local inopérant",
+    ),
+  );
+
+  if (existsSync(dockerfile)) {
+    const pkgVersion = getPackagePlaywrightVersion(dockerDir);
+    const dockerfileContent = readFileSync(dockerfile, "utf8");
+    const match = dockerfileContent.match(/mcr\.microsoft\.com\/playwright:v([\d.]+)/);
+    const imageVersion = match ? match[1] : null;
+    const image = getDockerImage();
+    results.push(
+      check(
+        Boolean(pkgVersion && imageVersion && pkgVersion === imageVersion),
+        `Docker : version Playwright alignée (package ${pkgVersion} = image ${imageVersion}) — ${image}`,
+        `Docker : version Playwright désalignée (package ${pkgVersion} ≠ Dockerfile ${imageVersion})`,
+      ),
+    );
+  }
 
   return results;
 };

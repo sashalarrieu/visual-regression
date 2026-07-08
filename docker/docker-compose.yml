@@ -1,0 +1,26 @@
+# Sidecar de capture VR. Démarré par `yarn vr` (dev) ou en CI.
+# VR_PROJECT_ROOT est injecté par la CLI (racine du projet hôte à monter sur /work).
+services:
+  vr-capture:
+    image: ${VR_DOCKER_IMAGE:-ghcr.io/setshao/vr-capture:1.61.1}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    volumes:
+      # Code du projet hôte (stories, .storybook, vr.config.cjs, baselines).
+      - "${VR_PROJECT_ROOT:-..}:/work"
+      # node_modules Linux dédié : évite les binaires natifs Mac/Windows incompatibles.
+      - vr_node_modules:/work/node_modules
+    ports:
+      - "6006:6006" # Storybook (preview manuelle)
+      - "2810:2810" # Daemon de capture
+    environment:
+      VR_DOCKER: "1"
+      VR_PROJECT_ROOT: /work
+      VR_CAPTURE_BACKEND: local
+      VR_STORYBOOK_MODE: "${VR_STORYBOOK_MODE:-dev}"
+    working_dir: /work
+
+volumes:
+  vr_node_modules:

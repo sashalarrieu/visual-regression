@@ -4,6 +4,7 @@ import { existsSync } from "fs";
 import path from "path";
 
 import {
+  CAPTURE_DAEMON_PORT,
   EXPO_PORT,
   EXPO_URL,
   LOCAL_URL,
@@ -22,6 +23,9 @@ import {
   spawnShellOption,
   waitForStorybookStories,
 } from "@utils/node";
+import { getCaptureDaemonUrl } from "@utils/vr-capture-backend";
+import { waitForCaptureDaemon } from "@utils/vr-capture-remote";
+import { composeDown, composeUp, isDockerAvailable } from "@utils/vr-docker";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
 const PACKAGE_ROOT = path.join(SCRIPT_DIR, "..", "..");
@@ -103,18 +107,6 @@ const killPort = (port: number) => {
   }
 };
 
-const runShellCommand = (command: string, args: string[], cwd: string): Promise<number> =>
-  new Promise((resolve, reject) => {
-    const proc = spawn(command, args, {
-      stdio: "inherit",
-      shell: true,
-      cwd,
-      env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
-    });
-    proc.on("error", reject);
-    proc.on("close", code => resolve(code ?? 1));
-  });
-
 const parseStorybookPort = (storybookUrl: string): number => {
   try {
     const port = new URL(storybookUrl).port;
@@ -122,12 +114,6 @@ const parseStorybookPort = (storybookUrl: string): number => {
   } catch {
     return STORYBOOK_PORT;
   }
-};
-
-const needsStaticStorybookBuild = (statsRelativePath: string): boolean => {
-  if (process.env.VR_STORYBOOK_STATIC_REBUILD === "1") return true;
-  const staticDir = path.join(PROJECT_ROOT, "storybook-static");
-  return !existsSync(path.join(staticDir, "index.html")) || !existsSync(path.join(PROJECT_ROOT, statsRelativePath));
 };
 
 const main = async () => {
@@ -157,17 +143,10 @@ const main = async () => {
     await new Promise(resolve => setTimeout(resolve, process.platform === "win32" ? 3500 : 2000));
   }
 
-  let storybookAlreadyRunning = false;
-  if (!storybookAvailable) {
-    const storiesIndexed = await waitForStorybookStories(1, 3, PROJECT_ROOT);
-    if (storiesIndexed) {
-      storybookAlreadyRunning = true;
-    } else {
-      log("yellow", "⚠️", `Port ${storybookPort} occupé mais index Storybook vide — redémarrage`);
-      killPort(storybookPort);
-      await new Promise(resolve => setTimeout(resolve, process.platform === "win32" ? 3500 : 2000));
-    }
-  }
+  // Storybook et Playwright tournent dans le sidecar Docker (ports 6006 + 2810 forwardés).
+  // Le nettoyage/réutilisation du sidecar est géré plus bas via un test de santé du daemon
+  // (ne PAS killPort ces ports → tuerait le proxy Docker).
+  const daemonAvailable = await isPortAvailable(CAPTURE_DAEMON_PORT);
 
   log("blue", "🔧", "Démarrage du serveur VR");
 
@@ -192,92 +171,59 @@ const main = async () => {
 
   log("green", "✅", "Serveur VR prêt");
 
-  let storybook: ReturnType<typeof spawn> | null = null;
+  // --- Sidecar Docker de capture (Storybook + daemon Playwright) ---
+  if (!isDockerAvailable()) {
+    log("red", "❌", "Docker est requis pour la capture VR mais n'est pas disponible.");
+    log("yellow", "💡", "Installez Docker Desktop puis relancez. Toutes les captures s'exécutent dans le conteneur.");
+    vrServer.kill();
+    process.exit(1);
+  }
 
-  if (storybookAlreadyRunning) {
-    log("green", "✅", "Storybook prêt (instance existante)");
-  } else if (useStaticStorybook) {
-    log("blue", "📚", "Storybook statique (build + serve)");
+  // Le conteneur choisit son mode Storybook via VR_STORYBOOK_MODE.
+  if (useStaticStorybook || process.env.VR_STORYBOOK_STATIC === "1") {
+    process.env.VR_STORYBOOK_MODE = "static";
+  }
 
-    if (needsStaticStorybookBuild(vrConfig.compare.statsFile)) {
-      log("blue", "🔨", "Build Storybook (--stats-json)…");
-      const buildCode = await runShellCommand("yarn", ["storybook:build:stats"], PROJECT_ROOT);
-      if (buildCode !== 0) {
-        log("red", "❌", "Échec du build Storybook statique");
-        vrServer.kill();
-        process.exit(1);
-      }
-    } else {
-      log(
-        "blue",
-        "⏭️",
-        "Build Storybook ignoré (storybook-static/ à jour — VR_STORYBOOK_STATIC_REBUILD=1 pour forcer)",
-      );
-    }
+  // Réutiliser un sidecar déjà sain → redémarrage de `yarn vr` rapide et fiable
+  // (Storybook prend les changements de code via HMR sur le bind mount, pas besoin
+  // de recréer le conteneur). On ne recrée que si le sidecar est absent ou cassé.
+  const sidecarBusy = !storybookAvailable || !daemonAvailable;
+  const existingDaemonHealthy = sidecarBusy ? await waitForCaptureDaemon(1) : false;
 
-    storybook = spawn("npx", ["serve", "storybook-static", "-l", String(storybookPort)], {
-      stdio: "inherit",
-      shell: true,
-      cwd: PROJECT_ROOT,
-      env: { ...process.env, STORYBOOK_ENV: "web" },
-    });
-
-    storybook.on("error", err => {
-      log("red", "❌", `Erreur serveur Storybook statique: ${err.message}`);
-      vrServer.kill();
-      process.exit(1);
-    });
-
-    const storybookReady = await waitForServer(storybookPort, 60);
-    if (!storybookReady) {
-      log("red", "❌", "Storybook statique n'a pas démarré à temps");
-      vrServer.kill();
-      process.exit(1);
-    }
-
-    const storiesIndexed = await waitForStorybookStories(1, 90, PROJECT_ROOT);
-    if (!storiesIndexed) {
-      log("red", "❌", "Storybook statique n'a pas indexé les stories à temps");
-      vrServer.kill();
-      if (storybook) storybook.kill();
-      process.exit(1);
-    }
-
-    log("green", "✅", "Storybook statique prêt");
+  if (existingDaemonHealthy) {
+    log("green", "✅", `Sidecar de capture déjà actif — réutilisation (${getCaptureDaemonUrl()})`);
   } else {
-    log("blue", "📚", "Démarrage de Storybook (dev)");
+    if (sidecarBusy) {
+      log("yellow", "⚠️", `Port ${storybookPort}/${CAPTURE_DAEMON_PORT} occupé par un sidecar non sain — recréation`);
+      await composeDown(PROJECT_ROOT).catch(() => undefined);
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
 
-    storybook = spawn("cross-env", ["STORYBOOK_ENV=web", "storybook", "dev", "-p", String(storybookPort)], {
-      stdio: "inherit",
-      shell: true,
-      cwd: PROJECT_ROOT,
-      env: { ...process.env, STORYBOOK_ENV: "web" },
-    });
-
-    storybook.on("error", err => {
-      log("red", "❌", `Erreur Storybook: ${err.message}`);
-      vrServer.kill();
-      process.exit(1);
-    });
-
-    const storybookReady = await waitForServer(storybookPort, 60);
-    if (!storybookReady) {
-      log("red", "❌", "Storybook n'a pas démarré à temps");
+    log("blue", "🐳", "Démarrage du sidecar de capture (Docker)");
+    const composeCode = await composeUp(PROJECT_ROOT);
+    if (composeCode !== 0) {
+      log("red", "❌", `docker compose up a échoué (code ${composeCode})`);
       vrServer.kill();
       process.exit(1);
     }
 
-    const storiesIndexed = await waitForStorybookStories(1, 90, PROJECT_ROOT);
-    if (!storiesIndexed) {
-      log("red", "❌", "Storybook n'a pas indexé les stories à temps");
+    log("blue", "⏳", "Attente du daemon de capture (Storybook + Playwright — le 1er build peut être long)");
+    const daemonReady = await waitForCaptureDaemon(300);
+    if (!daemonReady) {
+      log("red", "❌", `Daemon de capture injoignable sur ${getCaptureDaemonUrl()}`);
+      await composeDown(PROJECT_ROOT).catch(() => undefined);
       vrServer.kill();
-      if (storybook) {
-        storybook.kill();
-      }
       process.exit(1);
     }
+    log("green", "✅", `Sidecar de capture prêt (${getCaptureDaemonUrl()})`);
+  }
 
-    log("green", "✅", "Storybook prêt");
+  // Storybook est forwardé depuis le conteneur : vérifier qu'il répond côté hôte.
+  const storiesIndexed = await waitForStorybookStories(1, 60, PROJECT_ROOT);
+  if (storiesIndexed) {
+    log("green", "✅", `Storybook prêt (forwardé sur ${storybookUrl})`);
+  } else {
+    log("yellow", "⚠️", "Storybook du conteneur pas encore indexé côté hôte — la capture peut patienter");
   }
 
   const launcherConfig = vrConfig.launcher;
@@ -300,7 +246,8 @@ const main = async () => {
     log("green", "🎉", "Environnement VR prêt !");
     log("blue", "🌐", `Interface VR disponible sur ${EXPO_URL}`);
     log("blue", "🔧", `Serveur VR API sur ${VR_SERVER_URL}`);
-    log("blue", "📚", `Storybook disponible sur ${storybookUrl}`);
+    log("blue", "📚", `Storybook (conteneur) disponible sur ${storybookUrl}`);
+    log("blue", "🐳", `Daemon de capture sur ${getCaptureDaemonUrl()}`);
   };
 
   const runInitialCompareJob = (): Promise<number> => {
@@ -381,9 +328,7 @@ const main = async () => {
   expo.on("error", err => {
     log("red", "❌", `Erreur Expo: ${err.message}`);
     vrServer.kill();
-    if (storybook) {
-      storybook.kill();
-    }
+    void composeDown(PROJECT_ROOT);
     process.exit(1);
   });
 
@@ -391,9 +336,7 @@ const main = async () => {
   if (!expoReady) {
     log("red", "❌", "Expo n'a pas démarré à temps");
     vrServer.kill();
-    if (storybook) {
-      storybook.kill();
-    }
+    void composeDown(PROJECT_ROOT);
     process.exit(1);
   }
 
@@ -401,25 +344,26 @@ const main = async () => {
   await rebuildIndex();
   printReadyMessage();
 
-  process.on("SIGINT", () => {
-    log("yellow", "⚠️", "Arrêt en cours");
+  let shuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log("yellow", "⚠️", `Arrêt en cours (${signal})`);
     expo.kill();
-    if (storybook) {
-      storybook.kill();
-    }
     vrServer.kill();
+    try {
+      await composeDown(PROJECT_ROOT);
+    } catch {
+      // ignore
+    }
     process.exit(0);
-  });
+  };
 
-  process.on("SIGTERM", () => {
-    log("yellow", "⚠️", "Arrêt en cours");
-    expo.kill();
-    if (storybook) {
-      storybook.kill();
-    }
-    vrServer.kill();
-    process.exit(0);
-  });
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  // SIGHUP (fermeture du terminal / session SSH) : arrêt propre du sidecar aussi.
+  // Absent sous Windows — le listener est simplement ignoré par le runtime.
+  process.on("SIGHUP", () => void shutdown("SIGHUP"));
 };
 
 main().catch(err => {

@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text } from "react-native";
 
 type DemoButtonProps = {
   label: string;
@@ -31,33 +31,12 @@ export const DemoButton = ({ label, variant = "primary", disabled = false, onPre
   );
 };
 
-export const DemoButtonGroup = () => (
-  <View style={styles.group}>
-    <DemoButton
-      label="Label"
-      variant="primary"
-    />
-    <DemoButton
-      label="Secondary"
-      variant="secondary"
-    />
-    <DemoButton
-      label="Danger"
-      variant="danger"
-    />
-  </View>
-);
-
 const styles = StyleSheet.create({
   button: {
     borderRadius: 10,
     minWidth: 140,
     paddingHorizontal: 20,
     paddingVertical: 12,
-  },
-  group: {
-    alignItems: "center",
-    gap: 12,
   },
   label: {
     fontSize: 16,

@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-webpack5";
 
-import { clickByLabel, delay, expectText } from "../../utils/playHelpers";
+import { clickByLabelExpect, delay, expectText } from "../../utils/playHelpers";
 
 import { DemoPlayCounter } from "./DemoPlayCounter";
 
@@ -30,10 +30,10 @@ export const Initial: Story = {
 /** play() incrémente jusqu'à 3 — état stable attendu après les clics. */
 export const AfterThreeClicks: Story = {
   play: async ({ canvasElement, step }) => {
-    await step("Trois clics sur +", async () => {
-      await clickByLabel(canvasElement, "+");
-      await clickByLabel(canvasElement, "+");
-      await clickByLabel(canvasElement, "+");
+    await step("Trois clics sur + (chaque incrément vérifié)", async () => {
+      await clickByLabelExpect(canvasElement, "+", "Compteur 1");
+      await clickByLabelExpect(canvasElement, "+", "Compteur 2");
+      await clickByLabelExpect(canvasElement, "+", "Compteur 3");
     });
 
     await step("Compteur à 3", async () => {
@@ -44,17 +44,10 @@ export const AfterThreeClicks: Story = {
 
 /** play() avec délais entre clics — burst espacé via parameters.vr. */
 export const SlowIncrementToThree: Story = {
-  parameters: {
-    vr: {
-      stabilize: {
-        burstIntervalMs: 1000,
-      },
-    },
-  },
   play: async ({ canvasElement, step }) => {
-    await step("Clics espacés (200 ms)", async () => {
+    await step("Clics espacés (200ms et chaque incrément vérifié)", async () => {
       for (let i = 0; i < 3; i++) {
-        await clickByLabel(canvasElement, "+");
+        await clickByLabelExpect(canvasElement, "+", `Compteur ${i + 1}`);
         await delay(200);
       }
     });

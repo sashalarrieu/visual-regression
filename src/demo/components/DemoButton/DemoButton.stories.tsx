@@ -1,12 +1,13 @@
 import type { Meta, StoryObj } from "@storybook/react-webpack5";
+import { StyleSheet, View } from "react-native";
 
-import { DemoButton, DemoButtonGroup } from "./DemoButton";
+import { DemoButton } from "./DemoButton";
 
 const meta = {
   title: "Demo/Button",
   component: DemoButton,
   args: {
-    label: "Label",
+    label: "Primary",
     variant: "primary",
   },
 } satisfies Meta<typeof DemoButton>;
@@ -17,7 +18,7 @@ type Story = StoryObj<typeof meta>;
 
 export const Primary: Story = {
   args: {
-    label: "Valider",
+    label: "Primary",
     variant: "primary",
   },
 };
@@ -37,5 +38,27 @@ export const Disabled: Story = {
 };
 
 export const AllVariants: Story = {
-  render: () => <DemoButtonGroup />,
+  render: () => (
+    <View style={styles.group}>
+      <DemoButton
+        label="Primary"
+        variant="primary"
+      />
+      <DemoButton
+        label="Secondary"
+        variant="secondary"
+      />
+      <DemoButton
+        label="Danger"
+        variant="danger"
+      />
+    </View>
+  ),
 };
+
+const styles = StyleSheet.create({
+  group: {
+    alignItems: "center",
+    gap: 12,
+  },
+});

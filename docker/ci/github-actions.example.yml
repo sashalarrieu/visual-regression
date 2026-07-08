@@ -1,0 +1,46 @@
+# Exemple de job CI (projet hôte) : capture VR reproductible en Docker.
+# À adapter dans .github/workflows/ de VOTRE projet. Les baselines validées en CI
+# sont la source de vérité (ne pas régénérer les baselines depuis une capture native OS).
+name: Visual Regression
+
+on:
+  pull_request:
+
+jobs:
+  vr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # requis pour le mode incrémental (diff git)
+
+      # Cache des dépendances Linux + build Storybook entre les runs.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            storybook-static
+          key: vr-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            vr-${{ runner.os }}-
+
+      # Capture one-shot dans le conteneur (Storybook statique + compare).
+      - name: Run VR compare (Docker)
+        run: |
+          docker compose \
+            -f node_modules/@setshao/visual-regression/docker/docker-compose.ci.yml \
+            up --build --abort-on-container-exit --exit-code-from vr-capture
+        env:
+          VR_PROJECT_ROOT: ${{ github.workspace }}
+          VR_COMPARE_MODE: incremental
+          # Sharding optionnel : lancer plusieurs jobs avec des index différents.
+          # VR_SHARD_INDEX: 0
+          # VR_SHARD_TOTAL: 4
+
+      # Publier les diffs/nouvelles captures comme artefacts pour revue.
+      - name: Upload VR artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vr-screenshots
+          path: public/Screenshots

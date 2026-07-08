@@ -1,11 +1,12 @@
 import type { Decorator, Preview } from "@storybook/react-webpack5";
 import { useLayoutEffect, type JSX } from "react";
+import { addons } from "storybook/preview-api";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { ReduceMotion, ReducedMotionConfig } from "react-native-reanimated";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { LIVE_ANIMATION_VR_TAG, SKIP_PLAY_VR_TAG } from "../src/constants/constants";
-import { resolveStoryPlayFunction, runVrStoryPlay } from "../src/utils/vr-story-play";
+import { resolveStoryPlayFunction } from "../src/utils/vr-story-play";
 
 import "react-native-reanimated";
 
@@ -60,20 +61,28 @@ const VrStoryPlayRunner = ({ Story, context }: VrStoryPlayRunnerProps) => {
 
     root.setAttribute("data-vr-ready", "false");
 
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        await runVrStoryPlay(context as Record<string, unknown>);
-      } catch (error) {
-        console.error("[VR] play() failed:", error);
-      } finally {
-        if (!cancelled) root.setAttribute("data-vr-ready", "true");
+    const channel = addons.getChannel();
+    const onStoryFinished = (payload: { storyId?: string; status?: string }) => {
+      if (payload?.storyId !== context.id) return;
+      if (payload.status === "success") {
+        root.setAttribute("data-vr-ready", "true");
+      } else {
+        root.setAttribute("data-vr-ready", "error");
       }
-    })();
+    };
+
+    const onPlayException = (payload: { storyId?: string; error?: unknown }) => {
+      if (payload?.storyId !== context.id) return;
+      console.error("[VR] play() failed:", payload.error);
+      root.setAttribute("data-vr-ready", "error");
+    };
+
+    channel.on("storyFinished", onStoryFinished);
+    channel.on("playFunctionThrewException", onPlayException);
 
     return () => {
-      cancelled = true;
+      channel.off("storyFinished", onStoryFinished);
+      channel.off("playFunctionThrewException", onPlayException);
     };
   }, [context.id]);
 

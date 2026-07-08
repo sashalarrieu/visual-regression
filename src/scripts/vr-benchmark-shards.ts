@@ -9,7 +9,7 @@
  *
  * Prérequis : Storybook démarré (yarn storybook ou yarn vr).
  */
-import { existsSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 
 import { FORCE_VR_TAG, IGNORE_VR_TAG } from "@constants/constants";
@@ -188,6 +188,33 @@ const readBenchmarkCacheMsPerTask = (): number | null => {
   }
 };
 
+/** Persiste la mesure dans .vr-cache/benchmark-last.json (format partagé avec vr:benchmark). */
+const writeBenchmarkCache = (msPerTask: number, taskCount: number, concurrency: number): void => {
+  try {
+    const cacheDir = path.join(PROJECT_ROOT, path.dirname(BENCHMARK_CACHE_PATH));
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      path.join(PROJECT_ROOT, BENCHMARK_CACHE_PATH),
+      JSON.stringify(
+        {
+          updatedAt: new Date().toISOString(),
+          concurrency,
+          durationMs: Math.round(msPerTask * taskCount),
+          taskCount,
+          msPerTask,
+          source: "calibrate",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    console.log(`   Cache : ${BENCHMARK_CACHE_PATH} (${Math.round(msPerTask)} ms/tâche)`);
+  } catch {
+    // ignore cache write errors
+  }
+};
+
 const calibrateMsPerTask = async (tasks: CaptureTask[], concurrency: number): Promise<number> => {
   const sampleSize = Math.min(CALIBRATE_SAMPLE_SIZE, tasks.length);
   const sample = tasks.slice(0, sampleSize);
@@ -200,6 +227,7 @@ const calibrateMsPerTask = async (tasks: CaptureTask[], concurrency: number): Pr
 
   const msPerTask = result.stats.durationMs / sampleSize;
   console.log(`   Mesuré : ${formatMs(result.stats.durationMs)} total → ${Math.round(msPerTask)} ms/tâche`);
+  writeBenchmarkCache(msPerTask, sampleSize, concurrency);
   return msPerTask;
 };
 

@@ -228,6 +228,84 @@ npx playwright install chromium
 
 Sans cela, la comparaison peut échouer avec un `TimeoutError: launch: Timeout 180000ms exceeded`. En cas de timeout persistant, le script utilise désormais un timeout plus long et des options adaptées à Windows.
 
+> Remarque : avec la **capture Docker** (ci-dessous, comportement par défaut), vous n'avez **pas** besoin d'installer Chromium localement — l'image embarque déjà les navigateurs.
+
+---
+
+## Capture Docker (obligatoire, reproductible)
+
+Pour garantir des screenshots **identiques quelle que soit la machine** (Windows Intel, Mac M4, CI Linux…), **toute capture s'exécute dans un conteneur Docker**. Les différences de rendu entre OS (moteur de police DirectWrite vs CoreText, GPU, gestion des couleurs) disparaissent car l'environnement de capture est figé.
+
+### Principe
+
+- Un **sidecar Docker** (`vr-capture`) héberge **Storybook** (dev HMR) + un **daemon de capture** (Playwright Chromium Linux).
+- L'hôte (serveur VR, UI Expo, comparaison pixelmatch, index) **ne lance jamais Playwright** : chaque `runCaptureBatch` est délégué au daemon via HTTP (`POST /capture/batch`).
+- Résultat : **100 % des screenshots** (compare globale, régénération depuis le TreePanel, CI) passent par Docker.
+
+```
+Hôte (vr-server + UI Expo)  ──POST /capture/batch──▶  Conteneur (Storybook + daemon + Playwright)
+        ▲                                                        │
+        └──────────── screenshots via volume monté ◀────────────┘
+```
+
+### Prérequis hôte
+
+- **Docker** installé et démarré (Docker Desktop sur Mac/Windows).
+- Un script `storybook:build:stats` dans le `package.json` (utilisé en mode statique/CI).
+
+### Workflow dev
+
+```bash
+yarn vr
+```
+
+`yarn vr` démarre automatiquement le sidecar (build de l'image au premier lancement), attend que le daemon soit prêt, puis lance le serveur VR, la comparaison initiale et l'UI. Storybook tourne **dans le conteneur** (HMR : vos modifications de stories/composants sont prises en compte sans rebuild) et est forwardé sur `http://localhost:6006`.
+
+Commandes de contrôle du sidecar :
+
+| Script | Rôle |
+|--------|------|
+| `yarn vr:capture:up` | Démarre le sidecar + attend le daemon |
+| `yarn vr:capture:down` | Arrête le sidecar |
+| `yarn vr:capture:status` | État compose + health du daemon |
+
+### Workflow CI
+
+En CI, on utilise le mode **Storybook statique** (build unique, plus déterministe) en one-shot :
+
+```bash
+docker compose \
+  -f node_modules/@setshao/visual-regression/docker/docker-compose.ci.yml \
+  up --build --abort-on-container-exit --exit-code-from vr-capture
+```
+
+Un exemple complet GitHub Actions (cache `node_modules` + `storybook-static`, sharding, upload d'artefacts) est fourni : `docker/ci/github-actions.example.yml`.
+
+> **Source de vérité** : les baselines validées en Docker/CI font foi. Ne régénérez jamais une baseline depuis une capture native OS.
+
+### Variables d'environnement Docker
+
+| Variable | Défaut | Rôle |
+|----------|--------|------|
+| `VR_CAPTURE_BACKEND` | `docker` | `docker` = capture déléguée au daemon ; `local` = capture directe (tests internes / dans le conteneur) |
+| `VR_CAPTURE_DAEMON_URL` | `http://localhost:2810` | URL du daemon de capture |
+| `VR_STORYBOOK_MODE` | `dev` | `dev` (HMR) ou `static` (build + serve, CI) |
+| `VR_DOCKER_IMAGE` | `ghcr.io/setshao/vr-capture:1.61.1` | Image du sidecar (tag aligné sur la version Playwright) |
+| `VR_DOCKER` | `1` (dans le conteneur) | Active les flags Chromium déterministes |
+| `VR_CAPTURE_REMOTE_CHUNK` | `20` | Taille des lots envoyés au daemon (évite les timeouts fetch) |
+
+### Utiliser son propre Docker (image maison)
+
+L'image `ghcr.io/setshao/vr-capture` est un raccourci, pas une obligation. Vous pouvez fournir votre propre image (`VR_DOCKER_IMAGE`) tant qu'elle respecte le **contrat** :
+
+- Base Linux avec **la même version de Playwright/Chromium** que le package (voir `docker/Dockerfile`).
+- Code du projet hôte monté sur `/work` (`VR_PROJECT_ROOT=/work`).
+- **node_modules Linux** dans un volume dédié (pas les binaires natifs Mac/Windows).
+- `VR_DOCKER=1` et `VR_CAPTURE_BACKEND=local` dans le conteneur.
+- Lancer le daemon (`visual-regression capture-daemon`) ou la capture one-shot (`visual-regression capture-oneshot`).
+
+Toute divergence d'environnement (autre OS, autre Chromium, autre Node) peut réintroduire des différences de pixels entre machines.
+
 ---
 
 ## Utilisation dans un projet hôte
@@ -249,7 +327,10 @@ Le package contient les scripts dans `scripts/`. Depuis le **projet hôte**, ajo
 | `vr:test-validation` | Checklist Phases 0–8 (`--static-only` sans Storybook) |
 | `vr:storybook:static` | Build Storybook + stats (`preview-stats.json`) puis serve sur le port 6006 |
 | `vr:app`    | Lance l’app Expo en mode régression (port 2804) |
-| `vr:kill-ports` | Libère les ports 2804 et 2805 |
+| `vr:capture:up` | Démarre le sidecar Docker de capture (+ attend le daemon) |
+| `vr:capture:down` | Arrête le sidecar Docker de capture |
+| `vr:capture:status` | État du sidecar + health du daemon (port 2810) |
+| `vr:kill-ports` | Libère les ports 2804, 2805 et 2810 |
 
 Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du projet) :
 
@@ -280,6 +361,11 @@ Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du pr
 | `VR_STORYBOOK_STATIC_REBUILD` | `1` force le rebuild de `storybook-static/` au lancement statique |
 | `VR_STORYBOOK_URL` | URL Storybook (défaut : `http://localhost:6006`) |
 | `VR_SHARD_INDEX` / `VR_SHARD_TOTAL` | Sharding CI (env uniquement, index 0-based). Ex. `VR_SHARD_INDEX=0 VR_SHARD_TOTAL=4 yarn vr:compare` |
+| `VR_CAPTURE_BACKEND` | `docker` (défaut) délègue la capture au daemon ; `local` capture directe (tests / conteneur) |
+| `VR_CAPTURE_DAEMON_URL` | URL du daemon de capture (défaut : `http://localhost:2810`) |
+| `VR_STORYBOOK_MODE` | `dev` (HMR) ou `static` (build + serve, CI) dans le conteneur |
+| `VR_DOCKER_IMAGE` | Image du sidecar (défaut : `ghcr.io/setshao/vr-capture:1.61.1`) |
+| `VR_CAPTURE_REMOTE_CHUNK` | Taille des lots envoyés au daemon (défaut : `20`) |
 
 ### Benchmark performance (concurrency + sharding CI)
 

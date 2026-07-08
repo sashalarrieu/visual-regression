@@ -49,7 +49,7 @@ module.exports = {
   },
   compare: {
     mode: "incremental",
-    base: "origin/main",
+    base: "origin/dev",
     includeWorkingTree: true,
     threshold: 0,
     diffVerificationMaxAttempts: 3,

@@ -156,9 +156,12 @@ export const waitForStoryStable = async (
     expectsPlay => {
       const root = document.querySelector("#storybook-root");
       if (!root) return false;
-      if (expectsPlay) return root.getAttribute("data-vr-ready") === "true";
-      if (!root.hasAttribute("data-vr-ready")) return true;
-      return root.getAttribute("data-vr-ready") === "true";
+      const state = root.getAttribute("data-vr-ready");
+      // Échec du play() → on interrompt tout de suite (pas de screenshot d'un état faux).
+      if (state === "error") throw new Error("VR play() a échoué (data-vr-ready=error)");
+      if (expectsPlay) return state === "true";
+      if (state === null) return true;
+      return state === "true";
     },
     expectsPlay,
     { timeout: stepTimeout() },

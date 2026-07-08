@@ -10,7 +10,9 @@
  *   VR_COMPARE_BASE, VR_COMPARE_SCOPE, VR_THRESHOLD, VR_RUN_INITIAL_COMPARE,
  *   VR_STORYBOOK_URL, VR_STORYBOOK_STATIC, VR_STORYBOOK_STATIC_REBUILD,
  *   VR_DIFF_VERIFY_MAX_ATTEMPTS,
- *   VR_SHARD_INDEX, VR_SHARD_TOTAL
+ *   VR_SHARD_INDEX, VR_SHARD_TOTAL,
+ *   VR_CAPTURE_BACKEND, VR_CAPTURE_DAEMON_URL, VR_STORYBOOK_MODE,
+ *   VR_DOCKER, VR_DOCKER_IMAGE
  */
 
 import type { DeviceStyle } from "@app-types/types";
@@ -20,6 +22,8 @@ import type { DeviceStyle } from "@app-types/types";
 export const EXPO_PORT = 2804;
 export const STORYBOOK_PORT = 6006;
 export const VR_SERVER_PORT = 2805;
+/** Daemon de capture (sidecar Docker) : reçoit POST /capture/batch et sert GET /health. */
+export const CAPTURE_DAEMON_PORT = 2810;
 
 // --- API / serveur VR ---
 
@@ -28,6 +32,8 @@ export const VR_SERVER_URL = `${LOCAL_URL}:${VR_SERVER_PORT}`;
 export const EXPO_URL = `${LOCAL_URL}:${EXPO_PORT}`;
 /** URL Storybook par défaut (UI). Les scripts utilisent resolveVrConfig().storybook.url. */
 export const STORYBOOK_URL = `${LOCAL_URL}:${STORYBOOK_PORT}`;
+/** URL par défaut du daemon de capture (override VR_CAPTURE_DAEMON_URL). */
+export const CAPTURE_DAEMON_URL = `${LOCAL_URL}:${CAPTURE_DAEMON_PORT}`;
 
 /** Style utilisé quand le device n'est pas trouvé dans la config. */
 export const UNKNOWN_DEVICE_STYLE: DeviceStyle = { icon: "help-outline", color: "newTheme_danger" };

@@ -22,4 +22,4 @@ export const formatFlakeSuppressedLog = (attempt: number, screenshotKey: string)
   `✅ Flake suppressed after attempt ${attempt} for ${screenshotKey}`;
 
 export const formatDiffConfirmedLog = (maxAttempts: number, screenshotKey: string): string =>
-  `⚠️ Diff confirmed after ${maxAttempts} attempts for ${screenshotKey}`;
+  `⚠️  Diff confirmed after ${maxAttempts} attempts for ${screenshotKey}`;
