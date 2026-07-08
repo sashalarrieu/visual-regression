@@ -32,7 +32,7 @@
       "@app-types": ["./src/types"],
       "@app-types/*": ["./src/types/*"],
       "@utils": ["./src/utils"],
-      "@utils/*": ["./src/utils/*"],
+      "@utils/*": ["./src/utils/*"]
     }
   },
   "include": ["src/**/*", ".storybook/**/*"],

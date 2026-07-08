@@ -175,11 +175,7 @@ if (scriptPath) {
         ...spawnOpts(cwd),
         shell: false,
       })
-    : spawn(
-        npxRunner,
-        ["tsx", scriptPath, ...scriptArgs],
-        spawnOpts(hostRoot),
-      );
+    : spawn(npxRunner, ["tsx", scriptPath, ...scriptArgs], spawnOpts(hostRoot));
   child.on("error", err => {
     console.error("❌ Impossible de lancer visual-regression:", err.message);
     if (useNpxFallback) {
