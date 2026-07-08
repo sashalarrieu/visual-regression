@@ -434,7 +434,7 @@ Couvre : `vr.config.cjs`, overrides env, TurboSnap, sharding, exports compare UI
 | `yarn format:check` / `yarn format`     | Prettier                                       |
 | `yarn vr:test-validation --static-only` | Checklist statique Phases 0–9 (sans Storybook) |
 
-Un hook pre-commit Husky exécute `lint-staged` (Prettier + ESLint sur les fichiers stagés).
+Un hook pre-commit Husky exécute `lint-staged` (Prettier + ESLint sur les fichiers stagés), puis `yarn lint` sur tout le dépôt pour bloquer un commit si la CI échouerait.
 
 ### CI GitHub (ce dépôt)
 

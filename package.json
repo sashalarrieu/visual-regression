@@ -60,7 +60,8 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepare": "husky"
+    "prepare": "husky",
+    "precommit": "lint-staged && yarn lint"
   },
   "lint-staged": {
     "**/*.{js,mjs,cjs,ts,jsx,tsx,gql,sql,md,css,scss,json}": [
