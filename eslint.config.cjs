@@ -12,6 +12,7 @@ const prettierConfig = require("eslint-config-prettier");
 const checkFilePlugin = require("eslint-plugin-check-file");
 const importHelpersPlugin = require("eslint-plugin-import-helpers");
 const prettierPlugin = require("eslint-plugin-prettier");
+const globals = require("globals");
 
 const aliasEnforcerPlugin = require("./eslint-plugin-alias-enforcer.cjs");
 
@@ -229,7 +230,20 @@ module.exports = [
     },
   },
 
-  // Remove JSX-specific overrides to prevent conflicts with Prettier
+  // CommonJS / Node config files — must be last so Node globals win over expo/storybook browser env
+  {
+    files: ["**/*.cjs", "app.config.js", "eslint.config.cjs"],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: {
+        ...globals.node,
+        ...globals.commonjs,
+      },
+    },
+    rules: {
+      "import/no-default-export": "off",
+    },
+  },
 
   // Ignored files
   {

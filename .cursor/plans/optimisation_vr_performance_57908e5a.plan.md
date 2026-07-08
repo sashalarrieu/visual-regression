@@ -80,18 +80,18 @@ Comportement retenu pour l'incrémental : **mode incrémental par défaut** ; le
 
 ## État d'implémentation (juil. 2026)
 
-| Phase | Statut | Notes |
-| ----- | ------ | ----- |
-| 0 Config unifiée | ✅ | `vr.config.cjs`, `resolveVrConfig()`, env overrides |
-| 1 Moteur capture | ✅ | Pool, cache contextes, compare buffer early-exit |
-| 2 Refactor compare | ✅ | 4 exports publics → `vr-capture-engine` |
-| 3 Smart wait v1 | ✅ | `waitForStoryStable` (fonts, root, freeze CSS) |
-| 4 Compare images | ✅ | `buffersEqual` avant pixelmatch |
-| 5 Launcher compare initiale | ✅ | `runInitialCompare: true` par défaut |
-| 6 Sharding | ✅ | `vr-sharding.ts`, `VR_SHARD_*` |
-| 7 Storybook statique | ✅ | `vr:storybook:static`, launcher `storybookStatic`, `context.route` |
-| 8 Intégration serveur | ✅ | `GET /regressions/config`, README, `vr:test-validation` |
-| 9 SteadySnap | ✅ | `vr-steadysnap.ts`, burst opt-in, retry flake, `burst-vr` tag |
+| Phase                       | Statut | Notes                                                              |
+| --------------------------- | ------ | ------------------------------------------------------------------ |
+| 0 Config unifiée            | ✅     | `vr.config.cjs`, `resolveVrConfig()`, env overrides                |
+| 1 Moteur capture            | ✅     | Pool, cache contextes, compare buffer early-exit                   |
+| 2 Refactor compare          | ✅     | 4 exports publics → `vr-capture-engine`                            |
+| 3 Smart wait v1             | ✅     | `waitForStoryStable` (fonts, root, freeze CSS)                     |
+| 4 Compare images            | ✅     | `buffersEqual` avant pixelmatch                                    |
+| 5 Launcher compare initiale | ✅     | `runInitialCompare: true` par défaut                               |
+| 6 Sharding                  | ✅     | `vr-sharding.ts`, `VR_SHARD_*`                                     |
+| 7 Storybook statique        | ✅     | `vr:storybook:static`, launcher `storybookStatic`, `context.route` |
+| 8 Intégration serveur       | ✅     | `GET /regressions/config`, README, `vr:test-validation`            |
+| 9 SteadySnap                | ✅     | `vr-steadysnap.ts`, burst opt-in, retry flake, `burst-vr` tag      |
 
 ```mermaid
 flowchart LR
@@ -623,15 +623,15 @@ VR_SHARD_INDEX=0 VR_SHARD_TOTAL=4 yarn vr:compare
 
 ### Storybook statique et graphe de dépendances
 
-| Item | Statut |
-| ---- | ------ |
-| `yarn storybook:build:stats` | ✅ `package.json` |
-| `yarn vr:storybook:static` | ✅ build + `npx serve` |
-| `ensurePreviewStats()` au compare | ✅ `vr-dependency-graph.ts` |
-| `preview-stats.json` → TurboSnap | ✅ `traceAffectedStories` |
+| Item                                               | Statut                                                                                |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `yarn storybook:build:stats`                       | ✅ `package.json`                                                                     |
+| `yarn vr:storybook:static`                         | ✅ build + `npx serve`                                                                |
+| `ensurePreviewStats()` au compare                  | ✅ `vr-dependency-graph.ts`                                                           |
+| `preview-stats.json` → TurboSnap                   | ✅ `traceAffectedStories`                                                             |
 | Launcher `storybookStatic` / `VR_STORYBOOK_STATIC` | ✅ `vr-launcher.ts` (skip build si artefact à jour ; `VR_STORYBOOK_STATIC_REBUILD=1`) |
-| Rebuild stats si global trigger | 🟡 via `forceStatsRebuild` au filtrage incrémental |
-| Blocage réseau Playwright | ✅ `setupNetworkBlock` dans `getOrCreateContext` |
+| Rebuild stats si global trigger                    | 🟡 via `forceStatsRebuild` au filtrage incrémental                                    |
+| Blocage réseau Playwright                          | ✅ `setupNetworkBlock` dans `getOrCreateContext`                                      |
 
 ---
 
@@ -809,27 +809,27 @@ flowchart TD
 
 ## Fichiers principaux touchés
 
-| Fichier                                                                                  | Statut                                                                                     |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| [`vr.config.cjs`](vr.config.cjs)                                                         | ✅ Fait                                                                                    |
-| [`src/utils/vr-config.ts`](src/utils/vr-config.ts)                                       | ✅ Fait                                                                                    |
-| [`src/scripts/vr-capture-engine.ts`](src/scripts/vr-capture-engine.ts)                   | ✅ Fait (pool + blocage réseau)                                                            |
-| [`src/utils/vr-incremental.ts`](src/utils/vr-incremental.ts)                             | ✅ Fait                                                                                    |
-| [`src/utils/vr-dependency-graph.ts`](src/utils/vr-dependency-graph.ts)                   | ✅ Fait                                                                                    |
-| [`src/utils/vr-sharding.ts`](src/utils/vr-sharding.ts)                                 | ✅ Fait                                                                                    |
-| [`src/scripts/vr-test-validation.ts`](src/scripts/vr-test-validation.ts)                 | ✅ Fait                                                                                    |
-| [`src/scripts/vr-test-incremental.ts`](src/scripts/vr-test-incremental.ts)               | ✅ Fait                                                                                    |
-| [`.vr-cache/manifest.json`](.vr-cache/manifest.json)                                     | Généré                                                                                     |
-| [`storybook-static/preview-stats.json`](storybook-static/preview-stats.json)             | Généré (`yarn storybook:build:stats`)                                                      |
-| [`src/scripts/compare-visual-regressions.ts`](src/scripts/compare-visual-regressions.ts) | ✅ Refactoré                                                                               |
-| [`src/utils/node.ts`](src/utils/node.ts)                                                 | ✅ `getVrPublicConfig`, `getStorybookUrl`                                                  |
-| [`src/types/types.ts`](src/types/types.ts)                                               | ✅ `VrConfig`, `VrPublicConfig`, `VrChangedFilesScope`                                   |
-| [`bin/visual-regression.mjs`](bin/visual-regression.mjs)                                 | ✅ CLI complète                                                                            |
-| [`src/scripts/vr-launcher.ts`](src/scripts/vr-launcher.ts)                               | ✅ `runInitialCompare` + `storybookStatic`                                                 |
-| [`src/constants/constants.ts`](src/constants/constants.ts)                               | ✅ Ports + doc env ; UI utilise `STORYBOOK_URL` fallback                                   |
-| [`src/scripts/vr-server.ts`](src/scripts/vr-server.ts)                                   | ✅ `GET /regressions/config`                                                               |
-| [`README.md`](README.md)                                                                 | ✅ Documenté                                                                               |
-| [`.gitignore`](.gitignore)                                                               | ✅ `.vr-cache/`, `storybook-static/`                                                       |
-| [`.storybook/preview.tsx`](.storybook/preview.tsx)                                       | ✅ Reanimated ; ⏳ flag `VR_CAPTURE` (Phase 9)                                             |
-| `vr-devices.config.cjs`                                                                  | ✅ Supprimé                                                                                |
-| [`src/utils/vr-steadysnap.ts`](src/utils/vr-steadysnap.ts)                               | ✅ SteadySnap — stabilisation, burst, retry flake                                          |
+| Fichier                                                                                  | Statut                                                   |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| [`vr.config.cjs`](vr.config.cjs)                                                         | ✅ Fait                                                  |
+| [`src/utils/vr-config.ts`](src/utils/vr-config.ts)                                       | ✅ Fait                                                  |
+| [`src/scripts/vr-capture-engine.ts`](src/scripts/vr-capture-engine.ts)                   | ✅ Fait (pool + blocage réseau)                          |
+| [`src/utils/vr-incremental.ts`](src/utils/vr-incremental.ts)                             | ✅ Fait                                                  |
+| [`src/utils/vr-dependency-graph.ts`](src/utils/vr-dependency-graph.ts)                   | ✅ Fait                                                  |
+| [`src/utils/vr-sharding.ts`](src/utils/vr-sharding.ts)                                   | ✅ Fait                                                  |
+| [`src/scripts/vr-test-validation.ts`](src/scripts/vr-test-validation.ts)                 | ✅ Fait                                                  |
+| [`src/scripts/vr-test-incremental.ts`](src/scripts/vr-test-incremental.ts)               | ✅ Fait                                                  |
+| [`.vr-cache/manifest.json`](.vr-cache/manifest.json)                                     | Généré                                                   |
+| [`storybook-static/preview-stats.json`](storybook-static/preview-stats.json)             | Généré (`yarn storybook:build:stats`)                    |
+| [`src/scripts/compare-visual-regressions.ts`](src/scripts/compare-visual-regressions.ts) | ✅ Refactoré                                             |
+| [`src/utils/node.ts`](src/utils/node.ts)                                                 | ✅ `getVrPublicConfig`, `getStorybookUrl`                |
+| [`src/types/types.ts`](src/types/types.ts)                                               | ✅ `VrConfig`, `VrPublicConfig`, `VrChangedFilesScope`   |
+| [`bin/visual-regression.mjs`](bin/visual-regression.mjs)                                 | ✅ CLI complète                                          |
+| [`src/scripts/vr-launcher.ts`](src/scripts/vr-launcher.ts)                               | ✅ `runInitialCompare` + `storybookStatic`               |
+| [`src/constants/constants.ts`](src/constants/constants.ts)                               | ✅ Ports + doc env ; UI utilise `STORYBOOK_URL` fallback |
+| [`src/scripts/vr-server.ts`](src/scripts/vr-server.ts)                                   | ✅ `GET /regressions/config`                             |
+| [`README.md`](README.md)                                                                 | ✅ Documenté                                             |
+| [`.gitignore`](.gitignore)                                                               | ✅ `.vr-cache/`, `storybook-static/`                     |
+| [`.storybook/preview.tsx`](.storybook/preview.tsx)                                       | ✅ Reanimated ; ⏳ flag `VR_CAPTURE` (Phase 9)           |
+| `vr-devices.config.cjs`                                                                  | ✅ Supprimé                                              |
+| [`src/utils/vr-steadysnap.ts`](src/utils/vr-steadysnap.ts)                               | ✅ SteadySnap — stabilisation, burst, retry flake        |
