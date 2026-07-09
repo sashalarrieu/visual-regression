@@ -8,8 +8,8 @@ import pixelmatch from "pixelmatch";
 import type { Locator, Page } from "playwright";
 import { PNG } from "pngjs";
 
-import type { VrConfig } from "@app-types/types";
-import { PLAY_FN_TAG, SKIP_PLAY_VR_TAG } from "@constants/constants";
+import { PLAY_FN_TAG, SKIP_PLAY_VR_TAG } from "../constants/constants";
+import type { VrConfig } from "../types/types";
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 

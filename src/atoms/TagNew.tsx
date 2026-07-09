@@ -1,7 +1,7 @@
 import React from "react";
 import { Text, View } from "react-native";
 
-import { colors, spacing } from "@themes/theme";
+import { colors, spacing } from "../themes/theme";
 
 export const TagNew: React.FC = () => (
   <View

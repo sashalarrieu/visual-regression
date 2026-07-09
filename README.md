@@ -228,7 +228,7 @@ La comparaison visuelle utilise **Playwright** pour lancer Chromium. Les binaire
 **Sur Windows**, ou après un premier clone sur une nouvelle machine, exécute **une fois** à la racine du projet hôte :
 
 ```bash
-cd <projet-hôte>   # ex. vow-frontend
+cd <projet-hôte>
 npx playwright install chromium
 ```
 
@@ -323,7 +323,7 @@ L’UI VisualRegressions est entièrement embarquée dans le package.
 
 ### 1. Scripts fournis par le package (à appeler depuis le projet hôte)
 
-Le package contient les scripts dans `scripts/`. Depuis le **projet hôte**, ajoute dans ton `package.json` des scripts qui pointent vers le package (en lançant depuis la racine du projet pour que `process.cwd()` soit la racine) :
+Le package contient ses scripts CLI dans `src/scripts/`, exposés via la commande `visual-regression`. Depuis le **projet hôte**, ajoute des scripts qui appellent le binaire (en lançant depuis la racine du projet pour que `process.cwd()` soit la racine) :
 
 | Script                | Rôle                                                                                          |
 | --------------------- | --------------------------------------------------------------------------------------------- |
@@ -345,10 +345,10 @@ Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du pr
 ```json
 {
   "scripts": {
-    "vr": "bun node_modules/@setshao/visual-regression/scripts/vr-launcher.ts",
-    "vr:server": "bun node_modules/@setshao/visual-regression/scripts/vr-server.ts",
-    "vr:compare": "bun node_modules/@setshao/visual-regression/scripts/compare-visual-regressions.ts",
-    "vr:app": "node node_modules/@setshao/visual-regression/bin/visual-regression.mjs app"
+    "vr": "visual-regression",
+    "vr:server": "visual-regression server",
+    "vr:compare": "visual-regression compare",
+    "vr:app": "visual-regression app"
   }
 }
 ```
@@ -469,10 +469,26 @@ Puis ouvre http://localhost:2804 : après la comparaison, l’arbre des régress
 
 ## Publier une nouvelle version sur npm
 
-1. Se connecter : `npm login` (username, password, email, OTP si 2FA).
-2. Vérifier le contenu publié : `npm pack --dry-run`.
-3. Première publication (package scopé public) : `npm publish --access public`.
-4. Versions suivantes : incrémenter `version` dans `package.json`, puis `npm publish`.
+Prérequis :
+
+- Node `>=20` (voir `engines` du package)
+- Organisation npm `@setshao` configurée avec les droits de publication
+- Secret GitHub `NPM_TOKEN` (token npm automation/publish)
+- 2FA activée sur le compte npm
+
+Workflow recommandé :
+
+1. Vérifier les changements package : `yarn pack:check && yarn pack:verify`.
+2. Mettre à jour `CHANGELOG.md`.
+3. Incrémenter la version : `npm version patch` (ou `minor`/`major`).
+4. Pousser commit + tag : `git push && git push --tags`.
+5. Le workflow GitHub `npm-publish.yml` se déclenche sur tag `v*` et publie automatiquement sur npm.
+
+Publication manuelle exceptionnelle (si nécessaire) :
+
+1. `npm login`
+2. `yarn prepublishOnly`
+3. `npm publish`
 
 Pour utiliser la version npm dans un projet : `yarn add @setshao/visual-regression` et garder l’import `import { VisualRegressions } from "@setshao/visual-regression";`.
 
@@ -490,4 +506,4 @@ Pour utiliser la version npm dans un projet : `yarn add @setshao/visual-regressi
   Utiliser la commande du projet hôte pour libérer les ports (ex. `yarn vr:kill-ports`), puis relancer.
 
 - **« Module not found » pour les scripts VR**  
-  Si `node_modules/@setshao/visual-regression/scripts/` n’existe pas, réinstalle la dépendance (ex. supprimer `node_modules/@setshao/visual-regression` puis `yarn install`, ou `yarn add file:../visual-regression` depuis la racine du monorepo) pour que le dossier `scripts` soit bien présent.
+  Vérifier que `node_modules/.bin/visual-regression` est présent. Si absent, réinstaller la dépendance (`yarn install` ou `yarn add @setshao/visual-regression`).

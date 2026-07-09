@@ -1,9 +1,9 @@
 import React, { useState } from "react";
 import { TouchableOpacity, View } from "react-native";
 
-import { Box } from "@atoms/Box";
-import { Icon } from "@atoms/Icon";
-import { Typo } from "@atoms/Typo";
+import { Box } from "./Box";
+import { Icon } from "./Icon";
+import { Typo } from "./Typo";
 
 export type AccordionProps = {
   label: { text: string };

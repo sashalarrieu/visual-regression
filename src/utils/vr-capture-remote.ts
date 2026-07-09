@@ -5,8 +5,9 @@
  * POST /capture/batch et agrège les résultats. Les captures sont découpées en
  * lots pour éviter les timeouts de `fetch` sur les gros batches.
  */
-import type { CaptureBatchOptions, CaptureBatchResult, CaptureTask } from "@scripts/vr-capture-engine";
-import { getCaptureDaemonUrl } from "@utils/vr-capture-backend";
+import type { CaptureBatchOptions, CaptureBatchResult, CaptureTask } from "../scripts/vr-capture-engine";
+
+import { getCaptureDaemonUrl } from "./vr-capture-backend";
 
 /** Options envoyées au daemon (onProgress n'est pas sérialisable). */
 type SerializableOptions = Omit<CaptureBatchOptions, "onProgress">;

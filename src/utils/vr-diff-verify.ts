@@ -1,7 +1,7 @@
 /**
  * Vérification diff multi-capture — relance jusqu'à match baseline ou max tentatives.
  */
-import type { VrConfig } from "@app-types/types";
+import type { VrConfig } from "../types/types";
 
 export type DiffVerifyOutcome = "match" | "new" | "diff" | "missing_temp";
 

@@ -5,10 +5,11 @@
  * en local (backend "local" — vraie capture Playwright), puis s'arrête.
  * Contrairement au daemon, ne garde pas de serveur HTTP vivant.
  */
-import { STORYBOOK_PORT } from "@constants/constants";
-import { compareVisualRegressions } from "@scripts/compare-visual-regressions";
-import { getProjectRoot, resolveVrConfig } from "@utils/node";
-import { getStorybookMode, startStorybook } from "@utils/vr-storybook-runtime";
+import { STORYBOOK_PORT } from "../constants/constants";
+import { getProjectRoot, resolveVrConfig } from "../utils/node";
+import { getStorybookMode, startStorybook } from "../utils/vr-storybook-runtime";
+
+import { compareVisualRegressions } from "./compare-visual-regressions";
 
 // Backend "local" : vraie capture Playwright dans le conteneur (lu à l'exécution).
 process.env.VR_CAPTURE_BACKEND = "local";

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Image, PanResponder, type LayoutChangeEvent, type ViewStyle } from "react-native";
 
-import { Box } from "@atoms/Box";
-import { HITBOX_BORDER, SEPARATOR_CONTAINER_OFFSET, TOTAL_CONTAINER_BORDER_WIDTH } from "@constants/constants";
-import { colors } from "@themes/theme";
+import { Box } from "../atoms/Box";
+import { HITBOX_BORDER, SEPARATOR_CONTAINER_OFFSET, TOTAL_CONTAINER_BORDER_WIDTH } from "../constants/constants";
+import { colors } from "../themes/theme";
 
 export type ImageCompareProps = {
   leftImage?: string;

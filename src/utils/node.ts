@@ -6,11 +6,12 @@ import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import type { DeviceConfig, DeviceDisplayConfig, VRDeviceConfigItem, VrPublicConfig } from "@app-types/types";
-import { SCREENSHOTS_DIR } from "@constants/constants";
-import { resolveVrConfig } from "@utils/vr-config";
+import { SCREENSHOTS_DIR } from "../constants/constants";
+import type { DeviceConfig, DeviceDisplayConfig, VRDeviceConfigItem, VrPublicConfig } from "../types/types";
 
-export { assertVrConfig, loadVrConfig, resolveVrConfig, VR_CONFIG_FILENAME } from "@utils/vr-config";
+import { resolveVrConfig } from "./vr-config";
+
+export { assertVrConfig, loadVrConfig, resolveVrConfig, VR_CONFIG_FILENAME } from "./vr-config";
 
 export const getProjectRoot = (): string => path.resolve(process.env.VR_PROJECT_ROOT || process.cwd());
 

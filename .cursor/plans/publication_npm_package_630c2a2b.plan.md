@@ -4,28 +4,28 @@ overview: "Préparer `@setshao/visual-regression` pour une publication npm fiabl
 todos:
   - id: fix-package-json
     content: "Corriger package.json : exports/main/types, dependencies runtime, publishConfig, engines, scripts prepublishOnly/pack:check, champ files"
-    status: pending
+    status: completed
   - id: add-license-npmignore
     content: Créer LICENSE (MIT) et .npmignore (exclure src/demo, *.test.ts, .storybook, etc.)
-    status: pending
+    status: completed
   - id: regen-lockfile
     content: Régénérer yarn.lock après déplacement des dépendances
-    status: pending
+    status: completed
   - id: verify-pack-script
     content: Créer scripts/verify-pack.mjs + script yarn pack:verify pour valider le contenu du tarball
-    status: pending
+    status: completed
   - id: ci-pack-job
     content: Ajouter job pack dans .github/workflows/ci.yml (npm pack --dry-run + verify-pack)
-    status: pending
+    status: completed
   - id: npm-publish-workflow
     content: Créer .github/workflows/npm-publish.yml (publish auto sur tag v* avec NPM_TOKEN)
-    status: pending
+    status: completed
   - id: changelog-readme
     content: Créer CHANGELOG.md v1.0.0 et mettre à jour README section publication
-    status: pending
+    status: completed
   - id: smoke-test-tarball
     content: Tester npm pack + installation tarball dans un projet hôte avant première publication
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -33,7 +33,7 @@ isProject: false
 
 ## Contexte
 
-Le package est déjà structuré pour npm ([`package.json`](package.json) : nom scopé, `bin`, `files`, métadonnées, README). Il manque surtout des corrections bloquantes, l'optimisation du tarball, et l'automatisation CI (validation + publish).
+Le package est déjà structuré pour npm (`[package.json](package.json)` : nom scopé, `bin`, `files`, métadonnées, README). Il manque surtout des corrections bloquantes, l'optimisation du tarball, et l'automatisation CI (validation + publish).
 
 ```mermaid
 flowchart LR
@@ -50,11 +50,11 @@ flowchart LR
 
 ---
 
-## 1. Corriger [`package.json`](package.json)
+## 1. Corriger `[package.json](package.json)`
 
 ### Point d'entrée API
 
-Bug actuel : `main` / `types` pointent vers `src/index.tsx` (app Expo), alors que l'API publique est dans [`src/index.ts`](src/index.ts).
+Bug actuel : `main` / `types` pointent vers `src/index.tsx` (app Expo), alors que l'API publique est dans `[src/index.ts](src/index.ts)`.
 
 ```json
 "main": "src/index.ts",
@@ -70,22 +70,22 @@ Bug actuel : `main` / `types` pointent vers `src/index.tsx` (app Expo), alors qu
 
 ### Dépendances runtime vs dev
 
-Déplacer en **`dependencies`** tout ce que le CLI et l'app Expo consomment à l'exécution chez un projet hôte :
+Déplacer en `**dependencies**` tout ce que le CLI et l'app Expo consomment à l'exécution chez un projet hôte :
 
 | Package                                                                                    | Raison                                                                                                                                     |
 | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tsx`                                                                                      | Exécution des scripts `.ts` via [`bin/visual-regression.mjs`](bin/visual-regression.mjs)                                                   |
-| `playwright`, `pixelmatch`, `pngjs`                                                        | Capture / comparaison ([`src/scripts/vr-capture-engine.ts`](src/scripts/vr-capture-engine.ts), [`vr-server.ts`](src/scripts/vr-server.ts)) |
-| `cross-env`                                                                                | Spawn dans [`vr-launcher.ts`](src/scripts/vr-launcher.ts)                                                                                  |
+| `tsx`                                                                                      | Exécution des scripts `.ts` via `[bin/visual-regression.mjs](bin/visual-regression.mjs)`                                                   |
+| `playwright`, `pixelmatch`, `pngjs`                                                        | Capture / comparaison (`[src/scripts/vr-capture-engine.ts](src/scripts/vr-capture-engine.ts)`, `[vr-server.ts](src/scripts/vr-server.ts)`) |
+| `cross-env`                                                                                | Spawn dans `[vr-launcher.ts](src/scripts/vr-launcher.ts)`                                                                                  |
 | `expo`, `expo-font`, `expo-updates`                                                        | App standalone `visual-regression app`                                                                                                     |
 | `react-dom`, `react-native-web`, `react-native-safe-area-context`, `react-native-worklets` | Bundling web Expo                                                                                                                          |
-| `babel-preset-expo`, `babel-plugin-module-resolver`                                        | Résolution des alias `@atoms`, `@utils`, etc. via [`babel.config.cjs`](babel.config.cjs)                                                   |
+| `babel-preset-expo`, `babel-plugin-module-resolver`                                        | Résolution des alias `@atoms`, `@utils`, etc. via `[babel.config.cjs](babel.config.cjs)`                                                   |
 
-Conserver en **`peerDependencies`** (déjà présents) : `react`, `react-native`, `react-native-gesture-handler`, `react-native-reanimated`, `react-native-svg`, `@expo/vector-icons`, `expo-clipboard`.
+Conserver en `**peerDependencies**` (déjà présents) : `react`, `react-native`, `react-native-gesture-handler`, `react-native-reanimated`, `react-native-svg`, `@expo/vector-icons`, `expo-clipboard`.
 
-Laisser en **`devDependencies`** : Storybook, ESLint, Prettier, Vitest, Husky, types, etc.
+Laisser en `**devDependencies**` : Storybook, ESLint, Prettier, Vitest, Husky, types, etc.
 
-Après déplacement : `yarn install` pour régénérer [`yarn.lock`](yarn.lock).
+Après déplacement : `yarn install` pour régénérer `[yarn.lock](yarn.lock)`.
 
 ### Métadonnées publication
 
@@ -111,7 +111,7 @@ Ajouter des scripts :
 
 ## 2. Fichiers à ajouter ou inclure dans le tarball
 
-### [`LICENSE`](LICENSE) (nouveau)
+### `[LICENSE](LICENSE)` (nouveau)
 
 Fichier MIT standard à la racine (requis par npm et GitHub ; `"license": "MIT"` existe déjà).
 
@@ -121,8 +121,8 @@ Actuellement absents du tarball mais **nécessaires à l'exécution** :
 
 | Fichier                                | Rôle                                                  |
 | -------------------------------------- | ----------------------------------------------------- |
-| [`tsconfig.json`](tsconfig.json)       | Alias TypeScript pour `tsx` (`@utils`, `@scripts`, …) |
-| [`babel.config.cjs`](babel.config.cjs) | Alias pour Metro/Expo (`visual-regression app`)       |
+| `[tsconfig.json](tsconfig.json)`       | Alias TypeScript pour `tsx` (`@utils`, `@scripts`, …) |
+| `[babel.config.cjs](babel.config.cjs)` | Alias pour Metro/Expo (`visual-regression app`)       |
 
 Mettre à jour le champ `files` :
 
@@ -144,7 +144,7 @@ Retirer `"scripts"` (dossier racine inexistant ; les scripts sont dans `src/scri
 
 ---
 
-## 3. Optimiser le contenu publié — [`.npmignore`](.npmignore) (nouveau)
+## 3. Optimiser le contenu publié — `[.npmignore](.npmignore)` (nouveau)
 
 Le champ `files` inclut tout `src/`, ce qui embarque aujourd'hui ~220 screenshots de démo et 12 fichiers `*.test.ts`. Exclure :
 
@@ -158,29 +158,30 @@ public/
 *.log
 ```
 
-La démo reste dans le repo pour [`integration.yml`](.github/workflows/integration.yml) ; elle n'est pas nécessaire chez les consommateurs.
+La démo reste dans le repo pour `[integration.yml](.github/workflows/integration.yml)` ; elle n'est pas nécessaire chez les consommateurs.
 
 ---
 
 ## 4. Validation du tarball en CI (chaque PR)
 
-Étendre [`.github/workflows/ci.yml`](.github/workflows/ci.yml) avec une job `pack` :
+Étendre `[.github/workflows/ci.yml](.github/workflows/ci.yml)` avec une job `pack` :
 
 1. `yarn install --frozen-lockfile`
 2. `yarn typecheck && yarn test:ci` (déjà fait dans `quality`)
 3. `npm pack --dry-run` et vérifications :
-   - `src/index.ts` présent, `src/index.tsx` absent ou secondaire
-   - aucun `src/demo/` ni `*.test.ts`
-   - `tsconfig.json`, `babel.config.cjs`, `LICENSE` présents
-   - taille du tarball raisonnable (alerte si > seuil, ex. 5 Mo)
 
-Script utilitaire optionnel : [`scripts/verify-pack.mjs`](scripts/verify-pack.mjs) pour centraliser ces assertions (appelé par CI et localement via `yarn pack:verify`).
+- `src/index.ts` présent, `src/index.tsx` absent ou secondaire
+- aucun `src/demo/` ni `*.test.ts`
+- `tsconfig.json`, `babel.config.cjs`, `LICENSE` présents
+- taille du tarball raisonnable (alerte si > seuil, ex. 5 Mo)
+
+Script utilitaire optionnel : `[scripts/verify-pack.mjs](scripts/verify-pack.mjs)` pour centraliser ces assertions (appelé par CI et localement via `yarn pack:verify`).
 
 ---
 
 ## 5. Publication automatique sur tag `v*`
 
-Créer [`.github/workflows/npm-publish.yml`](.github/workflows/npm-publish.yml), aligné sur [`docker-publish.yml`](.github/workflows/docker-publish.yml) :
+Créer `[.github/workflows/npm-publish.yml](.github/workflows/npm-publish.yml)`, aligné sur `[docker-publish.yml](.github/workflows/docker-publish.yml)` :
 
 ```yaml
 on:
@@ -213,7 +214,7 @@ git push && git push --tags   # tag v1.0.1 → déclenche npm + docker publish
 
 ---
 
-## 6. [`CHANGELOG.md`](CHANGELOG.md) (nouveau)
+## 6. `[CHANGELOG.md](CHANGELOG.md)` (nouveau)
 
 Format [Keep a Changelog](https://keepachangelog.com/) :
 
@@ -232,7 +233,7 @@ Processus : mettre à jour le CHANGELOG à chaque `npm version`.
 
 ## 7. Mettre à jour le README
 
-Section « Publier une nouvelle version sur npm » dans [`README.md`](README.md) (l.470+) :
+Section « Publier une nouvelle version sur npm » dans `[README.md](README.md)` (l.470+) :
 
 - Corriger la mention `scripts/` (obsolète ; scripts dans `src/scripts/`)
 - Documenter le workflow tag `v*` + secret `NPM_TOKEN`
@@ -249,7 +250,7 @@ Validation manuelle recommandée après implémentation :
 ```bash
 # Dans visual-regression
 npm pack
-# Dans un projet hôte (ex. vow-frontend)
+# Dans un projet hôte
 yarn add ../visual-regression/setshao-visual-regression-1.0.0.tgz
 npx visual-regression test-validation --static-only
 npx visual-regression server   # smoke test CLI
@@ -267,7 +268,7 @@ Vérifier que les alias `@utils` / `@atoms` se résolvent (tsx + tsconfig + babe
 4. CI verte (job `pack` incluse)
 5. Test local `npm pack` + install tarball dans projet hôte
 6. `git tag v1.0.0 && git push origin v1.0.0` → publication auto
-7. Vérifier sur https://www.npmjs.com/package/@setshao/visual-regression
+7. Vérifier sur [https://www.npmjs.com/package/@setshao/visual-regression](https://www.npmjs.com/package/@setshao/visual-regression)
 8. Dans le projet hôte : `yarn add @setshao/visual-regression` (plus de `file:../`)
 
 ---
@@ -276,15 +277,15 @@ Vérifier que les alias `@utils` / `@atoms` se résolvent (tsx + tsconfig + babe
 
 | Fichier                                                                  | Action                                                         |
 | ------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| [`package.json`](package.json)                                           | Corriger exports, deps, publishConfig, engines, scripts, files |
-| [`yarn.lock`](yarn.lock)                                                 | Régénérer après déplacement deps                               |
-| [`LICENSE`](LICENSE)                                                     | Créer                                                          |
-| [`.npmignore`](.npmignore)                                               | Créer                                                          |
-| [`CHANGELOG.md`](CHANGELOG.md)                                           | Créer                                                          |
-| [`.github/workflows/ci.yml`](.github/workflows/ci.yml)                   | Ajouter job `pack`                                             |
-| [`.github/workflows/npm-publish.yml`](.github/workflows/npm-publish.yml) | Créer                                                          |
-| [`scripts/verify-pack.mjs`](scripts/verify-pack.mjs)                     | Créer (optionnel mais recommandé)                              |
-| [`README.md`](README.md)                                                 | Mettre à jour section publication                              |
+| `[package.json](package.json)`                                           | Corriger exports, deps, publishConfig, engines, scripts, files |
+| `[yarn.lock](yarn.lock)`                                                 | Régénérer après déplacement deps                               |
+| `[LICENSE](LICENSE)`                                                     | Créer                                                          |
+| `[.npmignore](.npmignore)`                                               | Créer                                                          |
+| `[CHANGELOG.md](CHANGELOG.md)`                                           | Créer                                                          |
+| `[.github/workflows/ci.yml](.github/workflows/ci.yml)`                   | Ajouter job `pack`                                             |
+| `[.github/workflows/npm-publish.yml](.github/workflows/npm-publish.yml)` | Créer                                                          |
+| `[scripts/verify-pack.mjs](scripts/verify-pack.mjs)`                     | Créer (optionnel mais recommandé)                              |
+| `[README.md](README.md)`                                                 | Mettre à jour section publication                              |
 
 ## Risques et mitigations
 

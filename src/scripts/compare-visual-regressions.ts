@@ -3,7 +3,6 @@ import { appendFileSync, existsSync, readdirSync, statSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import type { StoryDevicePair } from "@app-types/types";
 import {
   DIFF_SCREENSHOT_NAME,
   FORCE_VR_TAG,
@@ -11,8 +10,19 @@ import {
   NEW_SCREENSHOT_NAME,
   SCREENSHOT_EXTENSION,
   SCREENSHOT_NAME,
-} from "@constants/constants";
-import type { CaptureTask } from "@scripts/vr-capture-engine";
+} from "../constants/constants";
+import type { StoryDevicePair } from "../types/types";
+import {
+  getDevicesConfig,
+  getProjectPaths,
+  getProjectRoot,
+  resolveVrConfig,
+  waitForStorybookStories,
+} from "../utils/node";
+import { filterCaptureTasks, getChangedFiles, shouldWipePublicDir, updateManifest } from "../utils/vr-incremental";
+import { filterTasksByShard } from "../utils/vr-sharding";
+
+import type { CaptureTask } from "./vr-capture-engine";
 import {
   deleteAllVisualRegressionsFiles,
   deleteVisualRegressionsFilesForDevice,
@@ -21,18 +31,9 @@ import {
   logCaptureTimerEnd,
   resolveConcurrency,
   runCaptureBatch,
-} from "@scripts/vr-capture-engine";
-import {
-  getDevicesConfig,
-  getProjectPaths,
-  getProjectRoot,
-  resolveVrConfig,
-  waitForStorybookStories,
-} from "@utils/node";
-import { filterCaptureTasks, getChangedFiles, shouldWipePublicDir, updateManifest } from "@utils/vr-incremental";
-import { filterTasksByShard } from "@utils/vr-sharding";
+} from "./vr-capture-engine";
 
-export { deleteAllVisualRegressionsFiles, deleteVisualRegressionsFilesForDevice } from "@scripts/vr-capture-engine";
+export { deleteAllVisualRegressionsFiles, deleteVisualRegressionsFilesForDevice } from "./vr-capture-engine";
 
 const PROJECT_ROOT = getProjectRoot();
 const SCRIPT_DIR_COMPARE = path.dirname(fileURLToPath(import.meta.url));

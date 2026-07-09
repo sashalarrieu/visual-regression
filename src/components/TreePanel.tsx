@@ -2,15 +2,15 @@ import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import { View } from "react-native";
 import { ScrollView } from "react-native-gesture-handler";
 
-import type { Node } from "@app-types/types";
-import { Accordion } from "@atoms/Accordion";
-import { Box } from "@atoms/Box";
-import { Bullet } from "@atoms/Bullet";
-import { Button } from "@atoms/Button";
-import { Typo } from "@atoms/Typo";
-import { useDeviceConfig } from "@providers/DeviceConfigProvider";
-import { colors, spacing } from "@themes/theme";
-import { calculateFolderDepth, findFirstFile, formatStoryName, getStoryNameFromId } from "@utils";
+import { Accordion } from "../atoms/Accordion";
+import { Box } from "../atoms/Box";
+import { Bullet } from "../atoms/Bullet";
+import { Button } from "../atoms/Button";
+import { Typo } from "../atoms/Typo";
+import { useDeviceConfig } from "../providers/DeviceConfigProvider";
+import { colors, spacing } from "../themes/theme";
+import type { Node } from "../types/types";
+import { calculateFolderDepth, findFirstFile, formatStoryName, getStoryNameFromId } from "../utils";
 
 export type TreePanelProps = {
   tree: Node | null;

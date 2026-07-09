@@ -1,0 +1,7 @@
+src/demo/
+**/*.test.ts
+.storybook/
+storybook-static/
+public/
+.vr-cache/
+*.log

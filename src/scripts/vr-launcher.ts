@@ -13,7 +13,7 @@ import {
   STORYBOOK_PORT,
   VR_SERVER_PORT,
   VR_SERVER_URL,
-} from "@constants/constants";
+} from "../constants/constants";
 import {
   assertVrConfig,
   getNodeTsxArgs,
@@ -23,11 +23,11 @@ import {
   resolveVrConfig,
   spawnShellOption,
   waitForStorybookStories,
-} from "@utils/node";
-import { getCaptureDaemonUrl } from "@utils/vr-capture-backend";
-import { waitForCaptureDaemon } from "@utils/vr-capture-remote";
-import { composeDown, composeUp, isDockerAvailable } from "@utils/vr-docker";
-import { getStorybookMode, startStorybook, stopStorybook } from "@utils/vr-storybook-runtime";
+} from "../utils/node";
+import { getCaptureDaemonUrl } from "../utils/vr-capture-backend";
+import { waitForCaptureDaemon } from "../utils/vr-capture-remote";
+import { composeDown, composeUp, isDockerAvailable } from "../utils/vr-docker";
+import { getStorybookMode, startStorybook, stopStorybook } from "../utils/vr-storybook-runtime";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
 const PACKAGE_ROOT = path.join(SCRIPT_DIR, "..", "..");

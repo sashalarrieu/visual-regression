@@ -2,8 +2,8 @@ import { MaterialIcons } from "@expo/vector-icons";
 import React from "react";
 import type { StyleProp, TextStyle } from "react-native";
 
-import type { MaterialIconName } from "@app-types/types";
-import { colors, spacing, type ColorKey } from "@themes/theme";
+import { colors, spacing, type ColorKey } from "../themes/theme";
+import type { MaterialIconName } from "../types/types";
 
 const sizeMap = { s: 14, m: 18, l: 22 };
 

@@ -1,7 +1,7 @@
 import React from "react";
 import { Switch, Text, View } from "react-native";
 
-import { spacing } from "@themes/theme";
+import { spacing } from "../themes/theme";
 
 export type ToggleFieldProps = {
   title: string;

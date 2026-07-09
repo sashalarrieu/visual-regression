@@ -4,7 +4,7 @@
  */
 import { createHash } from "crypto";
 
-import type { CaptureTask } from "@scripts/vr-capture-engine";
+import type { CaptureTask } from "../scripts/vr-capture-engine";
 
 export type ShardConfig = {
   /** Index 0-based */

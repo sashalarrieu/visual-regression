@@ -1,8 +1,9 @@
 import React from "react";
 import { View } from "react-native";
 
-import { Typo } from "@atoms/Typo";
-import { spacing } from "@themes/theme";
+import { spacing } from "../themes/theme";
+
+import { Typo } from "./Typo";
 
 export type EndOfListProps = {
   emptyText: string;
