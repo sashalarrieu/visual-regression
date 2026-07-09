@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Interface de régression visuelle pour Storybook (React Native / Expo), réutilisable dans tout projet",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "src/index.tsx",
   "types": "src/index.ts",
   "exports": {
     ".": {
