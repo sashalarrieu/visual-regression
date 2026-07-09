@@ -50,7 +50,7 @@ if (!existsSync(configPath)) {
     console.error(
       "\n❌ Fichier de configuration requis manquant : vr.config.cjs\n" +
         `   Créez ce fichier à la racine de votre projet (${hostRoot}).\n` +
-        "   Voir la documentation : https://github.com/setshao/visual-regression#readme\n",
+        "   Voir la documentation : https://github.com/sashalarrieu/visual-regression#readme\n",
     );
   }
   process.exit(1);

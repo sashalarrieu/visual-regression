@@ -1,4 +1,4 @@
-import type { VrStoryParameters } from "../src/types/types";
+import type { VrStoryParameters } from "@setshao/visual-regression";
 
 declare module "@storybook/react-webpack5" {
   interface Parameters {

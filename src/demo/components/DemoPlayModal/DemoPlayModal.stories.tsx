@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-webpack5";
 
-import { clickByLabel, expectAriaLabel, expectNoAriaLabel, expectText } from "../../utils/playHelpers";
+import { clickByLabel, expectAriaLabel, expectNoAriaLabel, expectText } from "../../../storybook/play-helpers";
 
 import { DemoPlayModal } from "./DemoPlayModal";
 

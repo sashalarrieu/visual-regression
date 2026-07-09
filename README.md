@@ -1,7 +1,7 @@
 # @setshao/visual-regression
 
-[![CI](https://github.com/setshao/visual-regression/actions/workflows/ci.yml/badge.svg)](https://github.com/setshao/visual-regression/actions/workflows/ci.yml)
-[![VR Integration](https://github.com/setshao/visual-regression/actions/workflows/integration.yml/badge.svg)](https://github.com/setshao/visual-regression/actions/workflows/integration.yml)
+[![CI](https://github.com/sashalarrieu/visual-regression/actions/workflows/ci.yml/badge.svg)](https://github.com/sashalarrieu/visual-regression/actions/workflows/ci.yml)
+[![VR Integration](https://github.com/sashalarrieu/visual-regression/actions/workflows/integration.yml/badge.svg)](https://github.com/sashalarrieu/visual-regression/actions/workflows/integration.yml)
 
 Solution de régression visuelle **clé en main** pour tout projet qui possède un **Storybook**, quelle que soit la techno.  
 Le package fournit une **app web de régression dédiée** (UI intégrée dans le package) pour parcourir les stories, visualiser les screenshots (NEW / DIFF), voir les heatmaps, naviguer entre devices et gérer l’historique des validations / refus.
@@ -320,6 +320,46 @@ Toute divergence d'environnement (autre OS, autre Chromium, autre Node) peut ré
 
 Dans l’utilisation standard, tu **n’as rien à importer dans ton app** : tu lances les scripts depuis la racine du projet hôte et tu ouvres l’URL de l’app web de régression dans ton navigateur.  
 L’UI VisualRegressions est entièrement embarquée dans le package.
+
+### Intégration Storybook (`.storybook/`)
+
+Le package expose les decorators, types et helpers utilisés par les stories VR :
+
+| Import                                 | Rôle                                                                                 |
+| -------------------------------------- | ------------------------------------------------------------------------------------ |
+| `@setshao/visual-regression/storybook` | Decorators `vrPreviewDecorators` (freeze Reanimated + exécution `play()`)            |
+| `@setshao/visual-regression`           | Tags VR (`LIVE_ANIMATION_VR_TAG`, `SKIP_PLAY_VR_TAG`, …) et type `VrStoryParameters` |
+| `@setshao/visual-regression/play`      | Helpers `play()` DOM pour React Native Web (`clickByLabel`, `expectText`, …)         |
+
+**`.storybook/preview.tsx`** :
+
+```tsx
+import type { Preview } from "@storybook/react-webpack5";
+import { vrPreviewDecorators } from "@setshao/visual-regression/storybook";
+
+const preview: Preview = {
+  decorators: vrPreviewDecorators,
+  parameters: { layout: "centered" },
+};
+
+export default preview;
+```
+
+**`.storybook/vr-parameters.d.ts`** (typage `parameters.vr`) :
+
+```ts
+import type { VrStoryParameters } from "@setshao/visual-regression";
+
+declare module "@storybook/react-webpack5" {
+  interface Parameters {
+    vr?: VrStoryParameters;
+  }
+}
+```
+
+Un modèle est aussi fourni dans le package : `node_modules/@setshao/visual-regression/src/storybook/vr-parameters.d.ts`.
+
+Ajoutez `@setshao/visual-regression` à `modulesToTranspile` de `@storybook/addon-react-native-web` si Storybook ne résout pas le package.
 
 ### 1. Scripts fournis par le package (à appeler depuis le projet hôte)
 

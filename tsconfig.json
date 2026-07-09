@@ -1,5 +1,9 @@
 {
   "compilerOptions": {
+    "paths": {
+      "@setshao/visual-regression": ["./src/index.ts"],
+      "@setshao/visual-regression/storybook": ["./src/storybook/index.ts"]
+    },
     "strict": true,
     "noEmit": true,
     "noImplicitAny": false,

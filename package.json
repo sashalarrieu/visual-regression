@@ -3,12 +3,16 @@
   "version": "1.0.0",
   "description": "Interface de régression visuelle pour Storybook (React Native / Expo), réutilisable dans tout projet",
   "type": "module",
-  "main": "src/index.tsx",
+  "main": "src/index.ts",
   "types": "src/index.ts",
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./storybook": {
+      "types": "./src/storybook/index.ts",
+      "default": "./src/storybook/index.ts"
     },
     "./package.json": "./package.json"
   },
@@ -39,12 +43,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/setshao/visual-regression.git"
+    "url": "https://github.com/sashalarrieu/visual-regression.git"
   },
   "bugs": {
-    "url": "https://github.com/setshao/visual-regression/issues"
+    "url": "https://github.com/sashalarrieu/visual-regression/issues"
   },
-  "homepage": "https://github.com/setshao/visual-regression#readme",
+  "homepage": "https://github.com/sashalarrieu/visual-regression#readme",
   "publishConfig": {
     "access": "public"
   },

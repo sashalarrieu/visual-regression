@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-webpack5";
 
-import { clickByLabel, expectText } from "../../utils/playHelpers";
+import { clickByLabel, expectText } from "../../../storybook/play-helpers";
 
 import { DemoPlayWizard } from "./DemoPlayWizard";
 

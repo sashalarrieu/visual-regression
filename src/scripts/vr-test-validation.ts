@@ -11,6 +11,14 @@ import path from "path";
 
 import { FORCE_VR_TAG, IGNORE_VR_TAG, LIVE_ANIMATION_VR_TAG } from "../constants/constants";
 import {
+  BURST_VR_TAG,
+  fromVRDeviceConfig,
+  LIVE_ANIMATION_VR_TAG as LIVE_ANIMATION_EXPORT,
+  SKIP_PLAY_VR_TAG,
+} from "../index";
+import { resolveStoryPlayFunction, vrPreviewDecorators } from "../storybook";
+import { clickByLabel, delay } from "../storybook/play-helpers";
+import {
   getDevicesConfig,
   getProjectRoot,
   getVrPublicConfig,
@@ -131,6 +139,22 @@ const runStaticChecks = (): CheckResult[] => {
         typeof compareAllStories === "function",
       "Exports compare UI : compareSelectedStories, compareByType, compareAllStories",
       "Exports compare UI manquants",
+    ),
+  );
+
+  results.push(
+    check(
+      typeof fromVRDeviceConfig === "function" &&
+        LIVE_ANIMATION_EXPORT === LIVE_ANIMATION_VR_TAG &&
+        SKIP_PLAY_VR_TAG === "skip-play-vr" &&
+        BURST_VR_TAG === "burst-vr" &&
+        Array.isArray(vrPreviewDecorators) &&
+        vrPreviewDecorators.length === 2 &&
+        typeof resolveStoryPlayFunction === "function" &&
+        typeof clickByLabel === "function" &&
+        typeof delay === "function",
+      "Exports package : index, storybook, play",
+      "Exports package manquants (index / storybook / play)",
     ),
   );
 
