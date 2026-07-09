@@ -14,7 +14,7 @@ on:
         default: "1.61.1"
 
 env:
-  IMAGE_NAME: ghcr.io/setshao/vr-capture
+  IMAGE_NAME: ghcr.io/sashalarrieu/vr-capture
   PLAYWRIGHT_VERSION: ${{ github.event.inputs.playwright_version || '1.61.1' }}
 
 jobs:
