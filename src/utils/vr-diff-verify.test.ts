@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import type { VrConfig } from "@app-types/types";
-import { createTestVrConfig } from "@utils/test-helpers";
+import type { VrConfig } from "../types/types";
+
+import { createTestVrConfig } from "./test-helpers";
 import {
   formatDiffConfirmedLog,
   formatDiffVerifyRetryLog,
   formatFlakeSuppressedLog,
   getDiffVerificationMaxAttempts,
   shouldRetryDiffVerification,
-} from "@utils/vr-diff-verify";
+} from "./vr-diff-verify";
 
 const configWithAttempts = (attempts: number): VrConfig =>
   createTestVrConfig({

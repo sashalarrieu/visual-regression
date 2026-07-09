@@ -15,7 +15,7 @@
  *   VR_DOCKER, VR_DOCKER_IMAGE
  */
 
-import type { DeviceStyle } from "@app-types/types";
+import type { DeviceStyle } from "../types/types";
 
 // --- Ports (launcher, serveur, Storybook, Expo) ---
 

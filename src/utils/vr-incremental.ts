@@ -7,16 +7,17 @@ import { createHash } from "crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 
-import type { VrConfig, VrChangedFilesScope } from "@app-types/types";
 import {
   DIFF_SCREENSHOT_NAME,
   FORCE_VR_TAG,
   NEW_SCREENSHOT_NAME,
   SCREENSHOT_NAME,
   SCREENSHOTS_DIR,
-} from "@constants/constants";
-import type { CaptureTask } from "@scripts/vr-capture-engine";
-import { resolveAffectedStoryIds } from "@utils/vr-dependency-graph";
+} from "../constants/constants";
+import type { CaptureTask } from "../scripts/vr-capture-engine";
+import type { VrConfig, VrChangedFilesScope } from "../types/types";
+
+import { resolveAffectedStoryIds } from "./vr-dependency-graph";
 
 export type StoryIndexEntry = {
   id: string;

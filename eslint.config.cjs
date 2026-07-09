@@ -14,8 +14,6 @@ const importHelpersPlugin = require("eslint-plugin-import-helpers");
 const prettierPlugin = require("eslint-plugin-prettier");
 const globals = require("globals");
 
-const aliasEnforcerPlugin = require("./eslint-plugin-alias-enforcer.cjs");
-
 const compat = new FlatCompat({
   baseDirectory: path.resolve(),
   resolvePluginsRelativeTo: path.resolve(),
@@ -83,7 +81,6 @@ module.exports = [
       "check-file": fixupPluginRules(checkFilePlugin),
       prettier: fixupPluginRules(prettierPlugin),
       "import-helpers": fixupPluginRules(importHelpersPlugin),
-      "alias-enforcer": aliasEnforcerPlugin,
     },
     rules: {
       // Enable Prettier integration with project options
@@ -163,40 +160,11 @@ module.exports = [
       "import/default": "error",
       "import/export": "error",
 
-      // Forcer l'utilisation des alias quand c'est possible
       "import/no-relative-packages": "error",
-
-      // Règle personnalisée pour forcer les alias
-      "alias-enforcer/enforce-aliases": [
-        "error",
-        {
-          aliases: {
-            "@atoms": "./src/atoms",
-            "@constants": "./src/constants",
-            "@components": "./src/components",
-            "@hooks": "./src/hooks",
-            "@locales": "./src/locales",
-            "@providers": "./src/providers",
-            "@scripts": "./src/scripts",
-            "@themes": "./src/themes",
-            "@app-types": "./src/types",
-            "@utils": "./src/utils",
-          },
-        },
-      ],
-
-      // Trier les imports par groupes avec les alias en premier
       "import/order": [
         "error",
         {
-          groups: [
-            "builtin",
-            "external",
-            "internal", // Pour les alias @*
-            "parent",
-            "sibling",
-            "index",
-          ],
+          groups: ["builtin", "external", "internal", "parent", "sibling", "index"],
           "newlines-between": "always",
           alphabetize: {
             order: "asc",

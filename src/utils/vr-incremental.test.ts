@@ -4,10 +4,11 @@ import path from "path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FORCE_VR_TAG } from "@constants/constants";
-import type { CaptureTask } from "@scripts/vr-capture-engine";
-import { createTestVrConfig } from "@utils/test-helpers";
-import { resolveAffectedStoryIds } from "@utils/vr-dependency-graph";
+import { FORCE_VR_TAG } from "../constants/constants";
+import type { CaptureTask } from "../scripts/vr-capture-engine";
+
+import { createTestVrConfig } from "./test-helpers";
+import { resolveAffectedStoryIds } from "./vr-dependency-graph";
 import {
   filterCaptureTasks,
   getChangedFilesFromGit,
@@ -15,13 +16,13 @@ import {
   isGlobalTrigger,
   shouldWipePublicDir,
   type StoryIndexEntry,
-} from "@utils/vr-incremental";
+} from "./vr-incremental";
 
 vi.mock("child_process", () => ({
   execSync: vi.fn(),
 }));
 
-vi.mock("@utils/vr-dependency-graph", () => ({
+vi.mock("./vr-dependency-graph", () => ({
   resolveAffectedStoryIds: vi.fn(() => new Set(["demo-button--primary"])),
 }));
 

@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
 
-import { Box } from "@atoms/Box";
-import { Typo } from "@atoms/Typo";
-import { AnimatedLoader } from "@components/AnimatedLoader";
-import { ReloadButton } from "@components/ReloadButton";
-import { spacing } from "@themes/theme";
+import { Box } from "../atoms/Box";
+import { Typo } from "../atoms/Typo";
+import { spacing } from "../themes/theme";
+
+import { AnimatedLoader } from "./AnimatedLoader";
+import { ReloadButton } from "./ReloadButton";
 
 type ErrorStateProps = {
   title?: string;

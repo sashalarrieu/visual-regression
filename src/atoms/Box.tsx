@@ -1,7 +1,7 @@
 import React from "react";
 import { View, type DimensionValue, type StyleProp, type ViewProps, type ViewStyle } from "react-native";
 
-import { colors, spacing, type ColorKey, type SpacingKey } from "@themes/theme";
+import { colors, spacing, type ColorKey, type SpacingKey } from "../themes/theme";
 
 type Spacing = SpacingKey | number;
 

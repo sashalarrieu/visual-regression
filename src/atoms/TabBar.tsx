@@ -1,7 +1,7 @@
 import { ScrollView, Text, TouchableOpacity, View } from "react-native";
 
-import type { MaterialIconName } from "@app-types/types";
-import { colors, spacing } from "@themes/theme";
+import { colors, spacing } from "../themes/theme";
+import type { MaterialIconName } from "../types/types";
 
 export type TabBarTab<T = string> = {
   key: T;

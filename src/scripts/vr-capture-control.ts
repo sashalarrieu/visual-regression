@@ -5,11 +5,11 @@
  *   - down   : arrête le conteneur
  *   - status : affiche l'état compose + le health du daemon
  */
-import { LOG_COLORS } from "@constants/constants";
-import { getProjectRoot } from "@utils/node";
-import { getCaptureDaemonUrl } from "@utils/vr-capture-backend";
-import { waitForCaptureDaemon } from "@utils/vr-capture-remote";
-import { composeDown, composeStatus, composeUp, isDockerAvailable } from "@utils/vr-docker";
+import { LOG_COLORS } from "../constants/constants";
+import { getProjectRoot } from "../utils/node";
+import { getCaptureDaemonUrl } from "../utils/vr-capture-backend";
+import { waitForCaptureDaemon } from "../utils/vr-capture-remote";
+import { composeDown, composeStatus, composeUp, isDockerAvailable } from "../utils/vr-docker";
 
 const PROJECT_ROOT = getProjectRoot();
 

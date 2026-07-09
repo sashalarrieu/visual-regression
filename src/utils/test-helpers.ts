@@ -1,4 +1,4 @@
-import type { VrConfig } from "@app-types/types";
+import type { VrConfig } from "../types/types";
 
 /** Config VR minimale pour les tests unitaires. */
 export const createTestVrConfig = (overrides: Partial<VrConfig> = {}): VrConfig => ({

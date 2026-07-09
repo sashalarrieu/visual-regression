@@ -33,6 +33,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, "..");
 /** Racine réelle du package (sans symlink) pour que Expo ne soit pas sous node_modules → Babel s'applique. */
 const packageRootReal = realpathSync(packageRoot);
+const packageTsconfigPath = path.join(packageRootReal, "tsconfig.cli.json");
 const hostRoot = process.cwd();
 const configPath = path.join(hostRoot, "vr.config.cjs");
 const legacyConfigPath = path.join(hostRoot, "vr-devices.config.cjs");
@@ -155,32 +156,19 @@ switch (subcommand) {
 if (scriptPath) {
   const tsxCli = getTsxCliPath();
   const useNpxFallback = !tsxCli;
-  // compare, server et benchmark s'exécutent avec cwd = racine du projet hôte.
-  const hostCwdSubcommands = new Set([
-    "compare",
-    "server",
-    "benchmark",
-    "benchmark-shards",
-    "test-incremental",
-    "test-validation",
-    "capture-daemon",
-    "capture-oneshot",
-    "capture-up",
-    "capture-down",
-    "capture-status",
-  ]);
-  const cwd = hostCwdSubcommands.has(subcommand) ? hostRoot : packageRootReal;
+  // Toujours exécuter tsx depuis la racine du package pour garantir la résolution des alias TS.
+  const cwd = packageRootReal;
   const child = tsxCli
-    ? spawn("node", [tsxCli, scriptPath, ...scriptArgs], {
+    ? spawn("node", [tsxCli, "--tsconfig", packageTsconfigPath, scriptPath, ...scriptArgs], {
         ...spawnOpts(cwd),
         shell: false,
       })
-    : spawn(npxRunner, ["tsx", scriptPath, ...scriptArgs], spawnOpts(hostRoot));
+    : spawn(npxRunner, ["tsx", "--tsconfig", packageTsconfigPath, scriptPath, ...scriptArgs], spawnOpts(cwd));
   child.on("error", err => {
     console.error("❌ Impossible de lancer visual-regression:", err.message);
     if (useNpxFallback) {
       console.error(
-        "   Ajoutez tsx au projet hôte: yarn add -D tsx (dans vow-frontend)\n" +
+        "   Ajoutez tsx au projet hôte: yarn add -D tsx\n" +
           "   ou installez dans le package: cd visual-regression && yarn install",
       );
     }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildImportersGraph, normalizeModulePath, traceAffectedStories } from "@utils/vr-dependency-graph";
+import { buildImportersGraph, normalizeModulePath, traceAffectedStories } from "./vr-dependency-graph";
 
 describe("normalizeModulePath", () => {
   it("normalizes windows paths and leading ./", () => {

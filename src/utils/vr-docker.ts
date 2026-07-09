@@ -6,7 +6,7 @@
 import { spawn, spawnSync } from "child_process";
 import path from "path";
 
-import { getScriptDir } from "@utils/node";
+import { getScriptDir } from "./node";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
 /** Racine du package (src/utils → ../..). */

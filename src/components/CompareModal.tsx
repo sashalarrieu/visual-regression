@@ -1,17 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList } from "react-native";
 
-import type { DeletedItem, MaterialIconName, Node, StoryDevicePair } from "@app-types/types";
-import { Box } from "@atoms/Box";
-import { Button } from "@atoms/Button";
-import { EndOfList } from "@atoms/EndOfList";
-import { Modal } from "@atoms/Modal";
-import { TabBar, type TabBarTab } from "@atoms/TabBar";
-import { Typo } from "@atoms/Typo";
-import { DeletedItemRow } from "@components/DeletedItemRow";
-import { useDeviceConfig } from "@providers/DeviceConfigProvider";
-import { spacing } from "@themes/theme";
-import { formatStoryIdForDisplay, fetchStorybookStoryCount } from "@utils";
+import { Box } from "../atoms/Box";
+import { Button } from "../atoms/Button";
+import { EndOfList } from "../atoms/EndOfList";
+import { Modal } from "../atoms/Modal";
+import { TabBar, type TabBarTab } from "../atoms/TabBar";
+import { Typo } from "../atoms/Typo";
+import { useDeviceConfig } from "../providers/DeviceConfigProvider";
+import { spacing } from "../themes/theme";
+import type { DeletedItem, MaterialIconName, Node, StoryDevicePair } from "../types/types";
+import { formatStoryIdForDisplay, fetchStorybookStoryCount } from "../utils";
+
+import { DeletedItemRow } from "./DeletedItemRow";
 
 export type CompareModalProps = {
   visible: boolean;

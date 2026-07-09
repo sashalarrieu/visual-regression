@@ -9,22 +9,23 @@
 import { existsSync, readdirSync } from "fs";
 import path from "path";
 
-import { FORCE_VR_TAG, IGNORE_VR_TAG, SCREENSHOT_EXTENSION, SCREENSHOT_NAME } from "@constants/constants";
-import { compareVisualRegressions } from "@scripts/compare-visual-regressions";
-import type { CaptureTask } from "@scripts/vr-capture-engine";
+import { FORCE_VR_TAG, IGNORE_VR_TAG, SCREENSHOT_EXTENSION, SCREENSHOT_NAME } from "../constants/constants";
 import {
   getDevicesConfig,
   getProjectPaths,
   getProjectRoot,
   resolveVrConfig,
   waitForStorybookStories,
-} from "@utils/node";
+} from "../utils/node";
 import {
   filterCaptureTasks,
   getChangedFiles,
   getGlobalTriggerMatches,
   type StoryIndexEntry,
-} from "@utils/vr-incremental";
+} from "../utils/vr-incremental";
+
+import { compareVisualRegressions } from "./compare-visual-regressions";
+import type { CaptureTask } from "./vr-capture-engine";
 
 const PROJECT_ROOT = getProjectRoot();
 const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR } = getProjectPaths(PROJECT_ROOT);

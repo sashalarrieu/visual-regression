@@ -13,7 +13,7 @@ import {
   STORYBOOK_PORT,
   VR_SERVER_PORT,
   VR_SERVER_URL,
-} from "@constants/constants";
+} from "../constants/constants";
 import {
   assertVrConfig,
   getNodeTsxArgs,
@@ -23,11 +23,11 @@ import {
   resolveVrConfig,
   spawnShellOption,
   waitForStorybookStories,
-} from "@utils/node";
-import { getCaptureDaemonUrl } from "@utils/vr-capture-backend";
-import { waitForCaptureDaemon } from "@utils/vr-capture-remote";
-import { composeDown, composeUp, isDockerAvailable } from "@utils/vr-docker";
-import { getStorybookMode, startStorybook, stopStorybook } from "@utils/vr-storybook-runtime";
+} from "../utils/node";
+import { getCaptureDaemonUrl } from "../utils/vr-capture-backend";
+import { waitForCaptureDaemon } from "../utils/vr-capture-remote";
+import { composeDown, composeUp, isDockerAvailable } from "../utils/vr-docker";
+import { getStorybookMode, startStorybook, stopStorybook } from "../utils/vr-storybook-runtime";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
 const PACKAGE_ROOT = path.join(SCRIPT_DIR, "..", "..");
@@ -35,6 +35,26 @@ const PROJECT_ROOT = getProjectRoot();
 
 const log = (color: keyof typeof LOG_COLORS, prefix: string, message: string) => {
   console.log(`${LOG_COLORS[color]}${prefix}${LOG_COLORS.reset} ${message}`);
+};
+
+const openInBrowser = (url: string): void => {
+  const platform = process.platform;
+  const command =
+    platform === "darwin"
+      ? { cmd: "open", args: [url] }
+      : platform === "win32"
+        ? { cmd: "cmd", args: ["/c", "start", "", url] }
+        : { cmd: "xdg-open", args: [url] };
+
+  const child = spawn(command.cmd, command.args, {
+    stdio: "ignore",
+    detached: true,
+    shell: false,
+  });
+  child.on("error", () => {
+    log("yellow", "⚠️", `Ouverture automatique impossible (${url})`);
+  });
+  child.unref();
 };
 
 const isPortAvailable = async (port: number): Promise<boolean> => {
@@ -331,6 +351,7 @@ const main = async () => {
       log("blue", "📚", `Storybook (local) disponible sur ${storybookUrl}`);
       log("yellow", "⚠️", "Capture locale active (fallback) : Docker non utilisé pour cette session");
     }
+    openInBrowser(storybookUrl);
   };
 
   const runInitialCompareJob = (): Promise<number> => {

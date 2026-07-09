@@ -1,14 +1,15 @@
 import React from "react";
 
-import type { DeletedItem } from "@app-types/types";
-import { Box } from "@atoms/Box";
-import { Button } from "@atoms/Button";
-import { Picture } from "@atoms/Picture";
-import { Tag } from "@atoms/Tag";
-import { TagNew } from "@atoms/TagNew";
-import { Touchable } from "@atoms/Touchable";
-import { ScreenshotDetails } from "@components/ScreenshotDetails";
-import { useDeviceConfig } from "@providers/DeviceConfigProvider";
+import { Box } from "../atoms/Box";
+import { Button } from "../atoms/Button";
+import { Picture } from "../atoms/Picture";
+import { Tag } from "../atoms/Tag";
+import { TagNew } from "../atoms/TagNew";
+import { Touchable } from "../atoms/Touchable";
+import { useDeviceConfig } from "../providers/DeviceConfigProvider";
+import type { DeletedItem } from "../types/types";
+
+import { ScreenshotDetails } from "./ScreenshotDetails";
 
 export type DeletedItemRowProps = {
   item: DeletedItem;

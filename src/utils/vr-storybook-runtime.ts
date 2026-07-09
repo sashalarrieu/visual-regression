@@ -12,7 +12,7 @@ import type { ChildProcess } from "child_process";
 import { existsSync } from "fs";
 import path from "path";
 
-import { spawnShellOption, waitForStorybookStories } from "@utils/node";
+import { spawnShellOption, waitForStorybookStories } from "./node";
 
 export type StorybookMode = "dev" | "static";
 

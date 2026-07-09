@@ -1,15 +1,16 @@
 import * as Clipboard from "expo-clipboard";
 import React from "react";
 
-import type { Node, StoryScreenshotsPath } from "@app-types/types";
-import { Box } from "@atoms/Box";
-import { Button } from "@atoms/Button";
-import { ToggleField } from "@atoms/ToggleField";
-import { Typo } from "@atoms/Typo";
-import { ScreenshotDetails } from "@components/ScreenshotDetails";
-import { DIFF_SCREENSHOT_NAME, NEW_SCREENSHOT_NAME } from "@constants/constants";
-import { useDeviceConfig } from "@providers/DeviceConfigProvider";
-import { spacing } from "@themes/theme";
+import { Box } from "../atoms/Box";
+import { Button } from "../atoms/Button";
+import { ToggleField } from "../atoms/ToggleField";
+import { Typo } from "../atoms/Typo";
+import { DIFF_SCREENSHOT_NAME, NEW_SCREENSHOT_NAME } from "../constants/constants";
+import { useDeviceConfig } from "../providers/DeviceConfigProvider";
+import { spacing } from "../themes/theme";
+import type { Node, StoryScreenshotsPath } from "../types/types";
+
+import { ScreenshotDetails } from "./ScreenshotDetails";
 
 export type VisualRegressionTopBarProps = {
   currentStory?: Node;

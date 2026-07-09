@@ -7,7 +7,7 @@ import { createRequire } from "module";
 import os from "os";
 import path from "path";
 
-import type { VrConfig, VrConfigFile, VrCompareMode, VrChangedFilesScope } from "@app-types/types";
+import type { VrConfig, VrConfigFile, VrCompareMode, VrChangedFilesScope } from "../types/types";
 
 const _require = createRequire(import.meta.url);
 

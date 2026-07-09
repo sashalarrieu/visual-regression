@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useMemo } from "react";
 
-import type { DeviceDisplayConfig, DeviceStyle } from "@app-types/types";
-import { getDeviceDisplayName, getDeviceStyle } from "@utils";
+import type { DeviceDisplayConfig, DeviceStyle } from "../types/types";
+import { getDeviceDisplayName, getDeviceStyle } from "../utils";
 
 export type DeviceConfigContextValue = {
   deviceConfigs: DeviceDisplayConfig[] | undefined;

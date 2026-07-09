@@ -1,5 +1,11 @@
-import type { DeviceDisplayConfig, DeviceStyle, Node, StoryScreenshotsPath, VRDeviceConfig } from "@app-types/types";
-import { FORCE_VR_TAG, IGNORE_VR_TAG, STORYBOOK_URL, UNKNOWN_DEVICE_STYLE, VR_SERVER_URL } from "@constants/constants";
+import {
+  FORCE_VR_TAG,
+  IGNORE_VR_TAG,
+  STORYBOOK_URL,
+  UNKNOWN_DEVICE_STYLE,
+  VR_SERVER_URL,
+} from "../constants/constants";
+import type { DeviceDisplayConfig, DeviceStyle, Node, StoryScreenshotsPath, VRDeviceConfig } from "../types/types";
 
 /**
  * Utilitaires partagés (app React + scripts). Code Node-only (import.meta, createRequire) dans ./node.ts.

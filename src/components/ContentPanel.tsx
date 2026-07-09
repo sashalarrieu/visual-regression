@@ -1,14 +1,15 @@
 import React from "react";
 import { ActivityIndicator, Image } from "react-native";
 
-import type { StoryScreenshotsPath } from "@app-types/types";
-import { Box } from "@atoms/Box";
-import { Typo } from "@atoms/Typo";
-import { AnimatedLoader } from "@components/AnimatedLoader";
-import { DraggableImageCompare } from "@components/DraggableImageCompare";
-import { ScreenshotDetails } from "@components/ScreenshotDetails";
-import { useDeviceConfig } from "@providers/DeviceConfigProvider";
-import { colors } from "@themes/theme";
+import { Box } from "../atoms/Box";
+import { Typo } from "../atoms/Typo";
+import { useDeviceConfig } from "../providers/DeviceConfigProvider";
+import { colors } from "../themes/theme";
+import type { StoryScreenshotsPath } from "../types/types";
+
+import { AnimatedLoader } from "./AnimatedLoader";
+import { DraggableImageCompare } from "./DraggableImageCompare";
+import { ScreenshotDetails } from "./ScreenshotDetails";
 
 export type ContentPanelProps = {
   tree: unknown;

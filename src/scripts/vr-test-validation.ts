@@ -9,9 +9,7 @@
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 
-import { FORCE_VR_TAG, IGNORE_VR_TAG, LIVE_ANIMATION_VR_TAG } from "@constants/constants";
-import { compareAllStories, compareByType, compareSelectedStories } from "@scripts/compare-visual-regressions";
-import type { CaptureTask } from "@scripts/vr-capture-engine";
+import { FORCE_VR_TAG, IGNORE_VR_TAG, LIVE_ANIMATION_VR_TAG } from "../constants/constants";
 import {
   getDevicesConfig,
   getProjectRoot,
@@ -20,15 +18,18 @@ import {
   resolveVrConfig,
   VR_CONFIG_FILENAME,
   waitForStorybookStories,
-} from "@utils/node";
-import { getCaptureBackend, isDockerCaptureBackend } from "@utils/vr-capture-backend";
-import { buildImportersGraph } from "@utils/vr-dependency-graph";
-import { getDiffVerificationMaxAttempts, shouldRetryDiffVerification } from "@utils/vr-diff-verify";
-import { getComposeFile, getDockerImage } from "@utils/vr-docker";
-import { filterCaptureTasks, getChangedFiles, type StoryIndexEntry } from "@utils/vr-incremental";
-import { estimateCiWallClockMs, partitionTasksByShardTotal } from "@utils/vr-sharding";
-import { appendVrCaptureParam, expectsVrStoryPlay, waitForStoryStable } from "@utils/vr-steadysnap";
-import { normalizeStoryVrParameters, resolveEffectiveVrConfig, shouldUseBurstCapture } from "@utils/vr-story-config";
+} from "../utils/node";
+import { getCaptureBackend, isDockerCaptureBackend } from "../utils/vr-capture-backend";
+import { buildImportersGraph } from "../utils/vr-dependency-graph";
+import { getDiffVerificationMaxAttempts, shouldRetryDiffVerification } from "../utils/vr-diff-verify";
+import { getComposeFile, getDockerImage } from "../utils/vr-docker";
+import { filterCaptureTasks, getChangedFiles, type StoryIndexEntry } from "../utils/vr-incremental";
+import { estimateCiWallClockMs, partitionTasksByShardTotal } from "../utils/vr-sharding";
+import { appendVrCaptureParam, expectsVrStoryPlay, waitForStoryStable } from "../utils/vr-steadysnap";
+import { normalizeStoryVrParameters, resolveEffectiveVrConfig, shouldUseBurstCapture } from "../utils/vr-story-config";
+
+import { compareAllStories, compareByType, compareSelectedStories } from "./compare-visual-regressions";
+import type { CaptureTask } from "./vr-capture-engine";
 
 const PROJECT_ROOT = getProjectRoot();
 const LEGACY_CONFIG = "vr-devices.config.cjs";
