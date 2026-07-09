@@ -293,18 +293,18 @@ Un exemple complet GitHub Actions (cache `node_modules` + `storybook-static`, sh
 
 ### Variables d'environnement Docker
 
-| Variable                  | Défaut                              | Rôle                                                                                                   |
-| ------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `VR_CAPTURE_BACKEND`      | `docker`                            | `docker` = capture déléguée au daemon ; `local` = capture directe (tests internes / dans le conteneur) |
-| `VR_CAPTURE_DAEMON_URL`   | `http://localhost:2810`             | URL du daemon de capture                                                                               |
-| `VR_STORYBOOK_MODE`       | `dev`                               | `dev` (HMR) ou `static` (build + serve, CI)                                                            |
-| `VR_DOCKER_IMAGE`         | `ghcr.io/setshao/vr-capture:1.61.1` | Image du sidecar (tag aligné sur la version Playwright)                                                |
-| `VR_DOCKER`               | `1` (dans le conteneur)             | Active les flags Chromium déterministes                                                                |
-| `VR_CAPTURE_REMOTE_CHUNK` | `20`                                | Taille des lots envoyés au daemon (évite les timeouts fetch)                                           |
+| Variable                  | Défaut                                   | Rôle                                                                                                   |
+| ------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `VR_CAPTURE_BACKEND`      | `docker`                                 | `docker` = capture déléguée au daemon ; `local` = capture directe (tests internes / dans le conteneur) |
+| `VR_CAPTURE_DAEMON_URL`   | `http://localhost:2810`                  | URL du daemon de capture                                                                               |
+| `VR_STORYBOOK_MODE`       | `dev`                                    | `dev` (HMR) ou `static` (build + serve, CI)                                                            |
+| `VR_DOCKER_IMAGE`         | `ghcr.io/sashalarrieu/vr-capture:1.61.1` | Image du sidecar (tag aligné sur la version Playwright)                                                |
+| `VR_DOCKER`               | `1` (dans le conteneur)                  | Active les flags Chromium déterministes                                                                |
+| `VR_CAPTURE_REMOTE_CHUNK` | `20`                                     | Taille des lots envoyés au daemon (évite les timeouts fetch)                                           |
 
 ### Utiliser son propre Docker (image maison)
 
-L'image `ghcr.io/setshao/vr-capture` est un raccourci, pas une obligation. Vous pouvez fournir votre propre image (`VR_DOCKER_IMAGE`) tant qu'elle respecte le **contrat** :
+L'image `ghcr.io/sashalarrieu/vr-capture` est un raccourci, pas une obligation. Vous pouvez fournir votre propre image (`VR_DOCKER_IMAGE`) tant qu'elle respecte le **contrat** :
 
 - Base Linux avec **la même version de Playwright/Chromium** que le package (voir `docker/Dockerfile`).
 - Code du projet hôte monté sur `/work` (`VR_PROJECT_ROOT=/work`).
@@ -372,7 +372,7 @@ Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du pr
 | `VR_CAPTURE_BACKEND`                | `docker` (défaut) délègue la capture au daemon ; `local` capture directe (tests / conteneur)         |
 | `VR_CAPTURE_DAEMON_URL`             | URL du daemon de capture (défaut : `http://localhost:2810`)                                          |
 | `VR_STORYBOOK_MODE`                 | `dev` (HMR) ou `static` (build + serve, CI) dans le conteneur                                        |
-| `VR_DOCKER_IMAGE`                   | Image du sidecar (défaut : `ghcr.io/setshao/vr-capture:1.61.1`)                                      |
+| `VR_DOCKER_IMAGE`                   | Image du sidecar (défaut : `ghcr.io/sashalarrieu/vr-capture:1.61.1`)                                 |
 | `VR_CAPTURE_REMOTE_CHUNK`           | Taille des lots envoyés au daemon (défaut : `20`)                                                    |
 
 ### Benchmark performance (concurrency + sharding CI)
@@ -442,7 +442,7 @@ Un hook pre-commit Husky exécute `lint-staged` (Prettier + ESLint sur les fichi
 | ------------------------------------------------------------ | ------------------------------------------- | --------------------------------------------------------------- |
 | [`ci.yml`](.github/workflows/ci.yml)                         | Chaque PR + push `main`                     | Typecheck, lint, format, tests unitaires, validation statique   |
 | [`integration.yml`](.github/workflows/integration.yml)       | PR modifiant scripts/utils/docker/demo/etc. | Capture VR Docker complète sur la demo (`VR_COMPARE_MODE=full`) |
-| [`docker-publish.yml`](.github/workflows/docker-publish.yml) | Tag `v*`                                    | Publication image `ghcr.io/setshao/vr-capture`                  |
+| [`docker-publish.yml`](.github/workflows/docker-publish.yml) | Tag `v*`                                    | Publication image `ghcr.io/sashalarrieu/vr-capture`             |
 
 ---
 

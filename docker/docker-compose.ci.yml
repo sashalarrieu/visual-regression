@@ -5,7 +5,7 @@
 #     --abort-on-container-exit --exit-code-from vr-capture
 services:
   vr-capture:
-    image: ${VR_DOCKER_IMAGE:-ghcr.io/setshao/vr-capture:1.61.1}
+    image: ${VR_DOCKER_IMAGE:-ghcr.io/sashalarrieu/vr-capture:1.61.1}
     build:
       context: .
       dockerfile: Dockerfile
