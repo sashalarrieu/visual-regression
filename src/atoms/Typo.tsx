@@ -1,7 +1,7 @@
 import React from "react";
 import { Text, type StyleProp, type TextProps, type TextStyle } from "react-native";
 
-import { colors, type ColorKey } from "@themes/theme";
+import { colors, type ColorKey } from "../themes/theme";
 
 const variantStyles: Record<string, TextStyle> = {
   h2_semiBold: { fontSize: 20, fontWeight: "600" },

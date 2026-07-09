@@ -12,24 +12,25 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 
-import { FORCE_VR_TAG, IGNORE_VR_TAG } from "@constants/constants";
-import type { CaptureTask } from "@scripts/vr-capture-engine";
-import { runCaptureBatch } from "@scripts/vr-capture-engine";
+import { FORCE_VR_TAG, IGNORE_VR_TAG } from "../constants/constants";
 import {
   getDevicesConfig,
   getProjectPaths,
   getProjectRoot,
   resolveVrConfig,
   waitForStorybookStories,
-} from "@utils/node";
-import { filterCaptureTasks, getChangedFiles, type StoryIndexEntry } from "@utils/vr-incremental";
+} from "../utils/node";
+import { filterCaptureTasks, getChangedFiles, type StoryIndexEntry } from "../utils/vr-incremental";
 import {
   estimateCiWallClockMs,
   formatShardBenchmarkAlert,
   getShardBenchmarkAlerts,
   getShardDistributionStats,
   partitionTasksByShardTotal,
-} from "@utils/vr-sharding";
+} from "../utils/vr-sharding";
+
+import type { CaptureTask } from "./vr-capture-engine";
+import { runCaptureBatch } from "./vr-capture-engine";
 
 const PROJECT_ROOT = getProjectRoot();
 const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR } = getProjectPaths(PROJECT_ROOT);

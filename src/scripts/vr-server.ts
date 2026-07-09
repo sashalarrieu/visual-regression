@@ -18,14 +18,6 @@ import { pathToFileURL } from "url";
 
 import { PNG } from "pngjs";
 
-import type {
-  DeletedItem,
-  Node,
-  ParsedPath,
-  RegressionIndex,
-  StoryDevicePair,
-  StoryScreenshotsPath,
-} from "@app-types/types";
 import {
   DIFF_SCREENSHOT_NAME,
   NEW_SCREENSHOT_NAME,
@@ -35,7 +27,15 @@ import {
   TREE_BASE_FOLDER,
   VR_SERVER_PORT,
   VR_SERVER_URL,
-} from "@constants/constants";
+} from "../constants/constants";
+import type {
+  DeletedItem,
+  Node,
+  ParsedPath,
+  RegressionIndex,
+  StoryDevicePair,
+  StoryScreenshotsPath,
+} from "../types/types";
 import {
   getDevicesDisplayConfig,
   getDevicesNames,
@@ -46,7 +46,7 @@ import {
   getVrPublicConfig,
   resolveVrConfig,
   spawnShellOption,
-} from "@utils/node";
+} from "../utils/node";
 
 const PROJECT_ROOT = getProjectRoot();
 const {

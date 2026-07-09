@@ -1,7 +1,7 @@
 import React from "react";
 import { Text, View } from "react-native";
 
-import { colors, spacing, type ColorKey } from "@themes/theme";
+import { colors, spacing, type ColorKey } from "../themes/theme";
 
 export type TagProps = {
   label: { text: string };

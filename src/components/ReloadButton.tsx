@@ -1,7 +1,7 @@
 import { reloadAsync } from "expo-updates";
 import React, { useCallback, useState } from "react";
 
-import { Button } from "@atoms/Button";
+import { Button } from "../atoms/Button";
 
 type ReloadButtonProps = {
   label?: string;

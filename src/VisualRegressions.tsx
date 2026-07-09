@@ -1,22 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList } from "react-native";
 
-import type { DeletedItem, DeviceDisplayConfig, Node, StoryScreenshotsPath } from "@app-types/types";
-import { Box } from "@atoms/Box";
-import { Divider } from "@atoms/Divider";
-import { EndOfList } from "@atoms/EndOfList";
-import { Modal } from "@atoms/Modal";
-import { Typo } from "@atoms/Typo";
-import { CompareModal } from "@components/CompareModal";
-import { ContentPanel } from "@components/ContentPanel";
-import { DeletedItemRow } from "@components/DeletedItemRow";
-import { ErrorState } from "@components/ErrorState";
-import { TreePanel } from "@components/TreePanel";
-import { VisualRegressionTopBar } from "@components/VisualRegressionTopBar";
-import { VR_SERVER_URL } from "@constants/constants";
-import { DeviceConfigProvider } from "@providers/DeviceConfigProvider";
-import { spacing } from "@themes/theme";
-import { createVisualRegressionActions } from "@utils";
+import { Box } from "./atoms/Box";
+import { Divider } from "./atoms/Divider";
+import { EndOfList } from "./atoms/EndOfList";
+import { Modal } from "./atoms/Modal";
+import { Typo } from "./atoms/Typo";
+import { CompareModal } from "./components/CompareModal";
+import { ContentPanel } from "./components/ContentPanel";
+import { DeletedItemRow } from "./components/DeletedItemRow";
+import { ErrorState } from "./components/ErrorState";
+import { TreePanel } from "./components/TreePanel";
+import { VisualRegressionTopBar } from "./components/VisualRegressionTopBar";
+import { VR_SERVER_URL } from "./constants/constants";
+import { DeviceConfigProvider } from "./providers/DeviceConfigProvider";
+import { spacing } from "./themes/theme";
+import type { DeletedItem, DeviceDisplayConfig, Node, StoryScreenshotsPath } from "./types/types";
+import { createVisualRegressionActions } from "./utils";
 
 export type VisualRegressionsProps = {
   /** Config d'affichage des devices (label, icon, color). Optionnel : si absent, récupérée depuis le serveur VR (GET /regressions/config/devices, depuis vr.config.cjs). */

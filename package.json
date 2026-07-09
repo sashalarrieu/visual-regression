@@ -4,18 +4,28 @@
   "description": "Interface de régression visuelle pour Storybook (React Native / Expo), réutilisable dans tout projet",
   "type": "module",
   "main": "src/index.tsx",
-  "types": "src/index.tsx",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "visual-regression": "./bin/visual-regression.mjs"
   },
   "files": [
     "bin",
     "src",
-    "scripts",
     "docker",
     "app.config.js",
     "metro.config.cjs",
-    "README.md"
+    "babel.config.cjs",
+    "tsconfig.json",
+    "tsconfig.cli.json",
+    "README.md",
+    "LICENSE"
   ],
   "keywords": [
     "visual-regression",
@@ -35,6 +45,12 @@
     "url": "https://github.com/setshao/visual-regression/issues"
   },
   "homepage": "https://github.com/setshao/visual-regression#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "storybook": "cross-env STORYBOOK_ENV=web storybook dev -p 6006",
     "storybook:build": "cross-env STORYBOOK_ENV=web storybook build",
@@ -56,12 +72,15 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest",
     "test:ci": "vitest run",
+    "pack:check": "npm pack --dry-run --ignore-scripts",
+    "pack:verify": "node scripts/verify-pack.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "husky",
-    "precommit": "lint-staged && yarn lint && yarn format:check"
+    "precommit": "lint-staged && yarn lint && yarn format:check && yarn typecheck",
+    "prepublishOnly": "yarn typecheck && yarn test:ci && npm run pack:check"
   },
   "lint-staged": {
     "**/*.{js,mjs,cjs,ts,jsx,tsx,gql,sql,md,css,scss,json}": [
@@ -97,11 +116,8 @@
     "@typescript-eslint/parser": "^8.62.1",
     "babel-loader": "^9.1.3",
     "babel-plugin-import-graphql": "^2.8.1",
-    "babel-plugin-module-resolver": "^5.0.3",
     "babel-plugin-react-native-web": "^0.21.2",
-    "babel-preset-expo": "~54.0.11",
     "bun": "^1.3.14",
-    "cross-env": "^7.0.3",
     "eslint": "^9.17.0",
     "eslint-config-expo": "~10.0.0",
     "eslint-config-prettier": "^10.0.1",
@@ -113,30 +129,34 @@
     "eslint-plugin-react": "^7.37.2",
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-storybook": "10.4.6",
-    "expo": "~54.0.35",
     "expo-clipboard": "~8.0.8",
-    "expo-font": "~14.0.12",
-    "expo-updates": "~29.0.18",
     "husky": "^9.1.7",
     "kill-port": "^2.0.1",
     "lint-staged": "^16.4.0",
-    "pixelmatch": "^7.2.0",
-    "playwright": "^1.61.1",
-    "pngjs": "^7.0.0",
     "prettier": "^3.9.4",
     "react": "19.1.0",
-    "react-dom": "19.1.0",
     "react-native": "0.81.5",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-reanimated": "~4.1.1",
-    "react-native-safe-area-context": "~5.6.0",
     "react-native-svg": "15.12.1",
-    "react-native-web": "^0.21.0",
-    "react-native-worklets": "0.5.1",
     "react-refresh": "^0.14.2",
     "storybook": "10.4.6",
-    "tsx": "^4.23.0",
     "typescript": "~5.9.2",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "babel-preset-expo": "~54.0.11",
+    "cross-env": "^7.0.3",
+    "expo": "~54.0.35",
+    "expo-font": "~14.0.12",
+    "expo-updates": "~29.0.18",
+    "pixelmatch": "^7.2.0",
+    "playwright": "^1.61.1",
+    "pngjs": "^7.0.0",
+    "react-dom": "19.1.0",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-web": "^0.21.0",
+    "react-native-worklets": "0.5.1",
+    "tsx": "^4.23.0"
   }
 }

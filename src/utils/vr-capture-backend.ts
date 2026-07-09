@@ -6,7 +6,7 @@
  * - "local" : capture Playwright directe. Réservé aux tests internes du package
  *   et à l'exécution *à l'intérieur* du conteneur (VR_CAPTURE_BACKEND=local).
  */
-import { CAPTURE_DAEMON_URL } from "@constants/constants";
+import { CAPTURE_DAEMON_URL } from "../constants/constants";
 
 export type CaptureBackend = "docker" | "local";
 

@@ -14,10 +14,11 @@
 import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
 
-import { FORCE_VR_TAG, IGNORE_VR_TAG } from "@constants/constants";
-import type { CaptureTask } from "@scripts/vr-capture-engine";
-import { runCaptureBatch } from "@scripts/vr-capture-engine";
-import { getDevicesConfig, getProjectRoot, resolveVrConfig, waitForStorybookStories } from "@utils/node";
+import { FORCE_VR_TAG, IGNORE_VR_TAG } from "../constants/constants";
+import { getDevicesConfig, getProjectRoot, resolveVrConfig, waitForStorybookStories } from "../utils/node";
+
+import type { CaptureTask } from "./vr-capture-engine";
+import { runCaptureBatch } from "./vr-capture-engine";
 
 const PROJECT_ROOT = getProjectRoot();
 

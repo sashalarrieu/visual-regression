@@ -13,11 +13,12 @@ import type { IncomingMessage, ServerResponse } from "http";
 import { createServer } from "http";
 import { format } from "util";
 
-import { CAPTURE_DAEMON_PORT, STORYBOOK_PORT } from "@constants/constants";
-import type { CaptureBatchOptions, CaptureBatchResult, CaptureTask } from "@scripts/vr-capture-engine";
-import { runCaptureBatch } from "@scripts/vr-capture-engine";
-import { getProjectRoot, resolveVrConfig } from "@utils/node";
-import { getStorybookMode, startStorybook, stopStorybook } from "@utils/vr-storybook-runtime";
+import { CAPTURE_DAEMON_PORT, STORYBOOK_PORT } from "../constants/constants";
+import { getProjectRoot, resolveVrConfig } from "../utils/node";
+import { getStorybookMode, startStorybook, stopStorybook } from "../utils/vr-storybook-runtime";
+
+import type { CaptureBatchOptions, CaptureBatchResult, CaptureTask } from "./vr-capture-engine";
+import { runCaptureBatch } from "./vr-capture-engine";
 
 // Le backend est forcé "local" ici : runCaptureBatch effectue la vraie capture Playwright
 // dans le conteneur (isDockerCaptureBackend() est lu à l'exécution, pas au chargement).

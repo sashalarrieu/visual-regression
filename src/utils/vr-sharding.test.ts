@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { CaptureTask } from "@scripts/vr-capture-engine";
+import type { CaptureTask } from "../scripts/vr-capture-engine";
+
 import {
   estimateCiWallClockMs,
   estimateShardCaptureMs,
@@ -12,7 +13,7 @@ import {
   parseShardConfigFromEnv,
   partitionTasksByShardTotal,
   storyIdBelongsToShard,
-} from "@utils/vr-sharding";
+} from "./vr-sharding";
 
 const task = (storyId: string): CaptureTask => ({
   storyId,

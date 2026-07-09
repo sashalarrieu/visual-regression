@@ -3,9 +3,10 @@
  */
 import type { Page } from "playwright";
 
-import type { VrConfig, VrStoryParameters } from "@app-types/types";
-import { BURST_VR_TAG } from "@constants/constants";
-import { getDiffVerificationMaxAttempts } from "@utils/vr-diff-verify";
+import { BURST_VR_TAG } from "../constants/constants";
+import type { VrConfig, VrStoryParameters } from "../types/types";
+
+import { getDiffVerificationMaxAttempts } from "./vr-diff-verify";
 
 const pickPositiveNumber = (value: unknown): number | undefined => {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;

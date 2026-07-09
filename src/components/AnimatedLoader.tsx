@@ -11,7 +11,7 @@ import Animated, {
 } from "react-native-reanimated";
 import Svg, { Circle } from "react-native-svg";
 
-import { Box } from "@atoms/Box";
+import { Box } from "../atoms/Box";
 
 const PARTICLE_COLORS = [
   "#FF6B6B",

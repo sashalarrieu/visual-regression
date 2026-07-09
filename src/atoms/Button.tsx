@@ -1,9 +1,10 @@
 import React from "react";
 import { ActivityIndicator, Text, TouchableOpacity, View, type DimensionValue } from "react-native";
 
-import type { MaterialIconName } from "@app-types/types";
-import { Icon } from "@atoms/Icon";
-import { colors, spacing, type ColorKey } from "@themes/theme";
+import { colors, spacing, type ColorKey } from "../themes/theme";
+import type { MaterialIconName } from "../types/types";
+
+import { Icon } from "./Icon";
 
 export type ButtonProps = {
   label?: string;

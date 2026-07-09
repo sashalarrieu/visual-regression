@@ -6,7 +6,7 @@ import { execSync } from "child_process";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import path from "path";
 
-import type { VrConfig } from "@app-types/types";
+import type { VrConfig } from "../types/types";
 
 export type StoryIndexEntryRef = {
   id: string;

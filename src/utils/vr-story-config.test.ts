@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { BURST_VR_TAG } from "@constants/constants";
-import { createTestVrConfig } from "@utils/test-helpers";
-import { normalizeStoryVrParameters, resolveEffectiveVrConfig, shouldUseBurstCapture } from "@utils/vr-story-config";
+import { BURST_VR_TAG } from "../constants/constants";
+
+import { createTestVrConfig } from "./test-helpers";
+import { normalizeStoryVrParameters, resolveEffectiveVrConfig, shouldUseBurstCapture } from "./vr-story-config";
 
 describe("normalizeStoryVrParameters", () => {
   it("returns null for invalid input", () => {

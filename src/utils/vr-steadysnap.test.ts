@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { PLAY_FN_TAG, SKIP_PLAY_VR_TAG } from "@constants/constants";
-import { appendVrCaptureParam, expectsVrStoryPlay } from "@utils/vr-steadysnap";
+import { PLAY_FN_TAG, SKIP_PLAY_VR_TAG } from "../constants/constants";
+
+import { appendVrCaptureParam, expectsVrStoryPlay } from "./vr-steadysnap";
 
 describe("expectsVrStoryPlay", () => {
   it("expects play when play-fn is present and skip-play-vr is absent", () => {

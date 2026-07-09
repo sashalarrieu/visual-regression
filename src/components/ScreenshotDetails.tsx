@@ -1,11 +1,11 @@
 import React from "react";
 
-import { Box } from "@atoms/Box";
-import { Icon } from "@atoms/Icon";
-import { Typo, type TypoProps } from "@atoms/Typo";
-import { useDeviceConfig } from "@providers/DeviceConfigProvider";
-import type { ColorKey } from "@themes/theme";
-import { formatStoryIdForDisplay } from "@utils";
+import { Box } from "../atoms/Box";
+import { Icon } from "../atoms/Icon";
+import { Typo, type TypoProps } from "../atoms/Typo";
+import { useDeviceConfig } from "../providers/DeviceConfigProvider";
+import type { ColorKey } from "../themes/theme";
+import { formatStoryIdForDisplay } from "../utils";
 
 export type ScreenshotDetailsProps = {
   deviceName?: string;

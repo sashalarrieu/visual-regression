@@ -21,7 +21,6 @@ import type { Browser, BrowserContext, Page } from "playwright";
 import { chromium } from "playwright";
 import { PNG } from "pngjs";
 
-import type { DeviceConfig, LogsType, VrConfig } from "@app-types/types";
 import {
   DIFF_SCREENSHOT_NAME,
   NEW_SCREENSHOT_NAME,
@@ -29,29 +28,30 @@ import {
   SCREENSHOT_NAME,
   SCREENSHOTS_DIR,
   TEMP_SCREENSHOT_NAME,
-} from "@constants/constants";
-import { getDevicesConfig, getProjectPaths, getProjectRoot, resolveVrConfig } from "@utils/node";
-import { isDockerCaptureBackend } from "@utils/vr-capture-backend";
-import { runCaptureBatchRemote } from "@utils/vr-capture-remote";
+} from "../constants/constants";
+import type { DeviceConfig, LogsType, VrConfig } from "../types/types";
+import { getDevicesConfig, getProjectPaths, getProjectRoot, resolveVrConfig } from "../utils/node";
+import { isDockerCaptureBackend } from "../utils/vr-capture-backend";
+import { runCaptureBatchRemote } from "../utils/vr-capture-remote";
 import {
   formatDiffConfirmedLog,
   formatDiffVerifyRetryLog,
   formatFlakeSuppressedLog,
   shouldRetryDiffVerification,
-} from "@utils/vr-diff-verify";
+} from "../utils/vr-diff-verify";
 import {
   appendVrCaptureParam,
   captureWithBurst,
   getStoryTags,
   NetworkQuietTracker,
   waitForStoryStable,
-} from "@utils/vr-steadysnap";
+} from "../utils/vr-steadysnap";
 import {
   getStoryDiffVerificationMaxAttempts,
   readStoryVrParameters,
   resolveEffectiveVrConfig,
   shouldUseBurstCapture,
-} from "@utils/vr-story-config";
+} from "../utils/vr-story-config";
 
 const PROJECT_ROOT = getProjectRoot();
 const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR } = getProjectPaths(PROJECT_ROOT);

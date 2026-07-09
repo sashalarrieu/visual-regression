@@ -1,10 +1,11 @@
 import React from "react";
 import { Modal as RNModal, Pressable, ScrollView, StyleSheet, type ModalProps as RNModalProps } from "react-native";
 
-import { Box } from "@atoms/Box";
-import { Button, type ButtonProps } from "@atoms/Button";
-import { Typo } from "@atoms/Typo";
-import { spacing } from "@themes/theme";
+import { spacing } from "../themes/theme";
+
+import { Box } from "./Box";
+import { Button, type ButtonProps } from "./Button";
+import { Typo } from "./Typo";
 
 export type ModalButtonProps = {
   title?: { text: string };
