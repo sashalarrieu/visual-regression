@@ -27,6 +27,7 @@ import {
 import { getCaptureDaemonUrl } from "../utils/vr-capture-backend";
 import { waitForCaptureDaemon } from "../utils/vr-capture-remote";
 import { composeDown, composeUp, isDockerAvailable } from "../utils/vr-docker";
+import { getExpoSpawnEnv } from "../utils/vr-expo-env";
 import { getStorybookMode, startStorybook, stopStorybook } from "../utils/vr-storybook-runtime";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
@@ -426,7 +427,7 @@ const main = async () => {
     stdio: "inherit",
     shell: true,
     cwd: PACKAGE_ROOT,
-    env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
+    env: getExpoSpawnEnv(process.env, PROJECT_ROOT),
   });
 
   expo.on("error", err => {

@@ -55,6 +55,32 @@
   "engines": {
     "node": ">=20"
   },
+  "expo": {
+    "install": {
+      "exclude": [
+        "eslint-config-expo",
+        "eslint",
+        "typescript",
+        "@typescript-eslint/eslint-plugin",
+        "@typescript-eslint/parser",
+        "eslint-config-prettier",
+        "eslint-plugin-react",
+        "eslint-plugin-react-hooks",
+        "eslint-plugin-storybook",
+        "eslint-plugin-import",
+        "eslint-plugin-prettier",
+        "eslint-plugin-check-file",
+        "eslint-plugin-import-helpers",
+        "vitest",
+        "husky",
+        "lint-staged",
+        "prettier",
+        "storybook",
+        "@storybook/react-webpack5",
+        "@storybook/addon-react-native-web"
+      ]
+    }
+  },
   "scripts": {
     "storybook": "cross-env STORYBOOK_ENV=web storybook dev -p 6006",
     "storybook:build": "cross-env STORYBOOK_ENV=web storybook build",

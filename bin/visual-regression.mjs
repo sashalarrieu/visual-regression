@@ -29,6 +29,8 @@ import { existsSync, realpathSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { getExpoSpawnEnv } from "./expo-env.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, "..");
 /** Racine réelle du package (sans symlink) pour que Expo ne soit pas sous node_modules → Babel s'applique. */
@@ -138,7 +140,7 @@ switch (subcommand) {
     if (process.env.VR_CLEAR_METRO === "1") {
       expoArgs.push("--clear");
     }
-    const child = spawn(npxRunner, expoArgs, spawnOpts(packageRootReal));
+    const child = spawn(npxRunner, expoArgs, spawnOpts(packageRootReal, getExpoSpawnEnv(env, hostRoot)));
     child.on("error", err => {
       console.error("❌ Impossible de lancer l'interface VR:", err.message);
       process.exit(1);
