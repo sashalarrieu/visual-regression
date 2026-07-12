@@ -1,6 +1,6 @@
 // scripts/vr-launcher.ts (package @setshao/visual-regression)
 import type { ChildProcess } from "child_process";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { existsSync } from "fs";
 import path from "path";
 
@@ -26,7 +26,8 @@ import {
 } from "../utils/node";
 import { getCaptureDaemonUrl } from "../utils/vr-capture-backend";
 import { waitForCaptureDaemon } from "../utils/vr-capture-remote";
-import { composeDown, composeUp, isDockerAvailable } from "../utils/vr-docker";
+import { composeDown, composeDownSync, composeUp, isDockerAvailable } from "../utils/vr-docker";
+import { getExpoSpawnEnv } from "../utils/vr-expo-env";
 import { getStorybookMode, startStorybook, stopStorybook } from "../utils/vr-storybook-runtime";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
@@ -75,6 +76,20 @@ const waitForServer = async (port: number, maxAttempts = 30): Promise<boolean> =
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   return false;
+};
+
+/** Tue un processus et ses enfants (nécessaire sous Windows quand Expo tourne via shell). */
+const killProcessTree = (proc: ChildProcess | null | undefined): void => {
+  if (!proc || proc.killed || proc.pid == null) return;
+  try {
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore", shell: true });
+    } else {
+      proc.kill("SIGTERM");
+    }
+  } catch {
+    // ignore
+  }
 };
 
 const killPort = (port: number) => {
@@ -209,13 +224,23 @@ const main = async () => {
 
   log("blue", "🔧", "Démarrage du serveur VR");
 
-  const { command: nodeTsxCommand, args: nodeTsxArgs } = getNodeTsxArgs(path.join(SCRIPT_DIR, "vr-server.ts"));
-  const vrServer = spawn(nodeTsxCommand, nodeTsxArgs, {
-    stdio: "inherit",
-    cwd: PROJECT_ROOT,
-    env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
-    ...spawnShellOption,
-  });
+  const vrServerScript = path.join(SCRIPT_DIR, "vr-server.ts");
+  const tsxCli = getTsxCliPath(PACKAGE_ROOT, PROJECT_ROOT);
+  const { command: nodeTsxCommand, args: nodeTsxArgs } = getNodeTsxArgs(vrServerScript);
+  const vrServer =
+    tsxCli !== null
+      ? spawn("node", [tsxCli, vrServerScript], {
+          stdio: "inherit",
+          cwd: PROJECT_ROOT,
+          env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
+          shell: false,
+        })
+      : spawn(nodeTsxCommand, nodeTsxArgs, {
+          stdio: "inherit",
+          cwd: PROJECT_ROOT,
+          env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
+          ...spawnShellOption,
+        });
 
   vrServer.on("error", err => {
     log("red", "❌", `Erreur serveur VR: ${err.message}`);
@@ -426,15 +451,15 @@ const main = async () => {
     stdio: "inherit",
     shell: true,
     cwd: PACKAGE_ROOT,
-    env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
+    env: getExpoSpawnEnv(process.env, PROJECT_ROOT),
   });
 
   expo.on("error", err => {
     log("red", "❌", `Erreur Expo: ${err.message}`);
-    vrServer.kill();
+    killProcessTree(vrServer);
     stopStorybook(localStorybookProcess);
     if (useDockerSidecar) {
-      void composeDown(PROJECT_ROOT);
+      composeDownSync(PROJECT_ROOT);
     }
     process.exit(1);
   });
@@ -442,10 +467,10 @@ const main = async () => {
   const expoReady = await waitForServer(EXPO_PORT, 60);
   if (!expoReady) {
     log("red", "❌", "Expo n'a pas démarré à temps");
-    vrServer.kill();
+    killProcessTree(vrServer);
     stopStorybook(localStorybookProcess);
     if (useDockerSidecar) {
-      void composeDown(PROJECT_ROOT);
+      composeDownSync(PROJECT_ROOT);
     }
     process.exit(1);
   }
@@ -455,28 +480,35 @@ const main = async () => {
   printReadyMessage();
 
   let shuttingDown = false;
-  const shutdown = async (signal: string): Promise<void> => {
+  const shutdown = (signal: string): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     log("yellow", "⚠️", `Arrêt en cours (${signal})`);
-    expo.kill();
-    vrServer.kill();
+    killProcessTree(expo);
+    killProcessTree(vrServer);
     stopStorybook(localStorybookProcess);
-    try {
-      if (useDockerSidecar) {
-        await composeDown(PROJECT_ROOT);
+    if (useDockerSidecar) {
+      const downCode = composeDownSync(PROJECT_ROOT);
+      if (downCode !== 0) {
+        log("yellow", "⚠️", `docker compose down a retourné le code ${downCode}`);
+      } else {
+        log("green", "🐳", "Sidecar Docker arrêté");
       }
-    } catch {
-      // ignore
     }
     process.exit(0);
   };
 
-  process.on("SIGINT", () => void shutdown("SIGINT"));
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  // Ctrl+C tue souvent Expo en premier sous Windows : le handler "close" assure l'arrêt du sidecar.
+  expo.on("close", () => shutdown("expo-close"));
+
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
   // SIGHUP (fermeture du terminal / session SSH) : arrêt propre du sidecar aussi.
   // Absent sous Windows — le listener est simplement ignoré par le runtime.
-  process.on("SIGHUP", () => void shutdown("SIGHUP"));
+  process.on("SIGHUP", () => shutdown("SIGHUP"));
+  if (process.platform === "win32") {
+    process.on("SIGBREAK", () => shutdown("SIGBREAK"));
+  }
 };
 
 main().catch(err => {

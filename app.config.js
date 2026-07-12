@@ -1,13 +1,13 @@
 /**
  * Config Expo pour l'app standalone de régression visuelle.
- * Utilisée uniquement par `yarn vr:app` / `visual-regression app`.
- * Le point d'entrée est explicité ici car package.json "main" pointe vers l'API du package (src/index.ts).
+ * Utilisée uniquement par `yarn vr` / `visual-regression app`.
+ * Expo 54+ résout l'entrée via package.json "main" (src/index.tsx).
+ * L'API npm reste sur src/index.ts via le champ "exports".
  */
 module.exports = {
   expo: {
     name: "Visual Regression",
     slug: "visual-regression",
-    entryPoint: "./src/index.tsx",
     platforms: ["ios", "android", "web"],
     web: {
       bundler: "metro",

@@ -7,7 +7,7 @@ import { createRequire } from "module";
 import os from "os";
 import path from "path";
 
-import type { VrConfig, VrConfigFile, VrCompareMode, VrChangedFilesScope } from "../types/types";
+import type { VrChangedFilesScope, VrCompareMode, VrConfig, VrConfigFile } from "../types/types";
 
 const _require = createRequire(import.meta.url);
 
@@ -109,7 +109,7 @@ export const assertVrConfig = (root: string): void => {
   console.error(
     `\n❌ Fichier de configuration requis manquant : ${VR_CONFIG_FILENAME}\n` +
       `   Créez ce fichier à la racine de votre projet (${root}).\n` +
-      `   Voir la documentation : https://github.com/setshao/visual-regression#readme\n`,
+      `   Voir la documentation : https://github.com/sashalarrieu/visual-regression#readme\n`,
   );
   process.exit(1);
 };

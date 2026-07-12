@@ -12,8 +12,16 @@ const SCRIPT_DIR = getScriptDir(import.meta);
 /** Racine du package (src/utils → ../..). */
 const PACKAGE_ROOT = path.join(SCRIPT_DIR, "..", "..");
 
+const PLAYWRIGHT_PULL_MAX_ATTEMPTS = 5;
+
 /** Chemin du docker-compose.yml embarqué dans le package. */
 export const getComposeFile = (): string => path.join(PACKAGE_ROOT, "docker", "docker-compose.yml");
+
+/** Répertoire du compose file (utilisé comme cwd et pour le nom de projet). */
+export const getComposeDirectory = (): string => path.dirname(getComposeFile());
+
+/** Nom de projet Docker Compose (dossier parent du compose file, ex. "docker"). */
+export const getComposeProjectName = (): string => path.basename(getComposeDirectory());
 
 /** Image Docker par défaut (override VR_DOCKER_IMAGE). */
 export const getDockerImage = (): string => process.env.VR_DOCKER_IMAGE || "vr-capture:1.61.1";
@@ -37,18 +45,38 @@ const composeEnv = (projectRoot: string): NodeJS.ProcessEnv => ({
   VR_PROJECT_ROOT: projectRoot,
   VR_STORYBOOK_MODE: process.env.VR_STORYBOOK_MODE || "dev",
   VR_DOCKER_IMAGE: getDockerImage(),
+  COMPOSE_PROJECT_NAME: getComposeProjectName(),
 });
+
+const composeArgs = (args: string[]): string[] => [
+  "compose",
+  "-p",
+  getComposeProjectName(),
+  "-f",
+  getComposeFile(),
+  ...args,
+];
 
 const runCompose = (projectRoot: string, args: string[]): Promise<number> =>
   new Promise((resolve, reject) => {
-    const proc = spawn("docker", ["compose", "-f", getComposeFile(), ...args], {
+    const proc = spawn("docker", composeArgs(args), {
       stdio: "inherit",
-      cwd: projectRoot,
+      cwd: getComposeDirectory(),
       env: composeEnv(projectRoot),
     });
     proc.on("error", reject);
     proc.on("close", code => resolve(code ?? 1));
   });
+
+/** Arrêt synchrone du sidecar — fiable pendant SIGINT (Windows) où l'async peut être interrompu. */
+export const composeDownSync = (projectRoot: string): number => {
+  const res = spawnSync("docker", composeArgs(["down"]), {
+    stdio: "inherit",
+    cwd: getComposeDirectory(),
+    env: composeEnv(projectRoot),
+  });
+  return res.status ?? 1;
+};
 
 const runDocker = (projectRoot: string, args: string[]): Promise<number> =>
   new Promise((resolve, reject) => {
@@ -63,33 +91,48 @@ const runDocker = (projectRoot: string, args: string[]): Promise<number> =>
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
-const pullPlaywrightBaseWithRetry = async (projectRoot: string, maxAttempts = 3): Promise<boolean> => {
+/** true si l'image est déjà présente dans le cache Docker local. */
+const dockerImageExists = (image: string): boolean => {
+  const res = spawnSync("docker", ["image", "inspect", image], { stdio: "ignore" });
+  return res.status === 0;
+};
+
+/**
+ * Garantit que l'image de base Playwright est disponible avant un build.
+ * Skip le pull si déjà en cache ; retries avec backoff en cas d'EOF réseau (MCR).
+ */
+const ensurePlaywrightBaseImage = async (projectRoot: string): Promise<boolean> => {
   const image = getPlaywrightBaseImage();
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    console.log(`🐳 Pull base Playwright (${attempt}/${maxAttempts}): ${image}`);
+  if (dockerImageExists(image)) return true;
+
+  for (let attempt = 1; attempt <= PLAYWRIGHT_PULL_MAX_ATTEMPTS; attempt += 1) {
+    console.log(`🐳 Téléchargement de l'image Playwright (${attempt}/${PLAYWRIGHT_PULL_MAX_ATTEMPTS})…`);
     const code = await runDocker(projectRoot, ["pull", image]);
     if (code === 0) return true;
-    if (attempt < maxAttempts) {
+    if (attempt < PLAYWRIGHT_PULL_MAX_ATTEMPTS) {
       await sleep(attempt * 3000);
     }
   }
   return false;
 };
 
-/** Démarre le sidecar en arrière-plan.
- * 1) Tente d'abord sans build (image prébuild / cache local) pour être rapide et robuste.
- * 2) Si échec, fallback sur --build.
- */
+/** Démarre le sidecar en arrière-plan (build automatique au 1er lancement si besoin). */
 export const composeUp = async (projectRoot: string, forceBuild = false): Promise<number> => {
   if (forceBuild) {
+    await ensurePlaywrightBaseImage(projectRoot);
     return runCompose(projectRoot, ["up", "-d", "--build", "--force-recreate"]);
+  }
+
+  const captureImage = getDockerImage();
+  if (!dockerImageExists(captureImage)) {
+    await ensurePlaywrightBaseImage(projectRoot);
+    return runCompose(projectRoot, ["up", "-d", "--build"]);
   }
 
   const upCode = await runCompose(projectRoot, ["up", "-d"]);
   if (upCode === 0) return 0;
 
-  await pullPlaywrightBaseWithRetry(projectRoot, 3);
-  console.log("⚠️ docker compose up a échoué, tentative avec --build…");
+  await ensurePlaywrightBaseImage(projectRoot);
   return runCompose(projectRoot, ["up", "-d", "--build"]);
 };
 

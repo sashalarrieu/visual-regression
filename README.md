@@ -1,7 +1,8 @@
 # @setshao/visual-regression
 
-[![CI](https://github.com/setshao/visual-regression/actions/workflows/ci.yml/badge.svg)](https://github.com/setshao/visual-regression/actions/workflows/ci.yml)
-[![VR Integration](https://github.com/setshao/visual-regression/actions/workflows/integration.yml/badge.svg)](https://github.com/setshao/visual-regression/actions/workflows/integration.yml)
+[![CI](https://github.com/sashalarrieu/visual-regression/actions/workflows/ci.yml/badge.svg)](https://github.com/sashalarrieu/visual-regression/actions/workflows/ci.yml)
+[![Platform](https://github.com/sashalarrieu/visual-regression/actions/workflows/platform.yml/badge.svg)](https://github.com/sashalarrieu/visual-regression/actions/workflows/platform.yml)
+[![VR Integration](https://github.com/sashalarrieu/visual-regression/actions/workflows/integration.yml/badge.svg)](https://github.com/sashalarrieu/visual-regression/actions/workflows/integration.yml)
 
 Solution de régression visuelle **clé en main** pour tout projet qui possède un **Storybook**, quelle que soit la techno.  
 Le package fournit une **app web de régression dédiée** (UI intégrée dans le package) pour parcourir les stories, visualiser les screenshots (NEW / DIFF), voir les heatmaps, naviguer entre devices et gérer l’historique des validations / refus.
@@ -221,20 +222,34 @@ yarn add @setshao/visual-regression
 }
 ```
 
-### Prérequis : navigateurs Playwright (Windows / nouvelle machine)
+### Prérequis navigateurs Playwright (mode local uniquement)
 
-La comparaison visuelle utilise **Playwright** pour lancer Chromium. Les binaires ne sont **pas** inclus dans le package : ils doivent être installés **sur chaque machine** (et par OS).
+> **Avec `yarn vr` (comportement par défaut), cette étape n'est pas nécessaire.**  
+> La capture passe par le sidecar Docker qui embarque déjà Chromium Linux (voir [Capture Docker](#capture-docker-obligatoire-reproductible) ci-dessous).
 
-**Sur Windows**, ou après un premier clone sur une nouvelle machine, exécute **une fois** à la racine du projet hôte :
+L'installation locale de Playwright ne concerne que le **mode fallback** `VR_CAPTURE_BACKEND=local` (tests internes du package ou désactivation explicite de Docker) :
 
 ```bash
 cd <projet-hôte>
 npx playwright install chromium
 ```
 
-Sans cela, la comparaison peut échouer avec un `TimeoutError: launch: Timeout 180000ms exceeded`. En cas de timeout persistant, le script utilise désormais un timeout plus long et des options adaptées à Windows.
+Sans ces binaires en mode local, la comparaison peut échouer avec `TimeoutError: launch: Timeout 180000ms exceeded`. Sur Windows, le script tente d'abord Edge/Chrome système avant Chromium bundlé (plus lent).
 
-> Remarque : avec la **capture Docker** (ci-dessous, comportement par défaut), vous n'avez **pas** besoin d'installer Chromium localement — l'image embarque déjà les navigateurs.
+---
+
+## Compatibilité Windows / macOS / Linux
+
+| Plateforme                      | Workflow `yarn vr` | Captures (screenshots) | Notes                                                                                 |
+| ------------------------------- | ------------------ | ---------------------- | ------------------------------------------------------------------------------------- |
+| **Windows**                     | ✅                 | ✅ via Docker Linux    | Plus de workarounds (ports, signaux, chemins) ; Docker Desktop requis                 |
+| **macOS Intel**                 | ✅                 | ✅ via Docker Linux    | Expérience généralement plus fluide                                                   |
+| **macOS Apple Silicon (M1–M4)** | ✅                 | ✅ via Docker Linux    | Image `ghcr.io/.../vr-capture` publiée en **amd64 + arm64** (pas d'émulation au pull) |
+| **Linux**                       | ✅                 | ✅ via Docker Linux    | Référence CI (`ubuntu-latest`)                                                        |
+
+Les **screenshots sont identiques** sur toutes les machines : la capture s'exécute toujours dans le conteneur Linux (Chromium figé). Seule l'expérience développeur (démarrage Docker, signaux Ctrl+C, perf du 1er build) varie.
+
+**CI** : chaque PR exécute les checks sur `ubuntu-latest` ([`ci.yml`](.github/workflows/ci.yml)), la validation statique sur **macOS et Windows** ([`platform.yml`](.github/workflows/platform.yml)), et l'intégration Docker sur Linux ([`integration.yml`](.github/workflows/integration.yml)).
 
 ---
 
@@ -287,7 +302,7 @@ docker compose \
 
 Un exemple complet GitHub Actions (cache `node_modules` + `storybook-static`, sharding, upload d'artefacts) est fourni pour les **projets hôte** : [`docker/ci/github-actions.example.yml`](docker/ci/github-actions.example.yml).
 
-> Ce dépôt lib dispose de ses propres workflows CI dans [`.github/workflows/`](.github/workflows/) (`ci.yml` sur chaque PR, `integration.yml` sur les PR touchant les fichiers critiques). L'exemple ci-dessus est à copier dans le dépôt consommateur, pas dans ce package.
+> Ce dépôt lib dispose de ses propres workflows CI dans [`.github/workflows/`](.github/workflows/) (`ci.yml` sur chaque PR, `platform.yml` sur macOS/Windows, `integration.yml` sur les PR touchant les fichiers critiques). L'exemple ci-dessus est à copier dans le dépôt consommateur, pas dans ce package.
 
 > **Source de vérité** : les baselines validées en Docker/CI font foi. Ne régénérez jamais une baseline depuis une capture native OS.
 
@@ -320,6 +335,46 @@ Toute divergence d'environnement (autre OS, autre Chromium, autre Node) peut ré
 
 Dans l’utilisation standard, tu **n’as rien à importer dans ton app** : tu lances les scripts depuis la racine du projet hôte et tu ouvres l’URL de l’app web de régression dans ton navigateur.  
 L’UI VisualRegressions est entièrement embarquée dans le package.
+
+### Intégration Storybook (`.storybook/`)
+
+Le package expose les decorators, types et helpers utilisés par les stories VR :
+
+| Import                                 | Rôle                                                                                 |
+| -------------------------------------- | ------------------------------------------------------------------------------------ |
+| `@setshao/visual-regression/storybook` | Decorators `vrPreviewDecorators` (freeze Reanimated + exécution `play()`)            |
+| `@setshao/visual-regression`           | Tags VR (`LIVE_ANIMATION_VR_TAG`, `SKIP_PLAY_VR_TAG`, …) et type `VrStoryParameters` |
+| `@setshao/visual-regression/play`      | Helpers `play()` DOM pour React Native Web (`clickByLabel`, `expectText`, …)         |
+
+**`.storybook/preview.tsx`** :
+
+```tsx
+import type { Preview } from "@storybook/react-webpack5";
+import { vrPreviewDecorators } from "@setshao/visual-regression/storybook";
+
+const preview: Preview = {
+  decorators: vrPreviewDecorators,
+  parameters: { layout: "centered" },
+};
+
+export default preview;
+```
+
+**`.storybook/vr-parameters.d.ts`** (typage `parameters.vr`) :
+
+```ts
+import type { VrStoryParameters } from "@setshao/visual-regression";
+
+declare module "@storybook/react-webpack5" {
+  interface Parameters {
+    vr?: VrStoryParameters;
+  }
+}
+```
+
+Un modèle est aussi fourni dans le package : `node_modules/@setshao/visual-regression/src/storybook/vr-parameters.d.ts`.
+
+Ajoutez `@setshao/visual-regression` à `modulesToTranspile` de `@storybook/addon-react-native-web` si Storybook ne résout pas le package.
 
 ### 1. Scripts fournis par le package (à appeler depuis le projet hôte)
 
@@ -438,11 +493,12 @@ Un hook pre-commit Husky exécute `lint-staged` (Prettier + ESLint sur les fichi
 
 ### CI GitHub (ce dépôt)
 
-| Workflow                                                     | Déclencheur                                 | Rôle                                                            |
-| ------------------------------------------------------------ | ------------------------------------------- | --------------------------------------------------------------- |
-| [`ci.yml`](.github/workflows/ci.yml)                         | Chaque PR + push `main`                     | Typecheck, lint, format, tests unitaires, validation statique   |
-| [`integration.yml`](.github/workflows/integration.yml)       | PR modifiant scripts/utils/docker/demo/etc. | Capture VR Docker complète sur la demo (`VR_COMPARE_MODE=full`) |
-| [`docker-publish.yml`](.github/workflows/docker-publish.yml) | Tag `v*`                                    | Publication image `ghcr.io/sashalarrieu/vr-capture`             |
+| Workflow                                                     | Déclencheur                                 | Rôle                                                                  |
+| ------------------------------------------------------------ | ------------------------------------------- | --------------------------------------------------------------------- |
+| [`ci.yml`](.github/workflows/ci.yml)                         | Chaque PR + push `main`                     | Typecheck, lint, format, tests unitaires, validation statique (Linux) |
+| [`platform.yml`](.github/workflows/platform.yml)             | Chaque PR + push `main`                     | Typecheck + validation statique sur **macOS** et **Windows**          |
+| [`integration.yml`](.github/workflows/integration.yml)       | PR modifiant scripts/utils/docker/demo/etc. | Capture VR Docker complète sur la demo (`VR_COMPARE_MODE=full`)       |
+| [`docker-publish.yml`](.github/workflows/docker-publish.yml) | Tag `v*`                                    | Publication image `ghcr.io/sashalarrieu/vr-capture` (amd64 + arm64)   |
 
 ---
 

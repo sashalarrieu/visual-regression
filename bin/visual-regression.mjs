@@ -29,6 +29,8 @@ import { existsSync, realpathSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { getExpoSpawnEnv } from "./expo-env.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, "..");
 /** Racine réelle du package (sans symlink) pour que Expo ne soit pas sous node_modules → Babel s'applique. */
@@ -50,7 +52,7 @@ if (!existsSync(configPath)) {
     console.error(
       "\n❌ Fichier de configuration requis manquant : vr.config.cjs\n" +
         `   Créez ce fichier à la racine de votre projet (${hostRoot}).\n` +
-        "   Voir la documentation : https://github.com/setshao/visual-regression#readme\n",
+        "   Voir la documentation : https://github.com/sashalarrieu/visual-regression#readme\n",
     );
   }
   process.exit(1);
@@ -138,7 +140,7 @@ switch (subcommand) {
     if (process.env.VR_CLEAR_METRO === "1") {
       expoArgs.push("--clear");
     }
-    const child = spawn(npxRunner, expoArgs, spawnOpts(packageRootReal));
+    const child = spawn(npxRunner, expoArgs, spawnOpts(packageRootReal, getExpoSpawnEnv(env, hostRoot)));
     child.on("error", err => {
       console.error("❌ Impossible de lancer l'interface VR:", err.message);
       process.exit(1);
@@ -174,5 +176,20 @@ if (scriptPath) {
     }
     process.exit(1);
   });
+
+  const forwardSignal = signal => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try {
+      child.kill(signal);
+    } catch {
+      // ignore
+    }
+  };
+  process.on("SIGINT", () => forwardSignal("SIGINT"));
+  process.on("SIGTERM", () => forwardSignal("SIGTERM"));
+  if (isWin) {
+    process.on("SIGBREAK", () => forwardSignal("SIGBREAK"));
+  }
+
   child.on("exit", code => process.exit(code ?? 0));
 }
