@@ -1,5 +1,6 @@
 # Image de capture VR reproductible.
 # Base officielle Playwright (navigateurs préinstallés, version alignée sur le package).
+# Image publiée multi-arch (linux/amd64 + linux/arm64) pour Mac Apple Silicon natif.
 FROM mcr.microsoft.com/playwright:v1.61.1-jammy
 
 # Environnement de capture déterministe. Le code du projet hôte est monté sur /work

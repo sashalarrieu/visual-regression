@@ -176,5 +176,20 @@ if (scriptPath) {
     }
     process.exit(1);
   });
+
+  const forwardSignal = signal => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try {
+      child.kill(signal);
+    } catch {
+      // ignore
+    }
+  };
+  process.on("SIGINT", () => forwardSignal("SIGINT"));
+  process.on("SIGTERM", () => forwardSignal("SIGTERM"));
+  if (isWin) {
+    process.on("SIGBREAK", () => forwardSignal("SIGBREAK"));
+  }
+
   child.on("exit", code => process.exit(code ?? 0));
 }

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Interface de régression visuelle pour Storybook (React Native / Expo), réutilisable dans tout projet",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "src/index.tsx",
   "types": "src/index.ts",
   "exports": {
     ".": {
@@ -110,7 +110,7 @@
     "format:check": "prettier --check .",
     "prepare": "husky",
     "precommit": "lint-staged && yarn lint && yarn format:check && yarn typecheck",
-    "prepublishOnly": "yarn typecheck && yarn test:ci && npm run pack:check"
+    "prepublishOnly": "yarn precommit && yarn test:ci && npm run pack:check"
   },
   "lint-staged": {
     "**/*.{js,mjs,cjs,ts,jsx,tsx,gql,sql,md,css,scss,json}": [

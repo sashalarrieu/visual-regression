@@ -9,18 +9,19 @@
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 
-import { FORCE_VR_TAG, IGNORE_VR_TAG, LIVE_ANIMATION_VR_TAG } from "../constants/constants";
 import {
   BURST_VR_TAG,
-  fromVRDeviceConfig,
-  LIVE_ANIMATION_VR_TAG as LIVE_ANIMATION_EXPORT,
+  FORCE_VR_TAG,
+  IGNORE_VR_TAG,
+  LIVE_ANIMATION_VR_TAG,
   SKIP_PLAY_VR_TAG,
-} from "../index";
-import { resolveStoryPlayFunction, vrPreviewDecorators } from "../storybook";
+} from "../constants/constants";
 import { clickByLabel, delay } from "../storybook/play-helpers";
+import { fromVRDeviceConfig } from "../utils";
 import {
   getDevicesConfig,
   getProjectRoot,
+  getScriptDir,
   getVrPublicConfig,
   loadVrConfig,
   resolveVrConfig,
@@ -35,14 +36,28 @@ import { filterCaptureTasks, getChangedFiles, type StoryIndexEntry } from "../ut
 import { estimateCiWallClockMs, partitionTasksByShardTotal } from "../utils/vr-sharding";
 import { appendVrCaptureParam, expectsVrStoryPlay, waitForStoryStable } from "../utils/vr-steadysnap";
 import { normalizeStoryVrParameters, resolveEffectiveVrConfig, shouldUseBurstCapture } from "../utils/vr-story-config";
+import { resolveStoryPlayFunction } from "../utils/vr-story-play";
 
 import { compareAllStories, compareByType, compareSelectedStories } from "./compare-visual-regressions";
 import type { CaptureTask } from "./vr-capture-engine";
 
 const PROJECT_ROOT = getProjectRoot();
+const SCRIPT_DIR = getScriptDir(import.meta);
 const LEGACY_CONFIG = "vr-devices.config.cjs";
 
 type CheckResult = { ok: boolean; message: string };
+
+/** Vérifie les decorators Storybook sans importer preview.tsx (Reanimated incompatible Node/tsx). */
+const hasStorybookPreviewDecorators = (): boolean => {
+  const previewPath = path.join(SCRIPT_DIR, "..", "storybook", "preview.tsx");
+  if (!existsSync(previewPath)) return false;
+  const src = readFileSync(previewPath, "utf8");
+  return (
+    src.includes("export const vrPreviewDecorators") &&
+    src.includes("withVrReanimatedFreeze") &&
+    src.includes("withVrStoryPlay")
+  );
+};
 
 const isStaticOnly = process.argv.includes("--static-only");
 const showHelp = process.argv.includes("--help") || process.argv.includes("-h");
@@ -145,11 +160,10 @@ const runStaticChecks = (): CheckResult[] => {
   results.push(
     check(
       typeof fromVRDeviceConfig === "function" &&
-        LIVE_ANIMATION_EXPORT === LIVE_ANIMATION_VR_TAG &&
+        LIVE_ANIMATION_VR_TAG === "live-animation-vr" &&
         SKIP_PLAY_VR_TAG === "skip-play-vr" &&
         BURST_VR_TAG === "burst-vr" &&
-        Array.isArray(vrPreviewDecorators) &&
-        vrPreviewDecorators.length === 2 &&
+        hasStorybookPreviewDecorators() &&
         typeof resolveStoryPlayFunction === "function" &&
         typeof clickByLabel === "function" &&
         typeof delay === "function",

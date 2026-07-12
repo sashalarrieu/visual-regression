@@ -31,7 +31,8 @@ const config: StorybookConfig = {
     config.resolve = config.resolve ?? {};
     config.resolve.alias = {
       ...config.resolve.alias,
-      "@setshao/visual-regression": path.join(packageRoot, "../src/index.ts"),
+      // Le suffixe $ évite que l'alias de base capture aussi les sous-chemins (/storybook, /play).
+      "@setshao/visual-regression$": path.join(packageRoot, "../src/index.ts"),
       "@setshao/visual-regression/storybook": path.join(packageRoot, "../src/storybook/index.ts"),
     };
     return config;
