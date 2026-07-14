@@ -1,7 +1,21 @@
 {
-  "extends": "./tsconfig.json",
   "compilerOptions": {
+    "paths": {
+      "@setshao/visual-regression": ["./src/index.ts"],
+      "@setshao/visual-regression/storybook": ["./src/storybook/index.ts"]
+    },
+    "strict": true,
+    "noEmit": true,
+    "noImplicitAny": false,
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+    "target": "ESNext",
     "module": "NodeNext",
-    "moduleResolution": "NodeNext"
-  }
+    "moduleResolution": "NodeNext",
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "bin/**/*"],
+  "exclude": ["node_modules", "dist"]
 }

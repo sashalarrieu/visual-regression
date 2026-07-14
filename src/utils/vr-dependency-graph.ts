@@ -2,11 +2,13 @@
  * Graphe de dépendances TurboSnap : preview-stats.json (Webpack) + fallback imports statiques.
  * Ne pas importer depuis l'app React/Expo (web).
  */
-import { execSync } from "child_process";
+import { spawnSync } from "child_process";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import path from "path";
 
 import type { VrConfig } from "../types/types";
+
+import { getPackageScriptCommand, spawnShellOption } from "./node";
 
 export type StoryIndexEntryRef = {
   id: string;
@@ -277,11 +279,16 @@ export const ensurePreviewStats = (
   }
 
   console.log("\n📊 Génération preview-stats.json (storybook build --stats-json)…");
-  execSync("yarn storybook:build:stats", {
+  const { command, args } = getPackageScriptCommand(projectRoot, "storybook:build:stats");
+  const result = spawnSync(command, args, {
     cwd: projectRoot,
     stdio: "inherit",
     env: { ...process.env, STORYBOOK_ENV: "web" },
+    ...spawnShellOption,
   });
+  if (result.status !== 0) {
+    throw new Error(`storybook:build:stats a échoué (code ${result.status ?? 1})`);
+  }
 
   if (!existsSync(statsPath)) {
     throw new Error(`preview-stats.json introuvable après build : ${config.compare.statsFile}`);

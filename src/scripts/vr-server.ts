@@ -44,6 +44,7 @@ import {
   getProjectRoot,
   getScriptDir,
   getVrPublicConfig,
+  countEligibleStorybookStories,
   resolveVrConfig,
   spawnShellOption,
 } from "../utils/node";
@@ -860,7 +861,9 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
   // 📖 GET /regressions/config - Config VR publique résolue (vr.config.cjs + env)
   if (req.method === "GET" && url.pathname === "/regressions/config") {
     try {
-      sendJson(res, getVrPublicConfig(PROJECT_ROOT));
+      const publicConfig = getVrPublicConfig(PROJECT_ROOT);
+      const storyCount = await countEligibleStorybookStories(publicConfig.storybookUrl);
+      sendJson(res, { ...publicConfig, storyCount });
     } catch (err) {
       console.error("❌ Error fetching VR config:", err);
       sendJson(res, { error: String(err) }, 500);

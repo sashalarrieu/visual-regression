@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { CaptureTask } from "../scripts/vr-capture-engine";
 
+import { createTestVrConfig } from "./test-helpers";
 import {
   estimateCiWallClockMs,
   estimateShardCaptureMs,
@@ -10,6 +11,7 @@ import {
   getShardBenchmarkAlerts,
   getShardDistributionStats,
   hashStoryIdForShard,
+  parseShardConfig,
   parseShardConfigFromEnv,
   partitionTasksByShardTotal,
   storyIdBelongsToShard,
@@ -54,6 +56,22 @@ describe("parseShardConfigFromEnv", () => {
     process.env.VR_SHARD_INDEX = "4";
     process.env.VR_SHARD_TOTAL = "4";
     expect(parseShardConfigFromEnv()).toBeNull();
+  });
+});
+
+describe("parseShardConfig", () => {
+  it("reads shard from vr.config when env is unset", () => {
+    delete process.env.VR_SHARD_INDEX;
+    delete process.env.VR_SHARD_TOTAL;
+    const config = createTestVrConfig({ compare: { ...createTestVrConfig().compare, shardIndex: 1, shardTotal: 3 } });
+    expect(parseShardConfig(config)).toEqual({ index: 1, total: 3 });
+  });
+
+  it("prefers env over vr.config", () => {
+    process.env.VR_SHARD_INDEX = "0";
+    process.env.VR_SHARD_TOTAL = "2";
+    const config = createTestVrConfig({ compare: { ...createTestVrConfig().compare, shardIndex: 1, shardTotal: 3 } });
+    expect(parseShardConfig(config)).toEqual({ index: 0, total: 2 });
   });
 });
 

@@ -17,21 +17,39 @@ import {
 import {
   assertVrConfig,
   getNodeTsxArgs,
+  getPackageCliTsconfigPath,
   getProjectRoot,
   getScriptDir,
   getTsxCliPath,
+  resolvePackageInstallRoot,
   resolveVrConfig,
   spawnShellOption,
+  TSX_TSCONFIG_ENV,
+  waitForStorybookHostReady,
   waitForStorybookStories,
 } from "../utils/node";
 import { getCaptureDaemonUrl } from "../utils/vr-capture-backend";
 import { waitForCaptureDaemon } from "../utils/vr-capture-remote";
-import { composeDown, composeDownSync, composeUp, isDockerAvailable } from "../utils/vr-docker";
+import {
+  composeDown,
+  composeDownSync,
+  composeUp,
+  isDockerCliAvailable,
+  isDockerDaemonRunning,
+} from "../utils/vr-docker";
 import { getExpoSpawnEnv } from "../utils/vr-expo-env";
-import { getStorybookMode, startStorybook, stopStorybook } from "../utils/vr-storybook-runtime";
+import {
+  getStorybookMode,
+  resolveStorybookModeForCapture,
+  startStorybook,
+  stopStorybook,
+  usesNextJsViteStorybook,
+} from "../utils/vr-storybook-runtime";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
 const PACKAGE_ROOT = path.join(SCRIPT_DIR, "..", "..");
+const EXPO_ROOT = resolvePackageInstallRoot(getProjectRoot(), PACKAGE_ROOT);
+const PACKAGE_TSCONFIG = getPackageCliTsconfigPath(PACKAGE_ROOT);
 const PROJECT_ROOT = getProjectRoot();
 
 const log = (color: keyof typeof LOG_COLORS, prefix: string, message: string) => {
@@ -191,7 +209,7 @@ const main = async () => {
   const vrConfig = resolveVrConfig(PROJECT_ROOT);
   const storybookUrl = vrConfig.storybook.url;
   const storybookPort = parseStorybookPort(storybookUrl);
-  const useStaticStorybook = vrConfig.launcher.storybookStatic;
+  const explicitStorybookMode = vrConfig.launcher.storybookMode;
 
   log("blue", "🚀", "Démarrage de l'environnement Visual Regressions");
 
@@ -232,13 +250,13 @@ const main = async () => {
       ? spawn("node", [tsxCli, vrServerScript], {
           stdio: "inherit",
           cwd: PROJECT_ROOT,
-          env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
+          env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT, [TSX_TSCONFIG_ENV]: PACKAGE_TSCONFIG },
           shell: false,
         })
       : spawn(nodeTsxCommand, nodeTsxArgs, {
           stdio: "inherit",
           cwd: PROJECT_ROOT,
-          env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT },
+          env: { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT, [TSX_TSCONFIG_ENV]: PACKAGE_TSCONFIG },
           ...spawnShellOption,
         });
 
@@ -255,8 +273,8 @@ const main = async () => {
 
   log("green", "✅", "Serveur VR prêt");
 
-  const startLocalCaptureFallback = async (reason: string): Promise<void> => {
-    if (!allowExplicitLocalCaptureFallback) {
+  const startLocalCaptureFallback = async (reason: string, opts?: { auto?: boolean }): Promise<void> => {
+    if (!allowExplicitLocalCaptureFallback && !opts?.auto) {
       throw new Error(
         `${reason}. Docker est obligatoire par défaut pour 'yarn vr'. ` +
           "Pour désactiver Docker explicitement: VR_CAPTURE_BACKEND=local yarn vr " +
@@ -281,12 +299,34 @@ const main = async () => {
   };
 
   // --- Sidecar Docker de capture (Storybook + daemon Playwright) ---
-  if (!isDockerAvailable()) {
-    await startLocalCaptureFallback("Docker indisponible");
+  if (!isDockerDaemonRunning()) {
+    if (isDockerCliAvailable()) {
+      log(
+        "yellow",
+        "⚠️",
+        "Docker Desktop installé mais le daemon est arrêté — bascule en capture locale (Storybook + Playwright sur l'hôte)",
+      );
+    }
+    await startLocalCaptureFallback(
+      isDockerCliAvailable() ? "Docker Desktop n'est pas démarré" : "Docker indisponible",
+      { auto: true },
+    );
   } else {
     // Le conteneur choisit son mode Storybook via VR_STORYBOOK_MODE.
-    if (useStaticStorybook || process.env.VR_STORYBOOK_STATIC === "1") {
+    const captureStorybookMode = resolveStorybookModeForCapture(PROJECT_ROOT);
+    if (captureStorybookMode === "static") {
       process.env.VR_STORYBOOK_MODE = "static";
+    }
+    if (
+      explicitStorybookMode !== "static" &&
+      captureStorybookMode === "static" &&
+      usesNextJsViteStorybook(PROJECT_ROOT)
+    ) {
+      log(
+        "yellow",
+        "ℹ️",
+        "Storybook statique activé dans Docker (@storybook/nextjs-vite — le mode dev ne rend pas les stories en capture headless)",
+      );
     }
 
     // Réutiliser un sidecar déjà sain → redémarrage de `yarn vr` rapide et fiable
@@ -319,7 +359,11 @@ const main = async () => {
       }
 
       if (composeCode !== 0) {
-        await startLocalCaptureFallback(`docker compose up a échoué (code ${composeCode})`);
+        const autoFallback = !isDockerDaemonRunning();
+        if (autoFallback) {
+          log("yellow", "⚠️", "Le daemon Docker ne répond plus — bascule en capture locale");
+        }
+        await startLocalCaptureFallback(`docker compose up a échoué (code ${composeCode})`, { auto: autoFallback });
       } else {
         log("blue", "⏳", "Attente du daemon de capture (Storybook + Playwright — le 1er build peut être long)");
         let daemonReady = await waitForCaptureDaemon(300);
@@ -336,17 +380,31 @@ const main = async () => {
             await startLocalCaptureFallback("daemon de capture injoignable");
           }
         }
-        log("green", "✅", `Sidecar de capture prêt (${getCaptureDaemonUrl()})`);
+        log("green", "✅", `Daemon de capture prêt (${getCaptureDaemonUrl()})`);
       }
     }
   }
 
-  // Storybook est forwardé depuis le conteneur : vérifier qu'il répond côté hôte.
-  const storiesIndexed = await waitForStorybookStories(1, 60, PROJECT_ROOT);
-  if (storiesIndexed) {
-    log("green", "✅", `Storybook prêt (forwardé sur ${storybookUrl})`);
+  // Storybook est forwardé depuis le conteneur : vérifier qu'il répond côté hôte (pas seulement dans Docker).
+  if (useDockerSidecar) {
+    log("blue", "⏳", `Attente du forward Storybook sur ${storybookUrl} (1er build Vite possible)`);
+    const hostReady = await waitForStorybookHostReady(1, 180, PROJECT_ROOT);
+    if (hostReady.ready) {
+      log("green", "✅", `Storybook accessible sur ${storybookUrl} (${hostReady.storyCount} story/stories indexée(s))`);
+    } else {
+      throw new Error(
+        `Storybook inaccessible sur ${storybookUrl} depuis l'hôte après 180 s ` +
+          `(dernier décompte: ${hostReady.storyCount} story). ` +
+          "Vérifiez Docker Desktop et le mapping de port 6006, ou relancez avec VR_CAPTURE_BACKEND=local.",
+      );
+    }
   } else {
-    log("yellow", "⚠️", "Storybook du conteneur pas encore indexé côté hôte — la capture peut patienter");
+    const storiesIndexed = await waitForStorybookStories(1, 60, PROJECT_ROOT);
+    if (storiesIndexed) {
+      log("green", "✅", `Storybook prêt (${storybookUrl})`);
+    } else {
+      log("yellow", "⚠️", "Storybook local pas encore indexé — la capture peut patienter");
+    }
   }
 
   const launcherConfig = vrConfig.launcher;
@@ -394,7 +452,13 @@ const main = async () => {
       : path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
     log("blue", "🔍", "Comparaison initiale (incrémentale)…");
 
-    const compareEnv = { ...process.env, VR_PROJECT_ROOT: PROJECT_ROOT, VR_RUN_COMPARE: "1" };
+    const compareEnv = {
+      ...process.env,
+      VR_PROJECT_ROOT: PROJECT_ROOT,
+      VR_RUN_COMPARE: "1",
+      VR_CAPTURE_BACKEND: useDockerSidecar ? "docker" : process.env.VR_CAPTURE_BACKEND || "local",
+      [TSX_TSCONFIG_ENV]: PACKAGE_TSCONFIG,
+    };
     const tsxCli = getTsxCliPath(PACKAGE_ROOT, PROJECT_ROOT);
     const { command: compareCommand, args: compareArgs } = getNodeTsxArgs(compareScript);
     if (tsxCli !== null) {
@@ -450,7 +514,7 @@ const main = async () => {
   const expo = spawn("cross-env", expoArgs, {
     stdio: "inherit",
     shell: true,
-    cwd: PACKAGE_ROOT,
+    cwd: EXPO_ROOT,
     env: getExpoSpawnEnv(process.env, PROJECT_ROOT),
   });
 

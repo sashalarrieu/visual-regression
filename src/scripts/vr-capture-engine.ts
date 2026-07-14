@@ -52,11 +52,13 @@ import {
   resolveEffectiveVrConfig,
   shouldUseBurstCapture,
 } from "../utils/vr-story-config";
+import { getStorybookMode } from "../utils/vr-storybook-runtime";
 
 const PROJECT_ROOT = getProjectRoot();
 const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR } = getProjectPaths(PROJECT_ROOT);
 
 const ABSOLUTE_MAX_CONCURRENCY = 16;
+const DEFAULT_DEV_CAPTURE_CONCURRENCY = 2;
 
 /** Suppression récursive manuelle (fallback Windows ENOTEMPTY). */
 const recursiveDeleteDir = (dir: string): void => {
@@ -288,7 +290,36 @@ const addLogs = ({ log, type = "error", logs }: { log: string; type?: "error" | 
 
 export const resolveConcurrency = (taskCount: number, config: VrConfig): number => {
   const requested = config.capture.concurrency;
-  return Math.min(Math.max(1, requested), taskCount, ABSOLUTE_MAX_CONCURRENCY);
+  const isDevStorybook = getStorybookMode() === "dev";
+  const devCap = Number(process.env.VR_CAPTURE_DEV_CONCURRENCY || DEFAULT_DEV_CAPTURE_CONCURRENCY);
+  const capped = isDevStorybook && Number.isFinite(devCap) && devCap > 0 ? Math.min(requested, devCap) : requested;
+  return Math.min(Math.max(1, capped), taskCount, ABSOLUTE_MAX_CONCURRENCY);
+};
+
+const getStoryGotoWaitUntil = (): "commit" | "domcontentloaded" | "load" =>
+  getStorybookMode() === "static" ? "load" : "commit";
+
+/** Budget temps capture/stabilisation (Storybook dev + Vite peut être lent au 1er chargement). */
+export const getCaptureTimeBudget = (config: VrConfig): number => {
+  if (getStorybookMode() !== "dev") return config.capture.maxTestTime;
+  const envMs = Number(process.env.VR_CAPTURE_DEV_TIMEOUT_MS);
+  if (Number.isFinite(envMs) && envMs > 0) return envMs;
+  return Math.max(config.capture.maxTestTime, 60_000);
+};
+
+/** Timeout Playwright pour page.goto (dev Storybook + Vite peut dépasser maxTestTime). */
+const getStoryGotoTimeout = (config: VrConfig): number => getCaptureTimeBudget(config);
+
+const withCaptureTimeBudget = (config: VrConfig): VrConfig => {
+  const budget = getCaptureTimeBudget(config);
+  return {
+    ...config,
+    capture: { ...config.capture, maxTestTime: budget },
+    stabilize: {
+      ...config.stabilize,
+      maxStabilizeTime: Math.max(config.stabilize.maxStabilizeTime, budget),
+    },
+  };
 };
 
 const formatDurationMs = (ms: number): string => {
@@ -317,8 +348,12 @@ export const logCaptureTimerEnd = (durationMs: number, taskCount: number): void 
   );
 };
 
-export const getStoryIframeUrl = (storybookUrl: string, storyId: string): string =>
-  appendVrCaptureParam(`${storybookUrl.replace(/\/$/, "")}/iframe.html?id=${storyId}&viewMode=story`);
+export const getStoryIframeUrl = (storybookUrl: string, storyId: string): string => {
+  const base = storybookUrl.replace(/\/$/, "");
+  // `serve` redirige /iframe.html → /iframe et supprime les query params (story id perdu).
+  const iframePath = getStorybookMode() === "static" ? "/iframe" : "/iframe.html";
+  return appendVrCaptureParam(`${base}${iframePath}?id=${encodeURIComponent(storyId)}&viewMode=story`);
+};
 
 export type CompareScreenshotOutcome = "match" | "new" | "diff" | "missing_temp";
 
@@ -355,15 +390,16 @@ const normalizeComponentDir = (dir: string): string => dir.replace(/\\/g, "/").r
 
 export const buildScreenshotPaths = (componentDir: string, deviceName: string, storyId: string): ScreenshotPaths => {
   const normalizedDir = normalizeComponentDir(componentDir);
-  const screenshotDir = path.join(normalizedDir, SCREENSHOTS_DIR);
+  const screenshotDir = path.join(PROJECT_ROOT, normalizedDir, SCREENSHOTS_DIR);
+  const publicBase = path.join(PUBLIC_SCREENSHOTS_DIR, normalizedDir);
   const baseName = `${deviceName}-${storyId}${SCREENSHOT_NAME}`;
 
   return {
     screenshotPath: path.join(screenshotDir, baseName),
-    publicScreenshotPath: path.join(PUBLIC_SCREENSHOTS_DIR, normalizedDir, baseName),
-    newScreenshotPath: path.join(PUBLIC_SCREENSHOTS_DIR, normalizedDir, `${NEW_SCREENSHOT_NAME}${baseName}`),
-    tempScreenshotPath: path.join(PUBLIC_SCREENSHOTS_DIR, normalizedDir, `${TEMP_SCREENSHOT_NAME}${baseName}`),
-    diffScreenshotPath: path.join(PUBLIC_SCREENSHOTS_DIR, normalizedDir, `${DIFF_SCREENSHOT_NAME}${baseName}`),
+    publicScreenshotPath: path.join(publicBase, baseName),
+    newScreenshotPath: path.join(publicBase, `${NEW_SCREENSHOT_NAME}${baseName}`),
+    tempScreenshotPath: path.join(publicBase, `${TEMP_SCREENSHOT_NAME}${baseName}`),
+    diffScreenshotPath: path.join(publicBase, `${DIFF_SCREENSHOT_NAME}${baseName}`),
   };
 };
 
@@ -484,7 +520,10 @@ export const compareScreenshots = ({
 
   if (!existsSync(screenshotPath)) {
     renameSync(tempScreenshotPath, newScreenshotPath);
-    addLogs({ log: `❇️  New screenshot for ${screenshotPath}`, type: "new", logs });
+    const displayPath = path.isAbsolute(screenshotPath)
+      ? path.relative(PROJECT_ROOT, screenshotPath).replace(/\\/g, "/")
+      : screenshotPath;
+    addLogs({ log: `❇️  New screenshot for ${displayPath}`, type: "new", logs });
     return { outcome: "new", diffPixels: 0 };
   }
 
@@ -602,7 +641,10 @@ const captureStoryScreenshot = async ({
   try {
     if (!skipGoto) {
       networkTracker.attach(page);
-      await page.goto(getStoryIframeUrl(storybookUrl, storyId), { waitUntil: "load", timeout: maxTestTime });
+      await page.goto(getStoryIframeUrl(storybookUrl, storyId), {
+        waitUntil: getStoryGotoWaitUntil(),
+        timeout: getStoryGotoTimeout(config),
+      });
     }
 
     await waitForStoryStable(page, config, networkTracker, storyTags);
@@ -672,6 +714,7 @@ const runSingleTask = async ({
   storiesWithDiff: string[];
   clearScreenshotsBeforeCapture: boolean;
 }): Promise<void> => {
+  const captureConfig = withCaptureTimeBudget(config);
   const deviceConfig = devices[task.deviceName];
   if (!deviceConfig) {
     addLogs({ log: `⚠️  Device ${task.deviceName} not found, skipping ${task.storyId}`, logs });
@@ -683,23 +726,30 @@ const runSingleTask = async ({
   }
 
   const paths = buildScreenshotPaths(task.componentDir, task.deviceName, task.storyId);
-  const context = await getOrCreateContext(browser, task.deviceName, deviceConfig, contextCache, config.storybook.url);
+  const iframeUrl = getStoryIframeUrl(captureConfig.storybook.url, task.storyId);
+  const context = await getOrCreateContext(
+    browser,
+    task.deviceName,
+    deviceConfig,
+    contextCache,
+    captureConfig.storybook.url,
+  );
   const page = await context.newPage();
   const networkTracker = new NetworkQuietTracker();
-  const storyTags = await getStoryTags(task.storyId, config.storybook.url);
+  const storyTags = await getStoryTags(task.storyId, captureConfig.storybook.url);
   const screenshotKey = `${task.deviceName}-${task.storyId}`;
 
   try {
     networkTracker.attach(page);
-    await page.goto(getStoryIframeUrl(config.storybook.url, task.storyId), {
-      waitUntil: "load",
-      timeout: config.capture.maxTestTime,
+    await page.goto(iframeUrl, {
+      waitUntil: getStoryGotoWaitUntil(),
+      timeout: getStoryGotoTimeout(captureConfig),
     });
 
     const storyVr = await readStoryVrParameters(page, task.storyId);
-    const effectiveConfig = resolveEffectiveVrConfig(config, storyVr);
+    const effectiveConfig = withCaptureTimeBudget(resolveEffectiveVrConfig(captureConfig, storyVr));
     const useBurst = shouldUseBurstCapture(effectiveConfig, storyTags, storyVr);
-    const maxDiffAttempts = getStoryDiffVerificationMaxAttempts(config, storyVr);
+    const maxDiffAttempts = getStoryDiffVerificationMaxAttempts(captureConfig, storyVr);
 
     let attempt = 1;
     let compareResult: CompareScreenshotResult = { outcome: "missing_temp", diffPixels: 0 };
@@ -710,7 +760,7 @@ const runSingleTask = async ({
         storyId: task.storyId,
         deviceName: task.deviceName,
         tempScreenshotPath: paths.tempScreenshotPath,
-        storybookUrl: config.storybook.url,
+        storybookUrl: captureConfig.storybook.url,
         config: effectiveConfig,
         logs,
         useBurst,
@@ -789,13 +839,13 @@ export const runCaptureBatch = async (
     return { success: false, stats, logs, storiesWithDiff, error: "Aucune tâche de capture" };
   }
 
+  const config = resolveVrConfig(PROJECT_ROOT);
+
   // Backend Docker (défaut) : toute capture est déléguée au daemon du sidecar.
-  // Aucune capture Playwright locale n'est effectuée sur l'hôte.
-  if (isDockerCaptureBackend()) {
-    return runCaptureBatchRemote(tasks, options);
+  if (isDockerCaptureBackend(config)) {
+    return runCaptureBatchRemote(tasks, options, config);
   }
 
-  const config = resolveVrConfig(PROJECT_ROOT);
   const devices = getDevicesConfig(config.devices);
   const concurrency = options.concurrency ?? resolveConcurrency(tasks.length, config);
   const contextCache = new Map<string, BrowserContext>();

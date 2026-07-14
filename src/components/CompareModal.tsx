@@ -10,7 +10,7 @@ import { Typo } from "../atoms/Typo";
 import { useDeviceConfig } from "../providers/DeviceConfigProvider";
 import { spacing } from "../themes/theme";
 import type { DeletedItem, MaterialIconName, Node, StoryDevicePair } from "../types/types";
-import { formatStoryIdForDisplay, fetchStorybookStoryCount } from "../utils";
+import { fetchStorybookStoryCount, formatStoryIdForDisplay } from "../utils";
 
 import { DeletedItemRow } from "./DeletedItemRow";
 
@@ -57,7 +57,10 @@ export const CompareModal: React.FC<CompareModalProps> = ({
     if (visible) setSelectedItems(new Set());
   }, [visible, selectedDevice]);
 
-  const availableDevices = useMemo<string[]>(() => {
+  const configuredDevices = useMemo<string[]>(() => {
+    if (deviceConfigs?.length) {
+      return deviceConfigs.map(d => d.name).sort();
+    }
     const deviceSet = new Set<string>();
     allList.forEach(node => {
       if (node.deviceName) deviceSet.add(node.deviceName);
@@ -66,16 +69,22 @@ export const CompareModal: React.FC<CompareModalProps> = ({
       if (item.deviceName) deviceSet.add(item.deviceName);
     });
     return Array.from(deviceSet).sort();
-  }, [allList, deletedList]);
+  }, [deviceConfigs, allList, deletedList]);
+
+  useEffect(() => {
+    if (selectedDevice !== "all" && configuredDevices.length > 0 && !configuredDevices.includes(selectedDevice)) {
+      setSelectedDevice("all");
+    }
+  }, [configuredDevices, selectedDevice]);
 
   const deviceCounts = useMemo(() => {
     const counts = new Map<string | "all", number>();
     counts.set("all", deletedList.filter(item => item.storyId && item.deviceName).length);
-    availableDevices.forEach(device => {
+    configuredDevices.forEach(device => {
       counts.set(device, deletedList.filter(item => item.deviceName === device && item.storyId).length);
     });
     return counts;
-  }, [deletedList, availableDevices]);
+  }, [deletedList, configuredDevices]);
 
   const deviceTabs = useMemo<TabBarTab<string>[]>(() => {
     return [
@@ -85,7 +94,7 @@ export const CompareModal: React.FC<CompareModalProps> = ({
         icon: { name: "grid-view" },
         alertTextInfo: deviceCounts.get("all") || 0,
       },
-      ...availableDevices.map(device => {
+      ...configuredDevices.map(device => {
         const deviceStyle = getDeviceStyle(device);
         return {
           key: device,
@@ -95,7 +104,7 @@ export const CompareModal: React.FC<CompareModalProps> = ({
         };
       }),
     ];
-  }, [availableDevices, deviceCounts, getDeviceStyle, getDeviceDisplayName]);
+  }, [configuredDevices, deviceCounts, getDeviceStyle, getDeviceDisplayName]);
 
   const filteredDeletedList = useMemo(() => {
     if (selectedDevice === "all") return deletedList;
@@ -191,14 +200,14 @@ export const CompareModal: React.FC<CompareModalProps> = ({
     const filteredRejected = deviceName
       ? deletedList.filter(item => item.deviceName === deviceName && item.storyId)
       : deletedList.filter(item => item.storyId);
-    const devicesForAllCount = selectedDevice === "all" ? (deviceConfigs?.length ?? availableDevices.length) : 1;
+    const devicesForAllCount = selectedDevice === "all" ? (deviceConfigs?.length ?? configuredDevices.length) : 1;
     return {
       all: storybookStoryCount * devicesForAllCount,
       new: filteredRejected.filter(item => !item.isDiff).length,
       diff: filteredRejected.filter(item => item.isDiff).length,
       rejected: filteredRejected.length,
     };
-  }, [selectedDevice, deletedList, storybookStoryCount, deviceConfigs, availableDevices.length]);
+  }, [selectedDevice, deletedList, storybookStoryCount, deviceConfigs, configuredDevices.length]);
 
   const compareButtons = useMemo<
     {
@@ -247,7 +256,7 @@ export const CompareModal: React.FC<CompareModalProps> = ({
         title: { text: "Régénérer les comparaisons" },
         subtitle:
           "Sélectionnez les stories refusées à régénérer ou choisissez un device et régénérez les nouvelles, les différences, les refusés ou toutes les stories pour ce device.",
-        children: availableDevices.length > 0 && (
+        children: (
           <Box
             gap="m"
             pb="m"

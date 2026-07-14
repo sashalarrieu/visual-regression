@@ -15,7 +15,12 @@ import { format } from "util";
 
 import { CAPTURE_DAEMON_PORT, STORYBOOK_PORT } from "../constants/constants";
 import { getProjectRoot, resolveVrConfig } from "../utils/node";
-import { getStorybookMode, startStorybook, stopStorybook } from "../utils/vr-storybook-runtime";
+import {
+  ensureStaticStorybookFresh,
+  getStorybookMode,
+  startStorybook,
+  stopStorybook,
+} from "../utils/vr-storybook-runtime";
 
 import type { CaptureBatchOptions, CaptureBatchResult, CaptureTask } from "./vr-capture-engine";
 import { runCaptureBatch } from "./vr-capture-engine";
@@ -121,6 +126,30 @@ const main = async (): Promise<void> => {
         if (!Array.isArray(tasks) || tasks.length === 0) {
           sendJson(res, { success: false, error: "tasks vide ou invalide" }, 400);
           return;
+        }
+
+        if (mode === "static") {
+          try {
+            const fresh = await ensureStaticStorybookFresh({
+              projectRoot: PROJECT_ROOT,
+              port: storybookPort,
+              statsFile: config.compare.statsFile,
+              currentProcess: storybookProcess,
+            });
+            storybookProcess = fresh.process;
+            storybookReady = fresh.ready;
+            if (fresh.rebuilt) {
+              console.log("✅ [vr-daemon] Storybook statique reconstruit et prêt");
+            }
+          } catch (err) {
+            console.error("❌ [vr-daemon] Rebuild Storybook statique échoué:", err);
+            sendJson(res, { success: false, error: err instanceof Error ? err.message : String(err) }, 503);
+            return;
+          }
+          if (!storybookReady) {
+            sendJson(res, { success: false, error: "Storybook pas prêt après rebuild" }, 503);
+            return;
+          }
         }
 
         const result: CaptureBatchResult = await runSerialized(() => runCaptureWithConsole(tasks, options));

@@ -5,6 +5,7 @@
 import { createHash } from "crypto";
 
 import type { CaptureTask } from "../scripts/vr-capture-engine";
+import type { VrConfig } from "../types/types";
 
 export type ShardConfig = {
   /** Index 0-based */
@@ -43,6 +44,19 @@ export const parseShardConfigFromEnv = (): ShardConfig | null => {
   return { index, total };
 };
 
+const parseShardConfigFromFile = (config?: Pick<VrConfig, "compare">): ShardConfig | null => {
+  const total = config?.compare.shardTotal;
+  const index = config?.compare.shardIndex;
+  if (total === undefined || index === undefined) return null;
+  if (!Number.isInteger(total) || total < 1) return null;
+  if (!Number.isInteger(index) || index < 0 || index >= total) return null;
+  return { index, total };
+};
+
+/** Sharding résolu : env VR_SHARD_* > vr.config compare.shard* > désactivé. */
+export const parseShardConfig = (config?: Pick<VrConfig, "compare">): ShardConfig | null =>
+  parseShardConfigFromEnv() ?? parseShardConfigFromFile(config);
+
 /** Hash stable d'un storyId pour répartition modulo. */
 export const hashStoryIdForShard = (storyId: string): number => {
   const hash = createHash("sha256").update(storyId).digest();
@@ -52,10 +66,6 @@ export const hashStoryIdForShard = (storyId: string): number => {
 export const storyIdBelongsToShard = (storyId: string, shard: ShardConfig): boolean =>
   hashStoryIdForShard(storyId) % shard.total === shard.index;
 
-/**
- * Filtre les tâches selon le shard courant.
- * Sans env VR_SHARD_* : retourne toutes les tâches.
- */
 export const filterTasksByShard = (
   tasks: CaptureTask[],
   shard: ShardConfig | null = parseShardConfigFromEnv(),

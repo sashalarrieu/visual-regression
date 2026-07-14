@@ -5,14 +5,14 @@
  * Configuration dynamique (devices, compare.mode, storybook.url, concurrency…) :
  * voir vr.config.cjs + resolveVrConfig() dans src/utils/vr-config.ts.
  *
- * Overrides env (scripts Node) :
- *   VR_PROJECT_ROOT, VR_CONCURRENCY, VR_MAX_TEST_TIME, VR_COMPARE_MODE,
- *   VR_COMPARE_BASE, VR_COMPARE_SCOPE, VR_THRESHOLD, VR_RUN_INITIAL_COMPARE,
- *   VR_STORYBOOK_URL, VR_STORYBOOK_STATIC, VR_STORYBOOK_STATIC_REBUILD,
- *   VR_DIFF_VERIFY_MAX_ATTEMPTS,
+ * Overrides env (scripts Node) — chaque clé a un équivalent vr.config.cjs (sauf VR_DOCKER, VR_PROJECT_ROOT) :
+ *   VR_CONCURRENCY, VR_MAX_TEST_TIME, VR_CAPTURE_REMOTE_CHUNK,
+ *   VR_CAPTURE_BACKEND, VR_CAPTURE_DAEMON_URL,
+ *   VR_COMPARE_MODE, VR_COMPARE_BASE, VR_COMPARE_SCOPE, VR_THRESHOLD,
+ *   VR_RUN_INITIAL_COMPARE, VR_STORYBOOK_URL, VR_STORYBOOK_MODE,
+ *   VR_STORYBOOK_STATIC (alias → storybookMode), VR_STORYBOOK_STATIC_REBUILD, VR_DIFF_VERIFY_MAX_ATTEMPTS,
  *   VR_SHARD_INDEX, VR_SHARD_TOTAL,
- *   VR_CAPTURE_BACKEND, VR_CAPTURE_DAEMON_URL, VR_STORYBOOK_MODE,
- *   VR_DOCKER, VR_DOCKER_IMAGE
+ *   VR_DOCKER_IMAGE, VR_PLAYWRIGHT_IMAGE
  */
 
 import type { DeviceStyle } from "../types/types";
