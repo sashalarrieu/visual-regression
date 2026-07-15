@@ -21,6 +21,7 @@ Ce projet suit le format [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/
 ### Fixed
 
 - Stabilisation du lancement Expo pour les consommateurs npm/pnpm/yarn.
+- Authentification `NPM_TOKEN` restaurée dans le workflow de publication npm (trusted publishing OIDC non configurée côté npm).
 
 ## [1.0.0] - 2026-07-09
 
