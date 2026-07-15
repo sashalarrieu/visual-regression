@@ -1,8 +1,8 @@
 # Changelog
 
-Ce projet suit le format [Keep a Changelog](https://keepachangelog.com/fr/1.1.1/) et respecte le versioning semantique.
+Ce projet suit le format [Keep a Changelog](https://keepachangelog.com/fr/1.1.2/) et respecte le versioning semantique.
 
-## [1.1.1] - 2026-07-15
+## [1.1.2] - 2026-07-15
 
 ### Changed
 
