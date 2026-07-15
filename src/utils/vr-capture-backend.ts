@@ -2,26 +2,43 @@
  * Résolution du backend de capture VR.
  *
  * - "docker" (défaut) : toute capture est déléguée au daemon Docker (sidecar).
- *   Aucune capture Playwright locale n'est autorisée sur la machine hôte.
- * - "local" : capture Playwright directe. Réservé aux tests internes du package
- *   et à l'exécution *à l'intérieur* du conteneur (VR_CAPTURE_BACKEND=local).
+ * - "local" : capture Playwright directe (tests internes ou conteneur VR_DOCKER=1).
  */
 import { CAPTURE_DAEMON_URL } from "../constants/constants";
+import type { VrConfig } from "../types/types";
+
+import { getProjectRoot } from "./node";
+import { resolveVrConfig } from "./vr-config";
 
 export type CaptureBackend = "docker" | "local";
 
-/** Backend résolu (VR_CAPTURE_BACKEND, défaut "docker"). */
-export const getCaptureBackend = (): CaptureBackend => {
-  const raw = (process.env.VR_CAPTURE_BACKEND || "docker").toLowerCase();
-  return raw === "local" ? "local" : "docker";
+const resolveConfig = (config?: VrConfig): VrConfig | undefined => {
+  if (config) return config;
+  try {
+    return resolveVrConfig(getProjectRoot());
+  } catch {
+    return undefined;
+  }
+};
+
+/** Backend résolu (VR_CAPTURE_BACKEND > vr.config capture.backend > docker). */
+export const getCaptureBackend = (config?: VrConfig): CaptureBackend => {
+  const envRaw = (process.env.VR_CAPTURE_BACKEND || "").toLowerCase();
+  if (envRaw === "local" || envRaw === "docker") return envRaw;
+  const resolved = resolveConfig(config);
+  return resolved?.capture.backend ?? "docker";
 };
 
 /** true si les captures doivent passer par le daemon Docker. */
-export const isDockerCaptureBackend = (): boolean => getCaptureBackend() === "docker";
+export const isDockerCaptureBackend = (config?: VrConfig): boolean => getCaptureBackend(config) === "docker";
 
 /** true si le process courant s'exécute dans le conteneur de capture. */
 export const isRunningInDocker = (): boolean => process.env.VR_DOCKER === "1";
 
-/** URL du daemon de capture (sans slash final). */
-export const getCaptureDaemonUrl = (): string =>
-  (process.env.VR_CAPTURE_DAEMON_URL || CAPTURE_DAEMON_URL).replace(/\/$/, "");
+/** URL du daemon de capture (VR_CAPTURE_DAEMON_URL > vr.config > défaut). */
+export const getCaptureDaemonUrl = (config?: VrConfig): string => {
+  const envUrl = process.env.VR_CAPTURE_DAEMON_URL?.trim();
+  if (envUrl) return envUrl.replace(/\/$/, "");
+  const resolved = resolveConfig(config);
+  return (resolved?.capture.daemonUrl ?? CAPTURE_DAEMON_URL).replace(/\/$/, "");
+};

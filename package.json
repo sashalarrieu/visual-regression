@@ -10,6 +10,10 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./storybook": {
+      "types": "./src/storybook/index.ts",
+      "default": "./src/storybook/index.ts"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
@@ -39,17 +43,43 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/setshao/visual-regression.git"
+    "url": "https://github.com/sashalarrieu/visual-regression.git"
   },
   "bugs": {
-    "url": "https://github.com/setshao/visual-regression/issues"
+    "url": "https://github.com/sashalarrieu/visual-regression/issues"
   },
-  "homepage": "https://github.com/setshao/visual-regression#readme",
+  "homepage": "https://github.com/sashalarrieu/visual-regression#readme",
   "publishConfig": {
     "access": "public"
   },
   "engines": {
     "node": ">=20"
+  },
+  "expo": {
+    "install": {
+      "exclude": [
+        "eslint-config-expo",
+        "eslint",
+        "typescript",
+        "@typescript-eslint/eslint-plugin",
+        "@typescript-eslint/parser",
+        "eslint-config-prettier",
+        "eslint-plugin-react",
+        "eslint-plugin-react-hooks",
+        "eslint-plugin-storybook",
+        "eslint-plugin-import",
+        "eslint-plugin-prettier",
+        "eslint-plugin-check-file",
+        "eslint-plugin-import-helpers",
+        "vitest",
+        "husky",
+        "lint-staged",
+        "prettier",
+        "storybook",
+        "@storybook/react-webpack5",
+        "@storybook/addon-react-native-web"
+      ]
+    }
   },
   "scripts": {
     "storybook": "cross-env STORYBOOK_ENV=web storybook dev -p 6006",
@@ -80,7 +110,7 @@
     "format:check": "prettier --check .",
     "prepare": "husky",
     "precommit": "lint-staged && yarn lint && yarn format:check && yarn typecheck",
-    "prepublishOnly": "yarn typecheck && yarn test:ci && npm run pack:check"
+    "prepublishOnly": "yarn precommit && yarn test:ci && npm run pack:check"
   },
   "lint-staged": {
     "**/*.{js,mjs,cjs,ts,jsx,tsx,gql,sql,md,css,scss,json}": [
@@ -109,7 +139,7 @@
     "@storybook/addon-react-native-web": "0.0.29",
     "@storybook/react-webpack5": "10.4.6",
     "@types/bun": "^1.3.14",
-    "@types/node": "^24.0.10",
+    "@types/node": "^26.1.1",
     "@types/pngjs": "^6.0.5",
     "@types/react": "~19.1.10",
     "@typescript-eslint/eslint-plugin": "^8.62.1",

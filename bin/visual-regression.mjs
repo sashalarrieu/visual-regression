@@ -21,13 +21,17 @@
  * Env utiles :
  *   VR_RUN_INITIAL_COMPARE=0    → yarn vr sans compare initiale (rebuild index seulement)
  *   VR_SHARD_INDEX=0 VR_SHARD_TOTAL=4 → shard CI pour vr:compare
- *   VR_STORYBOOK_STATIC=1       → Storybook build + serve au lieu de dev (yarn vr)
+ *   VR_STORYBOOK_MODE=static|dev  → Storybook build+serve ou dev (yarn vr)
+ *   VR_STORYBOOK_STATIC=1         → alias de VR_STORYBOOK_MODE=static (rétrocompat)
  *   VR_STORYBOOK_STATIC_REBUILD=1 → force rebuild storybook-static au lancement
  */
 import { spawn } from "child_process";
 import { existsSync, realpathSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+
+import { getExpoSpawnEnv } from "./expo-env.mjs";
+import { getTsxCliPath, spawnTsxScript } from "./spawn-tsx.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, "..");
@@ -50,7 +54,7 @@ if (!existsSync(configPath)) {
     console.error(
       "\n❌ Fichier de configuration requis manquant : vr.config.cjs\n" +
         `   Créez ce fichier à la racine de votre projet (${hostRoot}).\n` +
-        "   Voir la documentation : https://github.com/setshao/visual-regression#readme\n",
+        "   Voir la documentation : https://github.com/sashalarrieu/visual-regression#readme\n",
     );
   }
   process.exit(1);
@@ -68,19 +72,6 @@ const spawnOpts = (cwd, envOverrides = {}) => ({
   stdio: "inherit",
   ...(isWin && { shell: true }),
 });
-
-/** Chemin vers le CLI tsx (évite "tsx non reconnu" avec npx + shell sur Windows). */
-function getTsxCliPath() {
-  const candidates = [
-    path.join(packageRootReal, "node_modules", "tsx", "dist", "cli.mjs"),
-    path.join(packageRoot, "node_modules", "tsx", "dist", "cli.mjs"),
-    path.join(hostRoot, "node_modules", "tsx", "dist", "cli.mjs"),
-  ];
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
 
 let scriptPath;
 /** Arguments supplémentaires passés au script tsx (ex. benchmark 12). */
@@ -138,7 +129,7 @@ switch (subcommand) {
     if (process.env.VR_CLEAR_METRO === "1") {
       expoArgs.push("--clear");
     }
-    const child = spawn(npxRunner, expoArgs, spawnOpts(packageRootReal));
+    const child = spawn(npxRunner, expoArgs, spawnOpts(packageRootReal, getExpoSpawnEnv(env, hostRoot)));
     child.on("error", err => {
       console.error("❌ Impossible de lancer l'interface VR:", err.message);
       process.exit(1);
@@ -154,16 +145,19 @@ switch (subcommand) {
 }
 
 if (scriptPath) {
-  const tsxCli = getTsxCliPath();
+  const tsxCli = getTsxCliPath(hostRoot, packageRootReal);
   const useNpxFallback = !tsxCli;
   // Toujours exécuter tsx depuis la racine du package pour garantir la résolution des alias TS.
   const cwd = packageRootReal;
-  const child = tsxCli
-    ? spawn("node", [tsxCli, "--tsconfig", packageTsconfigPath, scriptPath, ...scriptArgs], {
-        ...spawnOpts(cwd),
-        shell: false,
-      })
-    : spawn(npxRunner, ["tsx", "--tsconfig", packageTsconfigPath, scriptPath, ...scriptArgs], spawnOpts(cwd));
+  const child = spawnTsxScript({
+    hostRoot,
+    packageRoot: packageRootReal,
+    tsconfigPath: packageTsconfigPath,
+    scriptPath,
+    scriptArgs,
+    cwd,
+    env,
+  });
   child.on("error", err => {
     console.error("❌ Impossible de lancer visual-regression:", err.message);
     if (useNpxFallback) {
@@ -174,5 +168,20 @@ if (scriptPath) {
     }
     process.exit(1);
   });
+
+  const forwardSignal = signal => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try {
+      child.kill(signal);
+    } catch {
+      // ignore
+    }
+  };
+  process.on("SIGINT", () => forwardSignal("SIGINT"));
+  process.on("SIGTERM", () => forwardSignal("SIGTERM"));
+  if (isWin) {
+    process.on("SIGBREAK", () => forwardSignal("SIGBREAK"));
+  }
+
   child.on("exit", code => process.exit(code ?? 0));
 }

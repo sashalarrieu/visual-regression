@@ -132,14 +132,22 @@ export type VrPublicConfig = {
   compareBase: string;
   captureConcurrency: number;
   captureMaxTestTime: number;
+  captureRemoteChunkSize: number;
+  captureBackend: VrCaptureBackend;
   compareThreshold: number;
   launcherRunInitialCompare: boolean;
   storybookUrl: string;
   deviceCount: number;
+  /** Nombre de stories Storybook éligibles (rempli par GET /regressions/config côté serveur). */
+  storyCount?: number;
 };
 
 /** Périmètre des fichiers modifiés pour le mode incrémental. */
 export type VrChangedFilesScope = "all" | "branch" | "working-tree";
+
+export type VrCaptureBackend = "docker" | "local";
+
+export type VrStorybookMode = "dev" | "static";
 
 /** Configuration VR résolue (fichier + env + défauts). */
 export type VrConfig = {
@@ -147,6 +155,12 @@ export type VrConfig = {
   capture: {
     concurrency: number;
     maxTestTime: number;
+    /** Taille des lots HTTP host → daemon Docker (défaut 20). */
+    remoteChunkSize: number;
+    /** Backend de capture sur l'hôte (défaut docker). */
+    backend: VrCaptureBackend;
+    /** URL du daemon de capture (défaut http://localhost:2810). */
+    daemonUrl: string;
   };
   compare: {
     mode: VrCompareMode;
@@ -160,10 +174,16 @@ export type VrConfig = {
     globalTriggers: string[];
     statsFile: string;
     manifestPath: string;
+    /** Sharding CI (0-based). Préférer VR_SHARD_* en pipeline. */
+    shardIndex?: number;
+    shardTotal?: number;
   };
   launcher: {
     runInitialCompare: boolean;
-    storybookStatic: boolean;
+    /** Mode Storybook explicite ; omis = auto (static en Docker + nextjs-vite). */
+    storybookMode?: VrStorybookMode;
+    /** Force rebuild storybook-static avant capture. */
+    forceStaticRebuild: boolean;
   };
   storybook: {
     url: string;
@@ -176,6 +196,12 @@ export type VrConfig = {
     burstFrames: number;
     burstIntervalMs: number;
     maxStabilizeTime: number;
+  };
+  docker: {
+    /** Image du sidecar vr-capture (override VR_DOCKER_IMAGE). */
+    image: string;
+    /** Image Playwright de base pour builder le sidecar. */
+    playwrightImage: string;
   };
 };
 
@@ -193,6 +219,7 @@ export type VrConfigFile = {
   launcher?: Partial<VrConfig["launcher"]>;
   storybook?: Partial<VrConfig["storybook"]>;
   stabilize?: Partial<VrConfig["stabilize"]>;
+  docker?: Partial<VrConfig["docker"]>;
 };
 
 /** Config viewport Playwright pour un device (script compare). */

@@ -3,6 +3,8 @@
 services:
   vr-capture:
     image: ${VR_DOCKER_IMAGE:-vr-capture:1.61.1}
+    # Image locale uniquement (pas sur Docker Hub) — évite le pull inutile au démarrage.
+    pull_policy: never
     build:
       context: .
       dockerfile: Dockerfile
@@ -19,7 +21,7 @@ services:
       VR_DOCKER: "1"
       VR_PROJECT_ROOT: /work
       VR_CAPTURE_BACKEND: local
-      VR_STORYBOOK_MODE: "${VR_STORYBOOK_MODE:-dev}"
+      VR_STORYBOOK_MODE: "${VR_STORYBOOK_MODE:-}"
     working_dir: /work
 
 volumes:

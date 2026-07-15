@@ -46,6 +46,7 @@ module.exports = {
   capture: {
     concurrency: 15,
     maxTestTime: 10000,
+    remoteChunkSize: 50,
   },
   compare: {
     mode: "incremental",
@@ -59,8 +60,8 @@ module.exports = {
   },
   launcher: {
     runInitialCompare: true,
-    storybookStatic: false,
   },
+  docker: {},
   storybook: {
     url: "http://localhost:6006",
   },
