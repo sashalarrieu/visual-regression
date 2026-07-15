@@ -1,6 +1,12 @@
 # Changelog
 
-Ce projet suit le format [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et respecte le versioning semantique.
+Ce projet suit le format [Keep a Changelog](https://keepachangelog.com/fr/1.1.1/) et respecte le versioning semantique.
+
+## [1.1.1] - 2026-07-15
+
+### Changed
+
+- Authentification via trusted publishing OIDC configuré.
 
 ## [1.1.0] - 2026-07-15
 
