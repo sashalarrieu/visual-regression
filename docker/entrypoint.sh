@@ -33,6 +33,16 @@ if [ -n "$LOCKFILE" ]; then
   NEW_HASH=$(sha1sum "$LOCKFILE" | awk '{print $1}')
 fi
 
+# Invalider le cache si une dépendance file: locale change (ex. visual-regression monté dans Docker).
+if [ -f /visual-regression/package.json ]; then
+  LINKED_HASH=$(sha1sum /visual-regression/package.json | awk '{print $1}')
+  if [ -d /visual-regression/src ]; then
+    SRC_HASH=$(find /visual-regression/src /visual-regression/bin -type f 2>/dev/null | sort | xargs sha1sum 2>/dev/null | sha1sum | awk '{print $1}')
+    LINKED_HASH="${LINKED_HASH}${SRC_HASH}"
+  fi
+  NEW_HASH="${NEW_HASH}${LINKED_HASH}"
+fi
+
 OLD_HASH=""
 if [ -f "$HASH_FILE" ]; then
   OLD_HASH=$(cat "$HASH_FILE" 2>/dev/null || echo "")

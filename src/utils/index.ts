@@ -14,17 +14,27 @@ import type { DeviceDisplayConfig, DeviceStyle, Node, StoryScreenshotsPath, VRDe
 /** Compte les stories Storybook éligibles à la VR (même filtre que compareAllStories). */
 export const fetchStorybookStoryCount = async (serverUrl: string = VR_SERVER_URL): Promise<number> => {
   try {
-    let storybookUrl = STORYBOOK_URL;
-    try {
-      const configRes = await fetch(`${serverUrl}/regressions/config`);
-      if (configRes.ok) {
-        const cfg = (await configRes.json()) as { storybookUrl?: string };
-        if (cfg.storybookUrl) storybookUrl = cfg.storybookUrl;
+    const configRes = await fetch(`${serverUrl}/regressions/config`);
+    if (configRes.ok) {
+      const cfg = (await configRes.json()) as { storyCount?: number; storybookUrl?: string };
+      if (typeof cfg.storyCount === "number" && cfg.storyCount > 0) return cfg.storyCount;
+      if (cfg.storybookUrl) {
+        const res = await fetch(`${cfg.storybookUrl.replace(/\/$/, "")}/index.json`);
+        if (res.ok) {
+          const data = (await res.json()) as { entries?: Record<string, { type?: string; tags?: string[] }> };
+          return Object.entries(data.entries ?? {}).filter(([id, entry]) => {
+            if (entry.type !== "story" || id.endsWith("--docs")) return false;
+            const tags = entry.tags ?? [];
+            return tags.includes(FORCE_VR_TAG) || !tags.includes(IGNORE_VR_TAG);
+          }).length;
+        }
       }
-    } catch {
-      // serveur VR indisponible — fallback constante locale
     }
-    const res = await fetch(`${storybookUrl}/index.json`);
+  } catch {
+    // serveur VR ou Storybook indisponible — fallback constante locale
+  }
+  try {
+    const res = await fetch(`${STORYBOOK_URL}/index.json`);
     if (!res.ok) return 0;
     const data = (await res.json()) as { entries?: Record<string, { type?: string; tags?: string[] }> };
     return Object.entries(data.entries ?? {}).filter(([id, entry]) => {

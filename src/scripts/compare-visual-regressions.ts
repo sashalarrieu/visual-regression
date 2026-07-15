@@ -1,7 +1,6 @@
 // scripts/compare-visual-regressions.ts (package @setshao/visual-regression)
-import { appendFileSync, existsSync, readdirSync, statSync } from "fs";
+import { existsSync, readdirSync, statSync } from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 
 import {
   DIFF_SCREENSHOT_NAME,
@@ -17,10 +16,11 @@ import {
   getProjectPaths,
   getProjectRoot,
   resolveVrConfig,
-  waitForStorybookStories,
+  waitForStorybookHostReady,
 } from "../utils/node";
+import { getCaptureBackend, isDockerCaptureBackend } from "../utils/vr-capture-backend";
 import { filterCaptureTasks, getChangedFiles, shouldWipePublicDir, updateManifest } from "../utils/vr-incremental";
-import { filterTasksByShard } from "../utils/vr-sharding";
+import { filterTasksByShard, parseShardConfig } from "../utils/vr-sharding";
 
 import type { CaptureTask } from "./vr-capture-engine";
 import {
@@ -36,7 +36,6 @@ import {
 export { deleteAllVisualRegressionsFiles, deleteVisualRegressionsFilesForDevice } from "./vr-capture-engine";
 
 const PROJECT_ROOT = getProjectRoot();
-const SCRIPT_DIR_COMPARE = path.dirname(fileURLToPath(import.meta.url));
 const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR } = getProjectPaths(PROJECT_ROOT);
 const getDevices = () => getDevicesConfig(resolveVrConfig(PROJECT_ROOT).devices);
 
@@ -382,61 +381,24 @@ export const compareByType = async (
   return { success: result.success, error: result.error };
 };
 
-const DEBUG_LOG_FILE = "debug-00c06d.log";
-
 const compareVisualRegressions = async () => {
   if (process.stdout.writable) {
     process.stdout.write("\n🔍 [VR] Comparaison en cours…\n");
   }
 
-  const writeDebugLog = (payload: Record<string, unknown>) => {
-    try {
-      const logPath = path.resolve(process.cwd(), DEBUG_LOG_FILE);
-      appendFileSync(logPath, JSON.stringify({ sessionId: "00c06d", ...payload, timestamp: Date.now() }) + "\n");
-    } catch {
-      // ignore
-    }
-  };
-
-  writeDebugLog({
-    location: "compare-visual-regressions.ts:compareVisualRegressions entry",
-    message: "compareVisualRegressions started",
-    data: { PROJECT_ROOT, PUBLIC_SCREENSHOTS_DIR, cwd: process.cwd() },
-    hypothesisId: "entry",
-  });
-
   const config = resolveVrConfig(PROJECT_ROOT);
   const storybookUrl = config.storybook.url;
 
-  const storybookReady = await waitForStorybookStories(1, 30);
-  if (!storybookReady) {
+  const storybookReady = await waitForStorybookHostReady(1, 30, PROJECT_ROOT);
+  if (!storybookReady.ready) {
     console.error(
-      `\n❌ Storybook (${storybookUrl}) n'a aucune story indexée.\n` +
-        "   Relancez Storybook (yarn storybook ou yarn vr) et attendez qu'il soit prêt.\n",
+      `\n❌ Storybook (${storybookUrl}) n'est pas accessible depuis l'hôte.\n` +
+        "   Attendez le forward Docker (port 6006) ou relancez Storybook (pnpm vr / pnpm storybook).\n",
     );
     process.exit(1);
   }
 
-  let stories: StoryIndexEntry[];
-  try {
-    stories = await getAllStories();
-  } catch (getAllStoriesErr) {
-    const errMsg = getAllStoriesErr instanceof Error ? getAllStoriesErr.message : String(getAllStoriesErr);
-    writeDebugLog({
-      location: "compare-visual-regressions.ts:getAllStories",
-      message: "getAllStories failed",
-      data: { error: errMsg },
-      hypothesisId: "H1",
-    });
-    throw getAllStoriesErr;
-  }
-
-  writeDebugLog({
-    location: "compare-visual-regressions.ts:compareVisualRegressions after getAllStories",
-    message: "getAllStories result",
-    data: { storiesCount: stories.length, devicesCount: Object.keys(getDevices()).length, PUBLIC_SCREENSHOTS_DIR },
-    hypothesisId: "H1_H5",
-  });
+  const stories = await getAllStories();
 
   if (stories.length === 0) {
     console.log(`🚫 No stories found`);
@@ -480,7 +442,7 @@ const compareVisualRegressions = async () => {
     changedFiles,
   });
 
-  const { tasks, skipped: shardSkipped } = filterTasksByShard(incrementalTasks);
+  const { tasks, skipped: shardSkipped } = filterTasksByShard(incrementalTasks, parseShardConfig(config));
   const totalSkipped = skipped + shardSkipped;
 
   const wipePublicDir = shouldWipePublicDir(config, { tasks, skipped: totalSkipped, reason });
@@ -505,6 +467,10 @@ const compareVisualRegressions = async () => {
   const concurrency = resolveConcurrency(tasks.length, config);
   logCapturePoolStart(concurrency, tasks.length, batchMode);
 
+  if (isDockerCaptureBackend(config)) {
+    console.log(`🐳 Backend capture: ${getCaptureBackend(config)} (délégation au sidecar Docker)`);
+  }
+
   const result = await runCaptureBatch(tasks, {
     mode: batchMode,
     wipePublicDir,
@@ -514,13 +480,35 @@ const compareVisualRegressions = async () => {
 
   logCaptureTimerEnd(result.stats.durationMs, tasks.length);
 
-  if (result.success) {
-    updateManifest(PROJECT_ROOT, config);
+  if (!result.success || result.error) {
+    console.error(`\n❌ Échec de la capture: ${result.error ?? "erreur inconnue"}`);
+    printLogsSummary(result.logs);
+    process.exit(1);
   }
+
+  if (tasks.length > 0 && result.stats.completed === 0 && result.stats.durationMs < 100) {
+    console.error(
+      `\n❌ Aucune capture n'a été exécutée (${tasks.length} tâche(s) planifiées, durée ${result.stats.durationMs} ms).`,
+    );
+    console.error("   Vérifiez que le daemon Docker tourne (pnpm vr:capture:status) et que Storybook répond.");
+    printLogsSummary(result.logs);
+    process.exit(1);
+  }
+
+  updateManifest(PROJECT_ROOT, config);
 
   printLogsSummary(result.logs);
 
-  if (result.logs.errors.length > 0 || result.logs.vrs.length > 0 || result.logs.news.length > 0) {
+  const nbErrors = result.logs.errors.length;
+  const nbVisualRegressions = result.logs.vrs.length;
+  const nbNewScreenshot = result.logs.news.length;
+
+  if (nbErrors > 0 || nbVisualRegressions > 0) {
+    process.exit(nbVisualRegressions > 0 ? 1 : 0);
+  }
+
+  if (nbNewScreenshot > 0) {
+    console.log(`\n❇️  ${nbNewScreenshot} nouveau(x) screenshot(s) enregistré(s).`);
     process.exit(0);
   }
 
@@ -532,28 +520,11 @@ const isRunAsMain =
   import.meta.main === true ||
   (typeof process.argv[1] === "string" && process.argv[1].includes("compare-visual-regressions"));
 
-try {
-  const entryLogPath = path.join(SCRIPT_DIR_COMPARE, "vr-entry.log");
-  appendFileSync(
-    entryLogPath,
-    JSON.stringify({
-      argv1: process.argv[1],
-      VR_RUN_COMPARE: process.env.VR_RUN_COMPARE,
-      importMetaMain: (import.meta as { main?: boolean }).main,
-      isRunAsMain,
-      PROJECT_ROOT,
-    }) + "\n",
-  );
-} catch (e) {
-  try {
-    appendFileSync(path.join(SCRIPT_DIR_COMPARE, "vr-entry.err"), String(e) + "\n");
-  } catch {
-    // ignore
-  }
-}
-
 if (isRunAsMain) {
-  compareVisualRegressions();
+  compareVisualRegressions().catch(err => {
+    console.error("\n❌ Erreur comparaison:", err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
 }
 
 export { compareVisualRegressions };

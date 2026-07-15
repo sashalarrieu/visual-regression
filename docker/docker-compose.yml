@@ -21,7 +21,7 @@ services:
       VR_DOCKER: "1"
       VR_PROJECT_ROOT: /work
       VR_CAPTURE_BACKEND: local
-      VR_STORYBOOK_MODE: "${VR_STORYBOOK_MODE:-dev}"
+      VR_STORYBOOK_MODE: "${VR_STORYBOOK_MODE:-}"
     working_dir: /work
 
 volumes:

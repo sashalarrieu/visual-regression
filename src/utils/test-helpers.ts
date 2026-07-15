@@ -13,6 +13,9 @@ export const createTestVrConfig = (overrides: Partial<VrConfig> = {}): VrConfig 
   capture: {
     concurrency: 8,
     maxTestTime: 10_000,
+    remoteChunkSize: 20,
+    backend: "docker",
+    daemonUrl: "http://localhost:2810",
   },
   compare: {
     mode: "incremental",
@@ -27,7 +30,7 @@ export const createTestVrConfig = (overrides: Partial<VrConfig> = {}): VrConfig 
   },
   launcher: {
     runInitialCompare: true,
-    storybookStatic: false,
+    forceStaticRebuild: false,
   },
   storybook: {
     url: "http://localhost:6006",
@@ -40,6 +43,10 @@ export const createTestVrConfig = (overrides: Partial<VrConfig> = {}): VrConfig 
     burstFrames: 3,
     burstIntervalMs: 100,
     maxStabilizeTime: 5000,
+  },
+  docker: {
+    image: "vr-capture:1.61.1",
+    playwrightImage: "mcr.microsoft.com/playwright:v1.61.1-jammy",
   },
   ...overrides,
 });
