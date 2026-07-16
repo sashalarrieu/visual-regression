@@ -142,6 +142,7 @@ module.exports = {
   docker: {
     image: "vr-capture:1.61.1",
     playwrightImage: "mcr.microsoft.com/playwright:v1.61.1-jammy",
+    showLogs: false, // true = streamer `docker compose logs -f` dans le terminal
   },
 };
 ```
@@ -245,14 +246,13 @@ Vous pouvez surcharger par story via `parameters.vr.stabilize` dans vos fichiers
 
 #### `docker` — sidecar de capture _(avancé)_
 
-À modifier seulement si vous maintenez votre propre image Docker.
+| Paramètre         | Défaut                                       | En bref                                                                                                                               |
+| ----------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `image`           | `vr-capture:1.61.1`                          | Image du conteneur qui exécute Storybook + Playwright.                                                                                |
+| `playwrightImage` | `mcr.microsoft.com/playwright:v1.61.1-jammy` | Image de base pour **builder** le sidecar localement.                                                                                 |
+| `showLogs`        | `false`                                      | Si `true`, affiche les logs du sidecar (`docker compose logs -f`) dans le terminal hôte — pratique en dev sans ouvrir Docker Desktop. |
 
-| Paramètre         | Défaut                                       | En bref                                                |
-| ----------------- | -------------------------------------------- | ------------------------------------------------------ |
-| `image`           | `vr-capture:1.61.1`                          | Image du conteneur qui exécute Storybook + Playwright. |
-| `playwrightImage` | `mcr.microsoft.com/playwright:v1.61.1-jammy` | Image de base pour **builder** le sidecar localement.  |
-
-**Variable d’env équivalente** : `VR_DOCKER_IMAGE`, `VR_PLAYWRIGHT_IMAGE`.
+**Variable d’env équivalente** : `VR_DOCKER_IMAGE`, `VR_PLAYWRIGHT_IMAGE`, `VR_DOCKER_SHOW_LOGS` (`1` / `true` / `0` / `false`).
 
 ---
 
@@ -474,6 +474,8 @@ Un exemple complet GitHub Actions (cache `node_modules` + `storybook-static`, sh
 | `VR_STORYBOOK_MODE`       | `launcher.storybookMode` → auto  | `dev` (HMR) ou `static` (build + serve, CI)                                                            |
 | `VR_STORYBOOK_STATIC`     | alias → `static`                 | Rétrocompat : équivalent à `VR_STORYBOOK_MODE=static`                                                  |
 | `VR_DOCKER_IMAGE`         | `docker.image`                   | Image du sidecar (tag aligné sur la version Playwright)                                                |
+| `VR_PLAYWRIGHT_IMAGE`     | `docker.playwrightImage`         | Image de base Playwright pour builder le sidecar                                                       |
+| `VR_DOCKER_SHOW_LOGS`     | `docker.showLogs` → `false`      | `1`/`true` = streamer les logs du sidecar dans le terminal hôte                                        |
 | `VR_DOCKER`               | `1` (dans le conteneur)          | Active les flags Chromium déterministes                                                                |
 
 ### Utiliser son propre Docker (image maison)
@@ -499,11 +501,12 @@ L’UI VisualRegressions est entièrement embarquée dans le package.
 
 Le package expose les decorators, types et helpers utilisés par les stories VR :
 
-| Import                                 | Rôle                                                                                 |
-| -------------------------------------- | ------------------------------------------------------------------------------------ |
-| `@setshao/visual-regression/storybook` | Decorators `vrPreviewDecorators` (freeze Reanimated + exécution `play()`)            |
-| `@setshao/visual-regression`           | Tags VR (`LIVE_ANIMATION_VR_TAG`, `SKIP_PLAY_VR_TAG`, …) et type `VrStoryParameters` |
-| `@setshao/visual-regression/play`      | Helpers `play()` DOM pour React Native Web (`clickByLabel`, `expectText`, …)         |
+| Import                                 | Rôle                                                                                                            |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `@setshao/visual-regression`           | Tags VR (`LIVE_ANIMATION_VR_TAG`, `SKIP_PLAY_VR_TAG`, …), type `VrStoryParameters`, helper `defineVrParameters` |
+| `@setshao/visual-regression/types`     | Types seuls (`VrStoryParameters`, …) — idéal pour les `.d.ts` d’augmentation                                    |
+| `@setshao/visual-regression/storybook` | Decorators `vrPreviewDecorators` (freeze Reanimated + exécution `play()`)                                       |
+| `@setshao/visual-regression/play`      | Helpers `play()` DOM pour React Native Web (`clickByLabel`, `expectText`, …)                                    |
 
 `.storybook/preview.tsx` :
 
@@ -519,19 +522,44 @@ const preview: Preview = {
 export default preview;
 ```
 
-`.storybook/vr-parameters.d.ts` (typage `parameters.vr`) :
+`.storybook/vr-parameters.d.ts` (typage `parameters.vr` — adapter le module au framework) :
 
 ```ts
-import type { VrStoryParameters } from "@setshao/visual-regression";
+import type { VrStoryParameters } from "@setshao/visual-regression/types";
 
-declare module "@storybook/react-webpack5" {
+// Stories qui importent Meta depuis @storybook/react :
+declare module "@storybook/react" {
+  interface ReactParameters {
+    vr?: VrStoryParameters;
+  }
+}
+
+// Framework Storybook (ex. nextjs-vite, react-webpack5, react-native-web-vite) :
+declare module "@storybook/nextjs-vite" {
   interface Parameters {
     vr?: VrStoryParameters;
   }
 }
 ```
 
-Un modèle est aussi fourni dans le package : `node_modules/@setshao/visual-regression/src/storybook/vr-parameters.d.ts`.
+Les tags `ignore-vr` / `force-vr` restent le filtre d'éligibilité via `index.json` (performant). `parameters.vr` sert aux overrides SteadySnap / diff verify.
+
+Pour l’autocomplete **et** le rejet des clés inconnues dans les stories, préférez le helper (le typage natif `Parameters` de Storybook est trop permissif) :
+
+```ts
+import { defineVrParameters } from "@setshao/visual-regression";
+
+const meta = {
+  parameters: {
+    vr: defineVrParameters({
+      diffVerificationMaxAttempts: 2,
+      stabilize: { burstCapture: true },
+    }),
+  },
+} satisfies Meta<typeof MyComponent>;
+```
+
+Un modèle d’augmentation `.d.ts` est aussi fourni : `node_modules/@setshao/visual-regression/src/storybook/vr-parameters.d.ts`.
 
 Ajoutez `@setshao/visual-regression` à `modulesToTranspile` de `@storybook/addon-react-native-web` si Storybook ne résout pas le package.
 
@@ -590,6 +618,7 @@ Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du pr
 | `VR_CAPTURE_REMOTE_CHUNK`           | Override de `capture.remoteChunkSize`                                                |
 | `VR_DOCKER_IMAGE`                   | Override de `docker.image`                                                           |
 | `VR_PLAYWRIGHT_IMAGE`               | Override de `docker.playwrightImage`                                                 |
+| `VR_DOCKER_SHOW_LOGS`               | Override de `docker.showLogs` (`1`/`true` ou `0`/`false`)                            |
 
 ### Benchmark performance (concurrency + sharding CI)
 

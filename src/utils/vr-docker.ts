@@ -1,8 +1,9 @@
 /**
- * Gestion du sidecar Docker de capture depuis l'hôte (compose up/down/status).
+ * Gestion du sidecar Docker de capture depuis l'hôte (compose up/down/status/logs).
  * Le conteneur héberge Storybook + le daemon de capture ; l'hôte n'exécute
  * jamais Playwright directement.
  */
+import type { ChildProcess } from "child_process";
 import { spawn, spawnSync } from "child_process";
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
@@ -169,11 +170,20 @@ export const writeComposeLinkedPackagesOverride = (projectRoot: string): string 
   mkdirSync(cacheDir, { recursive: true });
   const overridePath = path.join(cacheDir, "docker-compose.linked-packages.yml");
 
-  const volumeLines = mounts.map(m => `      - "${formatDockerVolumePath(m.host)}:${m.container}"`).join("\n");
+  const volumeLines = mounts
+    .flatMap(m => [
+      `      - "${formatDockerVolumePath(m.host)}:${m.container}"`,
+      // Masque le node_modules de l'hôte (binaires Darwin/Windows) pour forcer
+      // la résolution via le volume Linux /work/node_modules après install Docker.
+      `      - "${m.container}/node_modules"`,
+    ])
+    .join("\n");
 
   writeFileSync(
     overridePath,
-    `# Généré par @setshao/visual-regression — monte les dépendances file: pour install Docker\nservices:\n  vr-capture:\n    volumes:\n${volumeLines}\n`,
+    `# Généré par @setshao/visual-regression — monte les dépendances file: pour install Docker\n` +
+      `# (+ volume anonyme sur */node_modules pour éviter les binaires natifs de l'hôte)\n` +
+      `services:\n  vr-capture:\n    volumes:\n${volumeLines}\n`,
     "utf8",
   );
 
@@ -305,3 +315,38 @@ export const composeDown = (projectRoot: string): Promise<number> => runCompose(
 
 /** Affiche l'état des services compose. */
 export const composeStatus = (projectRoot: string): Promise<number> => runCompose(projectRoot, ["ps"]);
+
+/**
+ * Suit les logs du sidecar dans le terminal hôte (`docker compose logs -f`).
+ * À utiliser quand `docker.showLogs` / `VR_DOCKER_SHOW_LOGS` est activé.
+ */
+export const followComposeLogs = (projectRoot: string, options?: { tail?: number }): ChildProcess => {
+  const tail = options?.tail ?? 100;
+  return spawn("docker", composeArgs(projectRoot, ["logs", "-f", "--tail", String(tail)]), {
+    stdio: "inherit",
+    cwd: getComposeDirectory(),
+    env: composeEnv(projectRoot),
+  });
+};
+
+/** Arrête le processus de suivi des logs (sans toucher au conteneur). */
+export const stopComposeLogs = (proc: ChildProcess | null | undefined): void => {
+  if (!proc || proc.killed) return;
+  try {
+    proc.kill("SIGTERM");
+  } catch {
+    // ignore
+  }
+};
+
+/** Dump one-shot des dernières lignes de logs (diagnostic si le daemon ne démarre pas). */
+export const dumpComposeLogs = (projectRoot: string, tail = 80): void => {
+  spawnSync("docker", composeArgs(projectRoot, ["logs", "--tail", String(tail)]), {
+    stdio: "inherit",
+    cwd: getComposeDirectory(),
+    env: composeEnv(projectRoot),
+  });
+};
+
+/** `compose down -v` — retire aussi le volume node_modules Linux (réinstall propre). */
+export const composeDownVolumes = (projectRoot: string): Promise<number> => runCompose(projectRoot, ["down", "-v"]);

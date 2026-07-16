@@ -61,7 +61,9 @@ module.exports = {
   launcher: {
     runInitialCompare: true,
   },
-  docker: {},
+  docker: {
+    showLogs: true,
+  },
   storybook: {
     url: "http://localhost:6006",
   },

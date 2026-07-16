@@ -19,6 +19,7 @@ export {
 } from "../utils/vr-story-play";
 
 export type { VrStoryParameters } from "../types/types";
+export { defineVrParameters } from "../types/types";
 
 export {
   clickByLabel,

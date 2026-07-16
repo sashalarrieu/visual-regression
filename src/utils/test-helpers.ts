@@ -47,6 +47,7 @@ export const createTestVrConfig = (overrides: Partial<VrConfig> = {}): VrConfig 
   docker: {
     image: "vr-capture:1.61.1",
     playwrightImage: "mcr.microsoft.com/playwright:v1.61.1-jammy",
+    showLogs: false,
   },
   ...overrides,
 });

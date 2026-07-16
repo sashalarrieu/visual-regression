@@ -202,6 +202,11 @@ export type VrConfig = {
     image: string;
     /** Image Playwright de base pour builder le sidecar. */
     playwrightImage: string;
+    /**
+     * Affiche les logs du sidecar (`docker compose logs -f`) dans le terminal hôte.
+     * Utile en dev pour suivre Storybook / install / capture sans ouvrir Docker Desktop.
+     */
+    showLogs: boolean;
   };
 };
 
@@ -210,6 +215,15 @@ export type VrStoryParameters = {
   stabilize?: Partial<VrConfig["stabilize"]>;
   diffVerificationMaxAttempts?: number;
 };
+
+/**
+ * Helper CSF pour typer `parameters.vr` strictement (autocomplete + rejet des clés inconnues).
+ * Contourne le typage lâche de `Parameters` Storybook (`[key: string]: any`).
+ *
+ * @example
+ * parameters: { vr: defineVrParameters({ diffVerificationMaxAttempts: 2 }) }
+ */
+export const defineVrParameters = (vr: VrStoryParameters): VrStoryParameters => vr;
 
 /** Sections optionnelles de vr.config.cjs (fichier brut). */
 export type VrConfigFile = {

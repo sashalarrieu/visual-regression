@@ -10,6 +10,10 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./types": {
+      "types": "./src/types/types.ts",
+      "default": "./src/types/types.ts"
+    },
     "./storybook": {
       "types": "./src/storybook/index.ts",
       "default": "./src/storybook/index.ts"

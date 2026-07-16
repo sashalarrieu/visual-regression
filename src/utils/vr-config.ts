@@ -139,6 +139,7 @@ export const getDefaultVrConfig = (): VrConfig => ({
   docker: {
     image: DEFAULT_DOCKER_IMAGE,
     playwrightImage: DEFAULT_PLAYWRIGHT_IMAGE,
+    showLogs: false,
   },
 });
 
@@ -206,6 +207,7 @@ export const applyEnvOverridesToVrConfig = (config: VrConfig): VrConfig => {
   const envShardTotal = parseEnvShardTotal();
   const envDockerImage = process.env.VR_DOCKER_IMAGE?.trim();
   const envPlaywrightImage = process.env.VR_PLAYWRIGHT_IMAGE?.trim();
+  const envDockerShowLogs = envBool(process.env.VR_DOCKER_SHOW_LOGS);
 
   const storybookMode =
     envStorybookMode ??
@@ -245,6 +247,7 @@ export const applyEnvOverridesToVrConfig = (config: VrConfig): VrConfig => {
       ...config.docker,
       ...(envDockerImage ? { image: envDockerImage } : {}),
       ...(envPlaywrightImage ? { playwrightImage: envPlaywrightImage } : {}),
+      ...(envDockerShowLogs !== undefined ? { showLogs: envDockerShowLogs } : {}),
     },
   };
 };

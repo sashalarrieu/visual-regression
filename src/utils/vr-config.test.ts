@@ -50,4 +50,12 @@ describe("vr.config resolution", () => {
     process.env.VR_CAPTURE_BACKEND = "docker";
     expect(applyEnvOverridesToVrConfig(base).capture.backend).toBe("docker");
   });
+
+  it("defaults docker.showLogs to false and accepts file + env override", () => {
+    expect(getDefaultVrConfig().docker.showLogs).toBe(false);
+    const fromFile = mergeVrConfigFile({ devices: [device], docker: { showLogs: true } });
+    expect(fromFile.docker.showLogs).toBe(true);
+    process.env.VR_DOCKER_SHOW_LOGS = "0";
+    expect(applyEnvOverridesToVrConfig(fromFile).docker.showLogs).toBe(false);
+  });
 });
