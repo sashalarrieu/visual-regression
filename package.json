@@ -102,7 +102,7 @@
     "vr:capture:up": "node bin/visual-regression.mjs capture-up",
     "vr:capture:down": "node bin/visual-regression.mjs capture-down",
     "vr:capture:status": "node bin/visual-regression.mjs capture-status",
-    "vr:kill-ports": "npx kill-port 2804 2805 2810",
+    "vr:kill-ports": "node bin/visual-regression.mjs kill-ports",
     "typecheck": "tsc --noEmit",
     "test": "vitest",
     "test:ci": "vitest run",
@@ -128,8 +128,9 @@
     "react": ">=18.0.0",
     "react-native": "*",
     "react-native-gesture-handler": "*",
-    "react-native-reanimated": "*",
-    "react-native-svg": "*"
+    "react-native-reanimated": ">=4.1.0",
+    "react-native-svg": "*",
+    "react-native-worklets": ">=0.5.0"
   },
   "devDependencies": {
     "@babel/core": "^7.26.0",
@@ -171,7 +172,6 @@
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-gesture-handler": "~2.28.0",
-    "react-native-reanimated": "~4.1.1",
     "react-native-svg": "15.12.1",
     "react-refresh": "^0.14.2",
     "storybook": "10.4.6",
@@ -190,7 +190,9 @@
     "react-dom": "19.1.0",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-web": "^0.21.0",
-    "react-native-worklets": "0.5.1",
+    "react-native-reanimated": "~4.5.1",
+    "react-native-worklets": "~0.10.1",
+    "semver": "^7.7.3",
     "tsx": "^4.23.0"
   }
 }

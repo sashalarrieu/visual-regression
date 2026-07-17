@@ -9,8 +9,11 @@ import { createHash } from "crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
 
+import { CAPTURE_DAEMON_PORT, STORYBOOK_PORT } from "../constants/constants";
+
 import { getScriptDir } from "./node";
 import { resolveVrConfig, VR_CONFIG_FILENAME } from "./vr-config";
+import { getComposeProjectNameForRoot, getHostSidecarPorts, parseUrlPort } from "./vr-sidecar-ports";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
 /** Racine du package (src/utils → ../..). */
@@ -18,6 +21,26 @@ const PACKAGE_ROOT = path.join(SCRIPT_DIR, "..", "..");
 
 const PLAYWRIGHT_PULL_MAX_ATTEMPTS = 5;
 const DOCKER_WORK_DIR = "/work";
+
+/**
+ * Convertit un chemin hôte (absolu ou relatif au projet) en chemin conteneur sous `/work`.
+ * Sans ça, SBCONFIG_CONFIG_DIR absolu macOS/Windows est introuvable dans le sidecar.
+ */
+export const toDockerProjectPath = (projectRoot: string, hostPath: string): string => {
+  const raw = hostPath.trim();
+  if (!raw) return "";
+  if (raw === DOCKER_WORK_DIR || raw.startsWith(`${DOCKER_WORK_DIR}/`)) return raw;
+
+  const root = path.resolve(projectRoot);
+  const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(root, raw);
+  const rel = path.relative(root, resolved);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    // Hors du projet monté — laisser tel quel (échouera clairement si invalide)
+    return raw.split(path.sep).join("/");
+  }
+  const posixRel = rel.split(path.sep).join("/");
+  return posixRel ? `${DOCKER_WORK_DIR}/${posixRel}` : DOCKER_WORK_DIR;
+};
 
 export type DockerVolumeMount = { host: string; container: string };
 
@@ -27,8 +50,14 @@ export const getComposeFile = (): string => path.join(PACKAGE_ROOT, "docker", "d
 /** Répertoire du compose file (utilisé comme cwd et pour le nom de projet). */
 export const getComposeDirectory = (): string => path.dirname(getComposeFile());
 
-/** Nom de projet Docker Compose (dossier parent du compose file, ex. "docker"). */
-export const getComposeProjectName = (): string => path.basename(getComposeDirectory());
+/**
+ * Nom de projet Docker Compose unique par racine hôte.
+ * Évite de réutiliser le sidecar / volume node_modules d'un autre repo.
+ */
+export const getComposeProjectName = (projectRoot: string): string => getComposeProjectNameForRoot(projectRoot);
+
+/** Nom legacy (avant fingerprint par projet) — pour `compose down` de sidecars orphelins. */
+export const LEGACY_COMPOSE_PROJECT_NAME = "docker";
 
 /** Image Docker par défaut (override VR_DOCKER_IMAGE). */
 export const getDockerImage = (): string => process.env.VR_DOCKER_IMAGE || "vr-capture:1.61.1";
@@ -179,11 +208,15 @@ export const writeComposeLinkedPackagesOverride = (projectRoot: string): string 
     ])
     .join("\n");
 
+  const vrMount = mounts.find(m => existsSync(path.join(m.host, "bin", "visual-regression.mjs")));
+  const entrypointLine = vrMount ? `    entrypoint: ["/bin/sh", "${vrMount.container}/docker/entrypoint.sh"]\n` : "";
+
   writeFileSync(
     overridePath,
     `# Généré par @setshao/visual-regression — monte les dépendances file: pour install Docker\n` +
       `# (+ volume anonyme sur */node_modules pour éviter les binaires natifs de l'hôte)\n` +
-      `services:\n  vr-capture:\n    volumes:\n${volumeLines}\n`,
+      (vrMount ? `# Entrypoint monté : code lib live (évite copie figée dans le volume node_modules).\n` : "") +
+      `services:\n  vr-capture:\n${entrypointLine}    volumes:\n${volumeLines}\n`,
     "utf8",
   );
 
@@ -200,18 +233,41 @@ export const getComposeFiles = (projectRoot: string): string[] => {
   return files;
 };
 
-const composeEnv = (projectRoot: string): NodeJS.ProcessEnv => ({
-  ...process.env,
-  VR_PROJECT_ROOT: projectRoot,
-  VR_STORYBOOK_MODE: process.env.VR_STORYBOOK_MODE || "",
-  VR_DOCKER_IMAGE: getDockerImage(),
-  COMPOSE_PROJECT_NAME: getComposeProjectName(),
-});
+/** Ports hôte Publish (overrides config/env inclus via resolveVrConfig). */
+const getComposeHostPorts = (projectRoot: string): { storybookPort: number; daemonPort: number } => {
+  try {
+    const config = resolveVrConfig(projectRoot);
+    return {
+      storybookPort: parseUrlPort(config.storybook.url, STORYBOOK_PORT),
+      daemonPort: parseUrlPort(config.capture.daemonUrl, CAPTURE_DAEMON_PORT),
+    };
+  } catch {
+    const derived = getHostSidecarPorts(projectRoot);
+    return { storybookPort: derived.storybookPort, daemonPort: derived.daemonPort };
+  }
+};
+
+const composeEnv = (projectRoot: string): NodeJS.ProcessEnv => {
+  const composeProjectName = getComposeProjectName(projectRoot);
+  const hostPorts = getComposeHostPorts(projectRoot);
+  return {
+    ...process.env,
+    VR_PROJECT_ROOT: projectRoot,
+    VR_HOST_PROJECT_ROOT: projectRoot,
+    VR_COMPOSE_PROJECT_NAME: composeProjectName,
+    VR_HOST_STORYBOOK_PORT: String(hostPorts.storybookPort),
+    VR_HOST_DAEMON_PORT: String(hostPorts.daemonPort),
+    VR_STORYBOOK_MODE: process.env.VR_STORYBOOK_MODE || "",
+    SBCONFIG_CONFIG_DIR: toDockerProjectPath(projectRoot, process.env.SBCONFIG_CONFIG_DIR || ""),
+    VR_DOCKER_IMAGE: getDockerImage(),
+    COMPOSE_PROJECT_NAME: composeProjectName,
+  };
+};
 
 const composeArgs = (projectRoot: string, args: string[]): string[] => [
   "compose",
   "-p",
-  getComposeProjectName(),
+  getComposeProjectName(projectRoot),
   ...getComposeFiles(projectRoot).flatMap(file => ["-f", file]),
   ...args,
 ];
@@ -233,6 +289,21 @@ export const composeDownSync = (projectRoot: string): number => {
     stdio: "inherit",
     cwd: getComposeDirectory(),
     env: composeEnv(projectRoot),
+  });
+  return res.status ?? 1;
+};
+
+/**
+ * Arrête un stack Compose par nom de projet (sidecar d'un autre repo, ou nom legacy).
+ * N'utilise que le compose de base (pas les overrides file: du projet courant).
+ */
+export const composeDownByName = (composeProjectName: string): number => {
+  const name = composeProjectName.trim();
+  if (!name) return 1;
+  const res = spawnSync("docker", ["compose", "-p", name, "-f", getComposeFile(), "down"], {
+    stdio: "inherit",
+    cwd: getComposeDirectory(),
+    env: { ...process.env, COMPOSE_PROJECT_NAME: name },
   });
   return res.status ?? 1;
 };

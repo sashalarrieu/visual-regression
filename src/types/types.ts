@@ -130,7 +130,10 @@ export type VrPublicConfig = {
   compareMode: VrCompareMode;
   compareScope: VrChangedFilesScope;
   compareBase: string;
+  /** `capture.concurrency` (static / CI). */
   captureConcurrency: number;
+  /** `capture.concurrencyDev` (Storybook dev). */
+  captureConcurrencyDev: number;
   captureMaxTestTime: number;
   captureRemoteChunkSize: number;
   captureBackend: VrCaptureBackend;
@@ -153,7 +156,16 @@ export type VrStorybookMode = "dev" | "static";
 export type VrConfig = {
   devices: VRDeviceConfigItem[];
   capture: {
+    /**
+     * Workers en Storybook **static** (local ou CI).
+     * Override CI / ponctuel : `VR_CONCURRENCY`.
+     */
     concurrency: number;
+    /**
+     * Workers en Storybook **dev** (Vite/HMR). Plus bas pour ne pas saturer le serveur.
+     * Override : `VR_CONCURRENCY_DEV` (alias `VR_CAPTURE_DEV_CONCURRENCY`).
+     */
+    concurrencyDev: number;
     maxTestTime: number;
     /** Taille des lots HTTP host → daemon Docker (défaut 20). */
     remoteChunkSize: number;
@@ -187,6 +199,12 @@ export type VrConfig = {
   };
   storybook: {
     url: string;
+    /**
+     * Dossier `.storybook` (relatif à la racine projet ou absolu).
+     * Monorepos : ex. `apps/storybook/.storybook`.
+     * Appliqué comme `SBCONFIG_CONFIG_DIR` si l'env n'est pas déjà définie.
+     */
+    configDir?: string;
   };
   stabilize: {
     freezeAnimations: boolean;

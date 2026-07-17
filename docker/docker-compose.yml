@@ -15,13 +15,18 @@ services:
       # node_modules Linux dédié : évite les binaires natifs Mac/Windows incompatibles.
       - vr_node_modules:/work/node_modules
     ports:
-      - "6006:6006" # Storybook (preview manuelle)
-      - "2810:2810" # Daemon de capture
+      - "${VR_HOST_STORYBOOK_PORT:-6006}:6006" # Storybook (port hôte dérivé du projet)
+      - "${VR_HOST_DAEMON_PORT:-2810}:2810" # Daemon de capture (port hôte dérivé du projet)
     environment:
       VR_DOCKER: "1"
       VR_PROJECT_ROOT: /work
+      # Chemin absolu hôte (réutilisation sidecar : doit matcher le projet qui lance `vr`).
+      VR_HOST_PROJECT_ROOT: "${VR_HOST_PROJECT_ROOT:-}"
+      VR_COMPOSE_PROJECT_NAME: "${VR_COMPOSE_PROJECT_NAME:-}"
       VR_CAPTURE_BACKEND: local
       VR_STORYBOOK_MODE: "${VR_STORYBOOK_MODE:-}"
+      # Transmis depuis l'hôte (ex. monorepo : apps/storybook/.storybook).
+      SBCONFIG_CONFIG_DIR: "${SBCONFIG_CONFIG_DIR:-}"
     working_dir: /work
 
 volumes:

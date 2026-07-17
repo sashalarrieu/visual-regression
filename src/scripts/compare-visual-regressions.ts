@@ -29,7 +29,7 @@ import {
   logCapturePoolStart,
   logCaptureTasks,
   logCaptureTimerEnd,
-  resolveConcurrency,
+  resolveConcurrencyDetails,
   runCaptureBatch,
 } from "./vr-capture-engine";
 
@@ -464,8 +464,8 @@ const compareVisualRegressions = async () => {
   }
 
   const batchMode = compareMode === "full" || reason === "global-trigger" ? "full" : "incremental";
-  const concurrency = resolveConcurrency(tasks.length, config);
-  logCapturePoolStart(concurrency, tasks.length, batchMode);
+  const concurrencyDetails = resolveConcurrencyDetails(tasks.length, config);
+  logCapturePoolStart(concurrencyDetails, tasks.length, batchMode);
 
   if (isDockerCaptureBackend(config)) {
     console.log(`🐳 Backend capture: ${getCaptureBackend(config)} (délégation au sidecar Docker)`);
@@ -474,7 +474,7 @@ const compareVisualRegressions = async () => {
   const result = await runCaptureBatch(tasks, {
     mode: batchMode,
     wipePublicDir,
-    concurrency,
+    concurrency: concurrencyDetails.workers,
     quietBatchLogs: true,
   });
 

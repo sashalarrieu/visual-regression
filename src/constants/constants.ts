@@ -6,7 +6,8 @@
  * voir vr.config.cjs + resolveVrConfig() dans src/utils/vr-config.ts.
  *
  * Overrides env (scripts Node) — chaque clé a un équivalent vr.config.cjs (sauf VR_DOCKER, VR_PROJECT_ROOT) :
- *   VR_CONCURRENCY, VR_MAX_TEST_TIME, VR_CAPTURE_REMOTE_CHUNK,
+ *   VR_CONCURRENCY (static/CI), VR_CONCURRENCY_DEV (Storybook dev ; alias VR_CAPTURE_DEV_CONCURRENCY),
+ *   VR_MAX_TEST_TIME, VR_CAPTURE_REMOTE_CHUNK,
  *   VR_CAPTURE_BACKEND, VR_CAPTURE_DAEMON_URL,
  *   VR_COMPARE_MODE, VR_COMPARE_BASE, VR_COMPARE_SCOPE, VR_THRESHOLD,
  *   VR_RUN_INITIAL_COMPARE, VR_STORYBOOK_URL, VR_STORYBOOK_MODE,

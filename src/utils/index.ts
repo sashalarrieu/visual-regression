@@ -75,13 +75,15 @@ export type VisualRegressionActionHandlers = {
   onAfterDelete: () => void;
   /** Appelé après une restauration depuis l'historique des refusés. */
   onAfterRestore?: (fullPath: string) => void;
+  /** Appelé après une action globale (tout valider / tout refuser). */
+  onAfterBulk?: () => void;
 };
 
 export const createVisualRegressionActions = (
   handlers: VisualRegressionActionHandlers,
   serverUrl: string = VR_SERVER_URL,
 ) => {
-  const { onNext, onAfterDelete, onAfterRestore } = handlers;
+  const { onNext, onAfterDelete, onAfterRestore, onAfterBulk } = handlers;
   const handleValid = async (storyScreenshotsPath?: StoryScreenshotsPath) => {
     if (!storyScreenshotsPath) return;
     try {
@@ -145,6 +147,42 @@ export const createVisualRegressionActions = (
       onAfterDelete();
     } catch (err) {
       console.error("❌ Delete error:", err);
+    }
+  };
+
+  const handleValidAll = async () => {
+    try {
+      const res = await fetch(`${serverUrl}/validate/all`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        console.error("❌ Validation globale échouée :", result.error);
+        return;
+      }
+      console.log(`✅ Validation globale : ${result.validated}/${result.total}`);
+      onAfterBulk?.();
+    } catch (err) {
+      console.error("Erreur de communication avec le serveur VR:", err);
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    try {
+      const res = await fetch(`${serverUrl}/delete/all`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        console.error("❌ Refus global échoué :", result.error);
+        return;
+      }
+      console.log(`🗃️  Refus global : ${result.deleted}/${result.total}`);
+      onAfterBulk?.();
+    } catch (err) {
+      console.error("❌ Delete all error:", err);
     }
   };
 
@@ -226,12 +264,14 @@ export const createVisualRegressionActions = (
 
   return {
     handleValid,
+    handleValidAll,
     handleCompare,
     handleCompareStory,
     handleCompareSelected,
     handleCompareByType,
     handleCompareAllStories,
     handleDelete,
+    handleDeleteAll,
     handleRestore,
   };
 };

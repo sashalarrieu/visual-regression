@@ -12,6 +12,7 @@ export const createTestVrConfig = (overrides: Partial<VrConfig> = {}): VrConfig 
   ],
   capture: {
     concurrency: 8,
+    concurrencyDev: 2,
     maxTestTime: 10_000,
     remoteChunkSize: 20,
     backend: "docker",
