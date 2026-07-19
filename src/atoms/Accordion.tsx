@@ -27,7 +27,7 @@ export const Accordion: React.FC<AccordionProps> = ({ label, tags, defaultOpened
           style={{ marginRight: 4 }}
         />
         <Typo variant="paragraphe_semiBold">{label.text}</Typo>
-        {tags && <View style={{ flexDirection: "row", marginLeft: 8, gap: 4 }}>{tags}</View>}
+        {tags && <View style={{ flexDirection: "row", marginLeft: 8, gap: 8 }}>{tags}</View>}
       </TouchableOpacity>
       {opened && <Box style={style}>{children}</Box>}
     </View>

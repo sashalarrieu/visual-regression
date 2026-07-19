@@ -324,28 +324,8 @@ export const resolveConcurrency = (taskCount: number, config: VrConfig): number 
 const getStoryGotoWaitUntil = (): "commit" | "domcontentloaded" | "load" =>
   getStorybookMode() === "static" ? "load" : "commit";
 
-/** Budget temps capture/stabilisation (Storybook dev + Vite peut être lent au 1er chargement). */
-export const getCaptureTimeBudget = (config: VrConfig): number => {
-  if (getStorybookMode() !== "dev") return config.capture.maxTestTime;
-  const envMs = Number(process.env.VR_CAPTURE_DEV_TIMEOUT_MS);
-  if (Number.isFinite(envMs) && envMs > 0) return envMs;
-  return Math.max(config.capture.maxTestTime, 60_000);
-};
-
-/** Timeout Playwright pour page.goto (dev Storybook + Vite peut dépasser maxTestTime). */
-const getStoryGotoTimeout = (config: VrConfig): number => getCaptureTimeBudget(config);
-
-const withCaptureTimeBudget = (config: VrConfig): VrConfig => {
-  const budget = getCaptureTimeBudget(config);
-  return {
-    ...config,
-    capture: { ...config.capture, maxTestTime: budget },
-    stabilize: {
-      ...config.stabilize,
-      maxStabilizeTime: Math.max(config.stabilize.maxStabilizeTime, budget),
-    },
-  };
-};
+/** Timeout Playwright pour `page.goto` — source de vérité : `capture.maxTestTime` (vr.config / env). */
+const getStoryGotoTimeout = (config: VrConfig): number => config.capture.maxTestTime;
 
 const formatDurationMs = (ms: number): string => {
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -367,10 +347,7 @@ export const logCapturePoolStart = (
     return;
   }
   const { workers, profile, concurrency, concurrencyDev } = concurrencyOrDetails;
-  const profileHint =
-    profile === "dev"
-      ? `profil=dev · concurrencyDev=${concurrencyDev} · concurrency(static/CI)=${concurrency}`
-      : `profil=static/CI · concurrency=${concurrency} · concurrencyDev=${concurrencyDev}`;
+  const profileHint = profile === "dev" ? `concurrencyDev=${concurrencyDev}` : `concurrency(static/CI)=${concurrency}`;
   console.log(`\n⚡️ Pool de capture : ${workers} worker(s) [${profileHint}] | ${taskCount} tâche(s) | mode ${mode}`);
 };
 
@@ -752,7 +729,6 @@ const runSingleTask = async ({
   storiesWithDiff: string[];
   clearScreenshotsBeforeCapture: boolean;
 }): Promise<void> => {
-  const captureConfig = withCaptureTimeBudget(config);
   const deviceConfig = devices[task.deviceName];
   if (!deviceConfig) {
     addLogs({ log: `⚠️  Device ${task.deviceName} not found, skipping ${task.storyId}`, logs });
@@ -764,30 +740,24 @@ const runSingleTask = async ({
   }
 
   const paths = buildScreenshotPaths(task.componentDir, task.deviceName, task.storyId);
-  const iframeUrl = getStoryIframeUrl(captureConfig.storybook.url, task.storyId);
-  const context = await getOrCreateContext(
-    browser,
-    task.deviceName,
-    deviceConfig,
-    contextCache,
-    captureConfig.storybook.url,
-  );
+  const iframeUrl = getStoryIframeUrl(config.storybook.url, task.storyId);
+  const context = await getOrCreateContext(browser, task.deviceName, deviceConfig, contextCache, config.storybook.url);
   const page = await context.newPage();
   const networkTracker = new NetworkQuietTracker();
-  const storyTags = await getStoryTags(task.storyId, captureConfig.storybook.url);
+  const storyTags = await getStoryTags(task.storyId, config.storybook.url);
   const screenshotKey = `${task.deviceName}-${task.storyId}`;
 
   try {
     networkTracker.attach(page);
     await page.goto(iframeUrl, {
       waitUntil: getStoryGotoWaitUntil(),
-      timeout: getStoryGotoTimeout(captureConfig),
+      timeout: getStoryGotoTimeout(config),
     });
 
     const storyVr = await readStoryVrParameters(page, task.storyId);
-    const effectiveConfig = withCaptureTimeBudget(resolveEffectiveVrConfig(captureConfig, storyVr));
+    const effectiveConfig = resolveEffectiveVrConfig(config, storyVr);
     const useBurst = shouldUseBurstCapture(effectiveConfig, storyTags, storyVr);
-    const maxDiffAttempts = getStoryDiffVerificationMaxAttempts(captureConfig, storyVr);
+    const maxDiffAttempts = getStoryDiffVerificationMaxAttempts(config, storyVr);
 
     let attempt = 1;
     let compareResult: CompareScreenshotResult = { outcome: "missing_temp", diffPixels: 0 };
@@ -798,7 +768,7 @@ const runSingleTask = async ({
         storyId: task.storyId,
         deviceName: task.deviceName,
         tempScreenshotPath: paths.tempScreenshotPath,
-        storybookUrl: captureConfig.storybook.url,
+        storybookUrl: config.storybook.url,
         config: effectiveConfig,
         logs,
         useBurst,

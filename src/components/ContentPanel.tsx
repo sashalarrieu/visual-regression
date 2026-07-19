@@ -2,6 +2,7 @@ import React from "react";
 import { ActivityIndicator, Image } from "react-native";
 
 import { Box } from "../atoms/Box";
+import { Button } from "../atoms/Button";
 import { Typo } from "../atoms/Typo";
 import { useDeviceConfig } from "../providers/DeviceConfigProvider";
 import { colors } from "../themes/theme";
@@ -11,9 +12,13 @@ import { AnimatedLoader } from "./AnimatedLoader";
 import { DraggableImageCompare } from "./DraggableImageCompare";
 import { ScreenshotDetails } from "./ScreenshotDetails";
 
+export type ContentPanelMode = "new" | "diff" | "baseline" | "missing";
+
 export type ContentPanelProps = {
   tree: unknown;
   treeType: "new" | "diff";
+  /** Mode d'affichage explicite (catalogue baseline/missing). */
+  panelMode?: ContentPanelMode;
   showHeatmap: boolean;
   imageUrls: StoryScreenshotsPath;
   isRegenerating?: boolean;
@@ -23,11 +28,16 @@ export type ContentPanelProps = {
   contentKey?: string;
   /** Si le chargement de l'arbre a échoué (ex. serveur VR injoignable). */
   fetchError?: string | null;
+  /** Chargement en cours (catalogue / régressions). */
+  loading?: boolean;
+  ignored?: boolean;
+  onGenerate?: () => void;
 };
 
 export const ContentPanel: React.FC<ContentPanelProps> = ({
   tree,
   treeType,
+  panelMode,
   showHeatmap,
   imageUrls,
   isRegenerating = false,
@@ -35,8 +45,13 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
   deviceName,
   contentKey,
   fetchError = null,
+  loading = false,
+  ignored = false,
+  onGenerate,
 }) => {
   const { getDeviceStyle } = useDeviceConfig();
+  const mode: ContentPanelMode = panelMode ?? treeType;
+  const isCatalogMode = mode === "baseline" || mode === "missing";
 
   if (!tree) {
     return (
@@ -52,13 +67,13 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
         borderColor="newTheme_border"
         p="l"
       >
-        {fetchError ? (
+        {fetchError && !loading ? (
           <>
             <Typo
               variant="h2_semiBold"
               color="newTheme_textOnSurface"
             >
-              Impossible de charger l'arbre des régressions
+              Impossible de charger l'arbre
             </Typo>
             <Typo
               variant="paragraphe_regular"
@@ -73,6 +88,42 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
               textAlign="center"
             >
               Vérifie que le serveur VR tourne (yarn vr:server ou yarn vr) sur le port 2805.
+            </Typo>
+          </>
+        ) : loading ? (
+          <>
+            <AnimatedLoader />
+            <Typo
+              variant="h2_semiBold"
+              color="newTheme_textOnSurface"
+            >
+              {isCatalogMode ? "Chargement du catalogue Storybook…" : "Chargement…"}
+            </Typo>
+            <Typo
+              variant="paragraphe_regular"
+              color="newTheme_textOnSurface"
+              textAlign="center"
+            >
+              {isCatalogMode
+                ? "L'index Storybook peut arriver après l'ouverture de l'UI — nouvelle tentative automatique."
+                : "Récupération de l'arbre des régressions…"}
+            </Typo>
+          </>
+        ) : isCatalogMode ? (
+          <>
+            <AnimatedLoader />
+            <Typo
+              variant="h2_semiBold"
+              color="newTheme_textOnSurface"
+            >
+              Aucune story à afficher
+            </Typo>
+            <Typo
+              variant="paragraphe_regular"
+              color="newTheme_textOnSurface"
+              textAlign="center"
+            >
+              Storybook n'a indexé aucune story éligible. Vérifie Storybook puis utilise le bouton Rafraîchir.
             </Typo>
           </>
         ) : (
@@ -134,8 +185,107 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
     );
   }
 
-  const hasNewImage = treeType === "new" && imageUrls.new;
-  const hasDiffImage = treeType === "diff" && (showHeatmap ? imageUrls.diff : imageUrls.original || imageUrls.temp);
+  if (mode === "missing") {
+    return (
+      <Box
+        flex={1}
+        minHeight={280}
+        alignItems="center"
+        justifyContent="center"
+        gap="m"
+        backgroundColor="newTheme_neutral"
+        borderRadius="base"
+        borderWidth={1}
+        borderColor="newTheme_border"
+        p="l"
+      >
+        {ignored ? (
+          <>
+            <Box pb="l">
+              <ScreenshotDetails
+                deviceName={deviceName}
+                storyId={storyId}
+                bold
+              />
+            </Box>
+            <Typo
+              variant="h2_semiBold"
+              color="newTheme_textOnSurface"
+            >
+              Story ignorée (ignore-vr)
+            </Typo>
+            <Typo
+              variant="paragraphe_regular"
+              color="newTheme_textOnSurface"
+              textAlign="center"
+            >
+              Cette story est taguée ignore-vr : la génération de capture est désactivée.
+            </Typo>
+          </>
+        ) : (
+          <>
+            <Box pb="l">
+              <ScreenshotDetails
+                deviceName={deviceName}
+                storyId={storyId}
+                bold
+              />
+            </Box>
+            <Typo
+              variant="h2_semiBold"
+              color="newTheme_textOnSurface"
+            >
+              Aucun screenshot pour cette story
+            </Typo>
+            <Typo
+              variant="paragraphe_regular"
+              color="newTheme_textOnSurface"
+              textAlign="center"
+            >
+              Génère une capture pour créer la baseline sur ce device.
+            </Typo>
+            <Button
+              label="Générer une capture"
+              leftIcon={{ name: "add", fill: "newTheme_textOnPrimary" }}
+              color="primary"
+              onPress={() => onGenerate?.()}
+              disabled={!onGenerate}
+            />
+          </>
+        )}
+      </Box>
+    );
+  }
+
+  if (mode === "baseline" && imageUrls.original) {
+    return (
+      <Box
+        key={contentKey}
+        flex={1}
+        gap="s"
+        backgroundColor="newTheme_neutral"
+        borderRadius="base"
+        borderWidth={1}
+        borderColor="newTheme_border"
+        style={{ padding: 2 }}
+      >
+        <Box
+          flex={1}
+          alignItems="center"
+          justifyContent="center"
+        >
+          <Image
+            key={imageUrls.original}
+            source={{ uri: imageUrls.original }}
+            style={{ width: "100%", height: "100%", resizeMode: "contain" }}
+          />
+        </Box>
+      </Box>
+    );
+  }
+
+  const hasNewImage = mode === "new" && imageUrls.new;
+  const hasDiffImage = mode === "diff" && (showHeatmap ? imageUrls.diff : imageUrls.original || imageUrls.temp);
 
   if (!hasNewImage && !hasDiffImage) {
     return (
@@ -172,7 +322,7 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
       key={contentKey}
       flex={1}
     >
-      {treeType === "new" && imageUrls.new && (
+      {mode === "new" && imageUrls.new && (
         <Box
           flex={1}
           gap="s"
@@ -195,7 +345,7 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
           </Box>
         </Box>
       )}
-      {treeType === "diff" && showHeatmap && imageUrls.diff && (
+      {mode === "diff" && showHeatmap && imageUrls.diff && (
         <Box
           flex={1}
           gap="s"
@@ -218,7 +368,7 @@ export const ContentPanel: React.FC<ContentPanelProps> = ({
           </Box>
         </Box>
       )}
-      {treeType === "diff" && !showHeatmap && (
+      {mode === "diff" && !showHeatmap && (
         <Box
           flex={1}
           gap="s"

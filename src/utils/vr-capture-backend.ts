@@ -1,8 +1,8 @@
 /**
  * Résolution du backend de capture VR.
  *
- * - "docker" (défaut) : toute capture est déléguée au daemon Docker (sidecar).
- * - "local" : capture Playwright directe (tests internes ou conteneur VR_DOCKER=1).
+ * - "docker" (défaut) : capture déléguée au daemon Docker (sidecar Linux, reproductible).
+ * - "local" (opt-in) : Playwright sur l'hôte — rendu variable par OS/machine, fort risque de diffs vs baseline CI.
  */
 import { CAPTURE_DAEMON_URL } from "../constants/constants";
 import type { VrConfig } from "../types/types";
@@ -31,6 +31,18 @@ export const getCaptureBackend = (config?: VrConfig): CaptureBackend => {
 
 /** true si les captures doivent passer par le daemon Docker. */
 export const isDockerCaptureBackend = (config?: VrConfig): boolean => getCaptureBackend(config) === "docker";
+
+/**
+ * true si le process hôte doit rejouer les logs de capture (consoleOutput, résumés).
+ * Quand `docker.showLogs` est activé, le sidecar est suivi via `docker compose logs -f`
+ * et les logs hôte dupliqués sont supprimés.
+ */
+export const shouldEchoHostCaptureLogs = (config?: VrConfig): boolean => {
+  const resolved = resolveConfig(config);
+  if (!resolved) return true;
+  if (!isDockerCaptureBackend(resolved)) return true;
+  return !resolved.docker.showLogs;
+};
 
 /** true si le process courant s'exécute dans le conteneur de capture. */
 export const isRunningInDocker = (): boolean => process.env.VR_DOCKER === "1";

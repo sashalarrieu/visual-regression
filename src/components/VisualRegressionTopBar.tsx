@@ -12,6 +12,8 @@ import type { Node, StoryScreenshotsPath } from "../types/types";
 
 import { ScreenshotDetails } from "./ScreenshotDetails";
 
+export type TopBarVariant = "regressions" | "catalog";
+
 export type VisualRegressionTopBarProps = {
   currentStory?: Node;
   treeType: "new" | "diff";
@@ -20,6 +22,7 @@ export type VisualRegressionTopBarProps = {
   storyScreenshotsPath?: StoryScreenshotsPath;
   hasItems?: boolean;
   bulkLoading?: boolean;
+  variant?: TopBarVariant;
   onPrev: () => void;
   onNext: () => void;
   onValid: () => void;
@@ -39,6 +42,7 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
   storyScreenshotsPath,
   hasItems = false,
   bulkLoading = false,
+  variant = "regressions",
   onPrev,
   onNext,
   onValid,
@@ -50,7 +54,13 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
   onOpenCompareModal,
 }) => {
   useDeviceConfig();
+  const isCatalog = variant === "catalog";
+
   const copyStoryPathToClipboard = () => {
+    if (isCatalog) {
+      Clipboard.setStringAsync(currentStory?.path ?? "");
+      return;
+    }
     const path = currentStory
       ? currentStory.path.split(`/${treeType === "new" ? NEW_SCREENSHOT_NAME : DIFF_SCREENSHOT_NAME}`)[0]
       : "";
@@ -77,36 +87,40 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
             color="base"
             onPress={onPrev}
           />
-          <Button
-            label="Valider"
-            color="primary"
-            width={80}
-            onPress={onValid}
-            disabled={!currentStory || bulkLoading}
-          />
-          <Button
-            label="Refuser"
-            color="danger"
-            width={80}
-            onPress={onDelete}
-            disabled={!currentStory || bulkLoading}
-          />
-          <Button
-            label="Tout valider"
-            color="primary"
-            width={110}
-            onPress={onValidAll}
-            loading={bulkLoading}
-            disabled={!hasItems || bulkLoading}
-          />
-          <Button
-            label="Tout refuser"
-            color="danger"
-            width={110}
-            onPress={onDeleteAll}
-            loading={bulkLoading}
-            disabled={!hasItems || bulkLoading}
-          />
+          {!isCatalog && (
+            <>
+              <Button
+                label="Valider"
+                color="primary"
+                width={80}
+                onPress={onValid}
+                disabled={!currentStory || bulkLoading}
+              />
+              <Button
+                label="Refuser"
+                color="danger"
+                width={80}
+                onPress={onDelete}
+                disabled={!currentStory || bulkLoading}
+              />
+              <Button
+                label="Tout valider"
+                color="primary"
+                width={110}
+                onPress={onValidAll}
+                loading={bulkLoading}
+                disabled={!hasItems || bulkLoading}
+              />
+              <Button
+                label="Tout refuser"
+                color="danger"
+                width={110}
+                onPress={onDeleteAll}
+                loading={bulkLoading}
+                disabled={!hasItems || bulkLoading}
+              />
+            </>
+          )}
           <Button
             icon={{ name: "chevron-right" }}
             color="base"
@@ -122,71 +136,94 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
             color="primary"
             onPress={onOpenCompareModal}
           />
-          <Button
-            icon={{ name: "history" }}
-            color="primary"
-            onPress={onShowDeleted}
-          />
+          {!isCatalog && (
+            <Button
+              icon={{ name: "history" }}
+              color="primary"
+              onPress={onShowDeleted}
+            />
+          )}
         </Box>
         <ScreenshotDetails
           deviceName={currentStory?.deviceName}
           storyId={currentStory?.storyId || currentStory?.name}
-          countPixelDiff={showHeatmap && storyScreenshotsPath?.diff ? countPixelDiff : undefined}
-          showHeatmap={showHeatmap && !!storyScreenshotsPath?.diff}
+          countPixelDiff={!isCatalog && showHeatmap && storyScreenshotsPath?.diff ? countPixelDiff : undefined}
+          showHeatmap={!isCatalog && showHeatmap && !!storyScreenshotsPath?.diff}
         />
+        {!isCatalog && (
+          <Box
+            px="s"
+            width={142}
+            justifyContent="center"
+            alignItems="center"
+            borderRadius="base"
+            backgroundColor="newTheme_surface"
+            style={{ opacity: treeType === "new" ? 0.4 : 1 }}
+          >
+            <ToggleField
+              title={showHeatmap ? "Heatmap" : "Split view"}
+              value={showHeatmap}
+              onChange={v => onToggleHeatmap(v ?? false)}
+              disabled={treeType === "new"}
+            />
+          </Box>
+        )}
+      </Box>
+      {!isCatalog && (
         <Box
-          px="s"
-          width={142}
-          justifyContent="center"
+          gap="m"
+          height={spacing.m}
+          width="100%"
+          flexDirection="row"
           alignItems="center"
-          borderRadius="base"
-          backgroundColor="newTheme_surface"
-          style={{ opacity: treeType === "new" ? 0.4 : 1 }}
+          justifyContent="space-between"
         >
-          <ToggleField
-            title={showHeatmap ? "Heatmap" : "Split view"}
-            value={showHeatmap}
-            onChange={v => onToggleHeatmap(v ?? false)}
-            disabled={treeType === "new"}
-          />
+          {treeType === "diff" && !showHeatmap && (
+            <Typo
+              variant="legend_regular"
+              color="newTheme_textLegend"
+              textTransform="uppercase"
+            >
+              Originale
+            </Typo>
+          )}
+          {((treeType === "diff" && !showHeatmap) || treeType === "new") && (
+            <Typo
+              variant="legend_regular"
+              color="newTheme_textLegend"
+              textTransform="uppercase"
+            >
+              Nouvelle
+            </Typo>
+          )}
+          {treeType === "diff" && showHeatmap && (
+            <Typo
+              variant="legend_regular"
+              color="newTheme_textLegend"
+              textTransform="uppercase"
+            >
+              Différence
+            </Typo>
+          )}
         </Box>
-      </Box>
-      <Box
-        gap="m"
-        height={spacing.m}
-        width="100%"
-        flexDirection="row"
-        alignItems="center"
-        justifyContent="space-between"
-      >
-        {treeType === "diff" && !showHeatmap && (
+      )}
+      {isCatalog && (
+        <Box
+          gap="m"
+          height={spacing.m}
+          width="100%"
+          flexDirection="row"
+          alignItems="center"
+        >
           <Typo
             variant="legend_regular"
             color="newTheme_textLegend"
             textTransform="uppercase"
           >
-            Originale
+            {currentStory?.storyType === "baseline" ? "Actuelle" : ""}
           </Typo>
-        )}
-        {((treeType === "diff" && !showHeatmap) || treeType === "new") && (
-          <Typo
-            variant="legend_regular"
-            color="newTheme_textLegend"
-            textTransform="uppercase"
-          >
-            Nouvelle
-          </Typo>
-        )}
-        {treeType === "diff" && showHeatmap && (
-          <Typo
-            variant="legend_regular"
-            color="newTheme_textLegend"
-            textTransform="uppercase"
-          >
-            Différence
-          </Typo>
-        )}
-      </Box>
+        </Box>
+      )}
     </Box>
   );
 };

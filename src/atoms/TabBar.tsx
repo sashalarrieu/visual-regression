@@ -3,6 +3,8 @@ import { ScrollView, Text, TouchableOpacity, View } from "react-native";
 import { colors, spacing } from "../themes/theme";
 import type { MaterialIconName } from "../types/types";
 
+import { Bullet } from "./Bullet";
+
 export type TabBarTab<T = string> = {
   key: T;
   title: string;
@@ -34,6 +36,9 @@ export const TabBar = <T = string,>({ tabs, selectedTabKey, onSelectedTabKey }: 
             paddingHorizontal: spacing.m,
             borderRadius: 8,
             backgroundColor: selectedTabKey === tab.key ? colors.newTheme_primary : colors.newTheme_surface,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: spacing.s,
           }}
         >
           <Text
@@ -43,8 +48,14 @@ export const TabBar = <T = string,>({ tabs, selectedTabKey, onSelectedTabKey }: 
             }}
           >
             {tab.title}
-            {tab.alertTextInfo != null && tab.alertTextInfo > 0 ? ` (${tab.alertTextInfo})` : ""}
           </Text>
+          {!!tab.alertTextInfo && (
+            <Bullet
+              value={tab.alertTextInfo}
+              color="newTheme_textOnPrimary"
+              textColor="newTheme_textOnSurface"
+            />
+          )}
         </TouchableOpacity>
       ))}
     </View>

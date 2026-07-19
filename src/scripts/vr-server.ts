@@ -36,6 +36,7 @@ import {
   getDiffScreenshotVariants,
   pickScreenshotPathForLog,
 } from "./vr-server-index";
+import { fetchAndBuildStoriesCatalog, resolveBaselineServePath } from "./vr-stories-catalog";
 
 const PROJECT_ROOT = getProjectRoot();
 const {
@@ -328,6 +329,23 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
       sendJson(res, { tree: index.tree, lastUpdate: index.lastUpdate });
     } catch (err) {
       console.error("❌ Error building tree:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  // 📖 GET /regressions/stories-tree — catalogue Storybook × devices (live index.json)
+  if (req.method === "GET" && url.pathname === "/regressions/stories-tree") {
+    try {
+      const config = resolveVrConfig(PROJECT_ROOT);
+      const catalog = await fetchAndBuildStoriesCatalog({
+        projectRoot: PROJECT_ROOT,
+        storybookUrl: config.storybook.url,
+        devices: config.devices,
+      });
+      sendJson(res, catalog);
+    } catch (err) {
+      console.error("❌ Error building stories catalog:", err);
       sendJson(res, { error: String(err) }, 500);
     }
     return;
@@ -817,6 +835,36 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
     } catch (err) {
       console.error("❌ Restore error:", err);
       sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/baselines/")) {
+    try {
+      const filePath = resolveBaselineServePath(PROJECT_ROOT, url.pathname);
+      if (!filePath || !existsSync(filePath)) {
+        res.writeHead(404, corsHeaders);
+        res.end("File not found");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-cache", ...corsHeaders });
+      const stream = createReadStream(filePath);
+      stream.on("error", err => {
+        console.warn(`⚠️  Error streaming baseline ${filePath}:`, err);
+        if (!res.headersSent) {
+          res.writeHead(404, corsHeaders);
+          res.end("File not found");
+        } else {
+          res.destroy();
+        }
+      });
+      stream.pipe(res);
+    } catch (err) {
+      console.error("❌ Error serving baseline:", err);
+      if (!res.headersSent) {
+        res.writeHead(500, corsHeaders);
+        res.end("Internal Server Error");
+      }
     }
     return;
   }

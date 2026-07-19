@@ -83,6 +83,28 @@ nodeModulesPaths.sort((a, b) => {
 });
 
 const extraNodeModules = buildExtraNodeModules(nodeModulesPaths);
+
+/** react + react-dom doivent venir du même node_modules (évite mismatch hôte 19.2 / package 19.1). */
+const pinReactPair = (extras, searchPaths, hostRoot) => {
+  const pair = ["react", "react-dom"];
+  const hostNm = path.join(hostRoot, "node_modules");
+  if (pair.every(dep => fs.existsSync(path.join(hostNm, dep)))) {
+    for (const dep of pair) {
+      extras[dep] = fs.realpathSync(path.join(hostNm, dep));
+    }
+    return;
+  }
+  for (const searchPath of searchPaths) {
+    if (pair.every(dep => fs.existsSync(path.join(searchPath, dep)))) {
+      for (const dep of pair) {
+        extras[dep] = fs.realpathSync(path.join(searchPath, dep));
+      }
+      return;
+    }
+  }
+};
+pinReactPair(extraNodeModules, nodeModulesPaths, hostProjectRoot);
+
 for (const isolationNm of collectPnpmIsolationNodeModules(extraNodeModules)) {
   if (!nodeModulesPaths.includes(isolationNm)) {
     nodeModulesPaths.push(isolationNm);

@@ -52,16 +52,24 @@ export type Node = {
   name: string;
   path: string;
   children?: Record<string, Node>;
-  storyType?: "new" | "diff";
+  storyType?: "new" | "diff" | "baseline" | "missing";
+  /** Story exclue de la capture (`ignore-vr` sans `force-vr`). */
+  ignored?: boolean;
   deviceName?: DeviceId;
   storyId?: string;
   displayName?: string;
+  /** Dossier composant relatif (ex. src/atoms/Alert) — utile pour régénérer. */
+  componentDir?: string;
   imagePaths?: StoryScreenshotsPath;
   imageUrls?: StoryScreenshotsPath;
   countPixelDiff?: number | null;
   countDiff?: number;
   countNew?: number;
   countTotal?: number;
+  /** Compteurs catalogue (onglet Toutes les stories). */
+  countBaseline?: number;
+  countMissing?: number;
+  countIgnored?: number;
 };
 
 /** Paire story + device pour les appels de comparaison. */

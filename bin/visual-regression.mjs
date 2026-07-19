@@ -27,7 +27,7 @@
  *   VR_STORYBOOK_STATIC_REBUILD=1 → force rebuild storybook-static au lancement
  */
 import { spawn } from "child_process";
-import { existsSync, realpathSync } from "fs";
+import { cpSync, existsSync, readFileSync, realpathSync, statSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -36,10 +36,76 @@ import { getTsxCliPath, spawnTsxScript } from "./spawn-tsx.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, "..");
-/** Racine réelle du package (sans symlink) pour que Expo ne soit pas sous node_modules → Babel s'applique. */
-const packageRootReal = realpathSync(packageRoot);
-const packageTsconfigPath = path.join(packageRootReal, "tsconfig.cli.json");
 const hostRoot = process.cwd();
+/** Racine réelle du package installé (sans symlink). */
+const installedPackageRoot = realpathSync(packageRoot);
+
+/** Copie installée dans node_modules du projet hôte (deps npm/yarn). */
+const resolveInstalledCopyRoot = root => {
+  const installedCopy = path.join(root, "node_modules", "@setshao", "visual-regression");
+  const launcher = path.join(installedCopy, "src", "scripts", "vr-launcher.ts");
+  if (!existsSync(launcher)) return null;
+  try {
+    return realpathSync(installedCopy);
+  } catch {
+    return installedCopy;
+  }
+};
+
+/** Avec `file:`, détecte la source liée du package. */
+const resolveLinkedPackageRoot = root => {
+  const consumerPkgPath = path.join(root, "package.json");
+  if (!existsSync(consumerPkgPath)) return null;
+  try {
+    const consumerPkg = JSON.parse(readFileSync(consumerPkgPath, "utf8"));
+    const depSpec =
+      consumerPkg.dependencies?.["@setshao/visual-regression"] ??
+      consumerPkg.devDependencies?.["@setshao/visual-regression"];
+    if (typeof depSpec === "string" && depSpec.startsWith("file:")) {
+      const linkedSource = path.resolve(root, depSpec.slice("file:".length));
+      const launcher = path.join(linkedSource, "src", "scripts", "vr-launcher.ts");
+      if (existsSync(launcher)) return linkedSource;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+};
+
+/** Synchronise src/ + bin/ depuis la source `file:` vers la copie node_modules (yarn copie figée). */
+const syncLinkedSourcesToInstalledCopy = (linkedRoot, installedRoot) => {
+  const linkedLauncher = path.join(linkedRoot, "src", "scripts", "vr-launcher.ts");
+  const installedLauncher = path.join(installedRoot, "src", "scripts", "vr-launcher.ts");
+  if (!existsSync(linkedLauncher) || !existsSync(installedLauncher)) return false;
+
+  const linkedNewer = statSync(linkedLauncher).mtimeMs > statSync(installedLauncher).mtimeMs;
+  if (!linkedNewer) return false;
+
+  cpSync(path.join(linkedRoot, "src"), path.join(installedRoot, "src"), { recursive: true });
+  for (const binFile of ["visual-regression.mjs", "spawn-tsx.mjs", "expo-env.mjs"]) {
+    const from = path.join(linkedRoot, "bin", binFile);
+    const to = path.join(installedRoot, "bin", binFile);
+    if (existsSync(from)) {
+      cpSync(from, to);
+    }
+  }
+  console.log("🔄 visual-regression : source file: synchronisée vers node_modules");
+  return true;
+};
+
+const linkedPackageRoot = resolveLinkedPackageRoot(hostRoot);
+const installedCopyRoot = resolveInstalledCopyRoot(hostRoot);
+
+if (linkedPackageRoot && installedCopyRoot && path.resolve(linkedPackageRoot) !== path.resolve(installedCopyRoot)) {
+  syncLinkedSourcesToInstalledCopy(linkedPackageRoot, installedCopyRoot);
+}
+
+/** Exécution depuis la copie installée (deps npm) quand file: + node_modules, sinon racine courante. */
+const effectivePackageRoot =
+  installedCopyRoot && linkedPackageRoot && path.resolve(linkedPackageRoot) !== path.resolve(installedCopyRoot)
+    ? installedCopyRoot
+    : (linkedPackageRoot ?? installedPackageRoot);
+const packageTsconfigPath = path.join(effectivePackageRoot, "tsconfig.cli.json");
 const configPath = path.join(hostRoot, "vr.config.cjs");
 const legacyConfigPath = path.join(hostRoot, "vr-devices.config.cjs");
 
@@ -79,53 +145,53 @@ let scriptPath;
 let scriptArgs = [];
 switch (subcommand) {
   case "server": {
-    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-server.ts");
+    scriptPath = path.join(effectivePackageRoot, "src", "scripts", "vr-server.ts");
     break;
   }
   case "compare": {
-    scriptPath = path.join(packageRootReal, "src", "scripts", "compare-visual-regressions.ts");
+    scriptPath = path.join(effectivePackageRoot, "src", "scripts", "compare-visual-regressions.ts");
     break;
   }
   case "benchmark": {
-    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-benchmark-concurrency.ts");
+    scriptPath = path.join(effectivePackageRoot, "src", "scripts", "vr-benchmark-concurrency.ts");
     scriptArgs = process.argv.slice(3);
     break;
   }
   case "benchmark-shards": {
-    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-benchmark-shards.ts");
+    scriptPath = path.join(effectivePackageRoot, "src", "scripts", "vr-benchmark-shards.ts");
     scriptArgs = process.argv.slice(3);
     break;
   }
   case "test-incremental": {
-    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-test-incremental.ts");
+    scriptPath = path.join(effectivePackageRoot, "src", "scripts", "vr-test-incremental.ts");
     scriptArgs = process.argv.slice(3);
     break;
   }
   case "test-validation": {
-    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-test-validation.ts");
+    scriptPath = path.join(effectivePackageRoot, "src", "scripts", "vr-test-validation.ts");
     scriptArgs = process.argv.slice(3);
     break;
   }
   case "capture-daemon": {
     // Daemon de capture (exécuté DANS le conteneur). cwd = projet hôte (/work).
-    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-capture-daemon.ts");
+    scriptPath = path.join(effectivePackageRoot, "src", "scripts", "vr-capture-daemon.ts");
     break;
   }
   case "capture-oneshot": {
     // Capture one-shot (CI, DANS le conteneur). cwd = projet hôte (/work).
-    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-capture-oneshot.ts");
+    scriptPath = path.join(effectivePackageRoot, "src", "scripts", "vr-capture-oneshot.ts");
     break;
   }
   case "capture-up":
   case "capture-down":
   case "capture-status": {
     // Contrôle du sidecar Docker depuis l'hôte.
-    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-capture-control.ts");
+    scriptPath = path.join(effectivePackageRoot, "src", "scripts", "vr-capture-control.ts");
     scriptArgs = [subcommand.replace("capture-", "")];
     break;
   }
   case "kill-ports": {
-    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-kill-ports.ts");
+    scriptPath = path.join(effectivePackageRoot, "src", "scripts", "vr-kill-ports.ts");
     break;
   }
   case "app": {
@@ -134,7 +200,7 @@ switch (subcommand) {
     if (process.env.VR_CLEAR_METRO === "1") {
       expoArgs.push("--clear");
     }
-    const child = spawn(npxRunner, expoArgs, spawnOpts(packageRootReal, getExpoSpawnEnv(env, hostRoot)));
+    const child = spawn(npxRunner, expoArgs, spawnOpts(effectivePackageRoot, getExpoSpawnEnv(env, hostRoot)));
     child.on("error", err => {
       console.error("❌ Impossible de lancer l'interface VR:", err.message);
       process.exit(1);
@@ -144,23 +210,21 @@ switch (subcommand) {
   }
   default: {
     // pas d'argument ou "start" → launcher complet
-    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-launcher.ts");
+    scriptPath = path.join(effectivePackageRoot, "src", "scripts", "vr-launcher.ts");
     break;
   }
 }
 
 if (scriptPath) {
-  const tsxCli = getTsxCliPath(hostRoot, packageRootReal);
+  const tsxCli = getTsxCliPath(hostRoot, effectivePackageRoot);
   const useNpxFallback = !tsxCli;
-  // Toujours exécuter tsx depuis la racine du package pour garantir la résolution des alias TS.
-  const cwd = packageRootReal;
   const child = spawnTsxScript({
     hostRoot,
-    packageRoot: packageRootReal,
+    packageRoot: effectivePackageRoot,
     tsconfigPath: packageTsconfigPath,
     scriptPath,
     scriptArgs,
-    cwd,
+    cwd: effectivePackageRoot,
     env,
   });
   child.on("error", err => {

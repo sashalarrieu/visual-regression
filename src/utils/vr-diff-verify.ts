@@ -19,7 +19,7 @@ export const formatDiffVerifyRetryLog = (nextAttempt: number, maxAttempts: numbe
   `🔄 Diff verify attempt ${nextAttempt}/${maxAttempts} for ${screenshotKey}`;
 
 export const formatFlakeSuppressedLog = (attempt: number, screenshotKey: string): string =>
-  `✅ Flake suppressed after attempt ${attempt} for ${screenshotKey}`;
+  `✳️ Flake suppressed after attempt ${attempt} for ${screenshotKey}`;
 
 export const formatDiffConfirmedLog = (maxAttempts: number, screenshotKey: string): string =>
   `⚠️  Diff confirmed after ${maxAttempts} attempts for ${screenshotKey}`;

@@ -94,7 +94,7 @@ export const Button: React.FC<ButtonProps> = ({
       style={{
         backgroundColor: bg,
         paddingVertical: spacing.s,
-        paddingHorizontal: spacing.m,
+        paddingHorizontal: spacing.s,
         borderRadius: 8,
         minWidth: width,
         flex: flex,

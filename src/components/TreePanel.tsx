@@ -9,32 +9,33 @@ import { Button } from "../atoms/Button";
 import { Typo } from "../atoms/Typo";
 import { useDeviceConfig } from "../providers/DeviceConfigProvider";
 import { colors, spacing } from "../themes/theme";
-import type { Node } from "../types/types";
+import type { MaterialIconName, Node } from "../types/types";
 import { calculateFolderDepth, findFirstFile, formatStoryName, getStoryNameFromId } from "../utils";
+
+export type TreePanelMode = "regressions" | "all-stories";
 
 export type TreePanelProps = {
   tree: Node | null;
-  loading: boolean;
-  onRefresh: () => void;
   onNodeClick: (node: Node) => void;
   currentStory?: Node;
   onCompareStoryNode?: (node: Node) => void;
   regeneratingPaths?: Set<string>;
+  mode?: TreePanelMode;
 };
 
 export const TreePanel: React.FC<TreePanelProps> = ({
   tree,
-  loading,
-  onRefresh,
   onNodeClick,
   currentStory,
   onCompareStoryNode,
   regeneratingPaths = new Set(),
+  mode = "regressions",
 }) => {
   const { getDeviceStyle, getDeviceDisplayName } = useDeviceConfig();
   const scrollViewRef = useRef<ScrollView>(null);
   const scrollContentRef = useRef<View>(null);
   const nodeRefs = useRef<Map<string, View>>(new Map());
+  const isCatalog = mode === "all-stories";
 
   const firstElementOffset = useMemo(() => {
     const firstFile = findFirstFile(tree);
@@ -43,19 +44,27 @@ export const TreePanel: React.FC<TreePanelProps> = ({
   }, [tree]);
 
   useEffect(() => {
+    scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+  }, [mode]);
+
+  useEffect(() => {
     if (currentStory?.path && scrollViewRef.current && scrollContentRef.current) {
       const nodeRef = nodeRefs.current.get(currentStory.path);
       if (nodeRef) {
-        nodeRef.measureLayout(
-          scrollContentRef.current,
-          (_x, y) => {
-            scrollViewRef.current?.scrollTo({ y: Math.max(0, y - firstElementOffset), animated: true });
-          },
-          () => {},
-        );
+        // Laisse le layout se stabiliser après un changement d'onglet / d'arbre.
+        const frame = requestAnimationFrame(() => {
+          nodeRef.measureLayout(
+            scrollContentRef.current!,
+            (_x, y) => {
+              scrollViewRef.current?.scrollTo({ y: Math.max(0, y - firstElementOffset), animated: true });
+            },
+            () => {},
+          );
+        });
+        return () => cancelAnimationFrame(frame);
       }
     }
-  }, [currentStory?.path, firstElementOffset]);
+  }, [currentStory?.path, firstElementOffset, mode]);
 
   const setNodeRef = useCallback((nodePath: string) => {
     return (ref: View | null) => {
@@ -64,13 +73,34 @@ export const TreePanel: React.FC<TreePanelProps> = ({
     };
   }, []);
 
+  const catalogRightIcon = (fileNode: Node): { name: MaterialIconName; fill: keyof typeof colors } => {
+    if (fileNode.ignored) {
+      return { name: "block", fill: "newTheme_textLegend" };
+    }
+    if (fileNode.storyType === "baseline") {
+      return { name: "check", fill: "newTheme_primary" };
+    }
+    return { name: "add", fill: "newTheme_fantasy" };
+  };
+
   const renderFile = (fileNode: Node) => {
-    if (regeneratingPaths.has(fileNode.path)) return null;
+    if (!isCatalog && regeneratingPaths.has(fileNode.path)) return null;
     const isNew = fileNode.storyType === "new";
     const deviceName = fileNode.deviceName;
     const deviceStyle = getDeviceStyle(deviceName);
     const isCurrentStory = currentStory?.path === fileNode.path;
     const deviceDisplayName = deviceName ? getDeviceDisplayName(deviceName) : fileNode.name;
+    const ignored = Boolean(fileNode.ignored);
+    const rightIcon = isCatalog
+      ? catalogRightIcon(fileNode)
+      : {
+          name: (isNew ? "add" : "warning") as MaterialIconName,
+          fill: (isCurrentStory
+            ? "newTheme_textOnPrimary"
+            : isNew
+              ? "newTheme_primary"
+              : "newTheme_danger") as keyof typeof colors,
+        };
 
     return (
       <View ref={setNodeRef(fileNode.path)}>
@@ -78,7 +108,10 @@ export const TreePanel: React.FC<TreePanelProps> = ({
           gap="xs"
           flexDirection="row"
           alignItems="center"
-          style={{ paddingRight: spacing.m - spacing.s + 1 }}
+          style={{
+            paddingRight: spacing.m - spacing.s + 1,
+            opacity: ignored ? 0.55 : 1,
+          }}
         >
           <Button
             label={deviceDisplayName}
@@ -86,15 +119,15 @@ export const TreePanel: React.FC<TreePanelProps> = ({
             onPress={() => onNodeClick(fileNode)}
             leftIcon={{
               name: deviceStyle.icon,
-              fill: (isCurrentStory ? "newTheme_textOnPrimary" : deviceStyle.color) as keyof typeof colors,
-            }}
-            rightIcon={{
-              name: isNew ? "add" : "warning",
               fill: (isCurrentStory
                 ? "newTheme_textOnPrimary"
-                : isNew
-                  ? "newTheme_primary"
-                  : "newTheme_danger") as keyof typeof colors,
+                : ignored
+                  ? "newTheme_textLegend"
+                  : deviceStyle.color) as keyof typeof colors,
+            }}
+            rightIcon={{
+              name: rightIcon.name,
+              fill: (isCurrentStory && !ignored ? "newTheme_textOnPrimary" : rightIcon.fill) as keyof typeof colors,
             }}
             flex={1}
             justifyContent="space-between"
@@ -104,6 +137,7 @@ export const TreePanel: React.FC<TreePanelProps> = ({
               icon={{ name: "sync" }}
               color={isCurrentStory ? "primary" : "base"}
               onPress={() => onCompareStoryNode(fileNode)}
+              disabled={ignored}
             />
           )}
         </Box>
@@ -130,28 +164,61 @@ export const TreePanel: React.FC<TreePanelProps> = ({
     const diffCount = node.countDiff || 0;
     const newCount = node.countNew || 0;
     const totalCount = node.countTotal || 0;
+    const ignoredCount = node.countIgnored || 0;
 
-    return (
-      <Accordion
-        key={node.name}
-        label={{ text: node.name }}
-        tags={[
+    const tags = isCatalog
+      ? [
+          <Bullet
+            key="baseline"
+            value={newCount}
+            color="newTheme_primary80"
+            textColor="newTheme_textOnPrimary"
+          />,
+          <Bullet
+            key="missing"
+            value={diffCount}
+            color="newTheme_fantasy"
+            textColor="newTheme_textOnPrimary"
+          />,
+          <Bullet
+            key="ignored"
+            value={ignoredCount}
+            color="newTheme_info"
+            textColor="newTheme_textOnPrimary"
+          />,
+          <Bullet
+            key="total"
+            value={totalCount}
+            color="newTheme_base"
+            textColor="newTheme_textOnPrimary"
+          />,
+        ]
+      : [
           <Bullet
             key="new"
             value={newCount}
             color="newTheme_primary80"
+            textColor="newTheme_textOnPrimary"
           />,
           <Bullet
             key="diff"
             value={diffCount}
             color="newTheme_danger"
+            textColor="newTheme_textOnPrimary"
           />,
           <Bullet
             key="total"
             value={totalCount}
-            color="newTheme_base10"
+            color="newTheme_base"
+            textColor="newTheme_textOnPrimary"
           />,
-        ]}
+        ];
+
+    return (
+      <Accordion
+        key={node.name}
+        label={{ text: node.name }}
+        tags={tags}
         defaultOpened
         style={{ paddingBottom: 0 }}
       >
@@ -169,15 +236,19 @@ export const TreePanel: React.FC<TreePanelProps> = ({
           const rawStoryName = storyFiles[0]?.displayName || getStoryNameFromId(storyId);
           const storyName = formatStoryName(rawStoryName);
           const isLastStory = storyIndex === filesByStoryId.size - 1;
+          const storyIgnored = storyFiles.every(f => f.ignored);
           return (
             <Box
               key={storyId}
               pb={isLastStory ? "s" : "m"}
-              style={{ right: -spacing.xs - 1, bottom: -1 }}
+              style={{ right: -spacing.xs - 1, bottom: -1, opacity: storyIgnored ? 0.7 : 1 }}
             >
               <Box
                 pb="xs"
                 px="xs"
+                flexDirection="row"
+                alignItems="center"
+                gap="xs"
               >
                 <Typo
                   variant="paragraphe_semiBold"
@@ -185,6 +256,14 @@ export const TreePanel: React.FC<TreePanelProps> = ({
                 >
                   {storyName}
                 </Typo>
+                {storyIgnored && (
+                  <Typo
+                    variant="legend_regular"
+                    color="newTheme_textLegend"
+                  >
+                    ignore-vr
+                  </Typo>
+                )}
               </Box>
               {storyFiles.map((file, fileIndex) => (
                 <Box
@@ -204,33 +283,16 @@ export const TreePanel: React.FC<TreePanelProps> = ({
 
   return (
     <Box
+      flex={1}
       width={300}
       p="m"
+      overflow="hidden"
     >
-      <Box
-        flexDirection="row"
-        alignItems="center"
-        justifyContent="space-between"
-        pb="s"
-      >
-        <Typo
-          variant="h2_semiBold"
-          style={{ flex: 1, textAlign: "center", paddingVertical: spacing.s }}
-        >
-          Régressions visuelles
-        </Typo>
-        <Box>
-          <Button
-            icon={{ name: "replay" }}
-            color="primary"
-            onPress={onRefresh}
-            loading={loading}
-          />
-        </Box>
-      </Box>
       <ScrollView
         ref={scrollViewRef}
-        style={{ marginHorizontal: -spacing.m }}
+        style={{ flex: 1, marginHorizontal: -spacing.m }}
+        contentContainerStyle={{ paddingBottom: spacing.m }}
+        nestedScrollEnabled
       >
         <View ref={scrollContentRef}>
           <Box px="m">{renderTree(tree)}</Box>

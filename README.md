@@ -14,7 +14,7 @@ Le package fournit une **app web de régression dédiée** (UI intégrée dans l
 - **But principal**  
   Fournir une solution complète de régression visuelle autour de Storybook, en prenant en charge **à la fois** l’interface web de validation et **toute la mécanique de capture/comparaison** (Playwright, serveur VR, orchestration).
 - **Ce que le package apporte**
-  - **Interface web intégrée** : l’UI VisualRegressions est interne au package et exposée via l’app web servie par `visual-regression` (l’hôte n’a pas à importer de composants UI dans son app).
+  - **Interface web intégrée** : l’UI VisualRegressions est interne au package et exposée via l’app web servie par `visual-regression` (l’hôte n’a pas à importer de composants UI dans son app). Deux onglets : **Régressions** (diffs / new) et **Toutes les stories** (catalogue Storybook × devices, génération manuelle, stories `ignore-vr` désactivées). Refresh manuel + SSE — pas de poll.
   - **Logique complète de VR** : récupération des régressions, affichage des différences (NEW / DIFF), heatmap, historique des refusés, navigation entre stories et devices.
   - **Scripts d’orchestration** : serveur VR, captures/comparaisons Playwright, launcher qui gèrent Storybook et la génération/lecture des screenshots sans que le projet hôte doive maintenir sa propre “infra VR”.
   - **Gestion du dossier de screenshots** : le répertoire de screenshots (par défaut `public/`) est géré par `visual-regression` ; s’il n’existe pas, le package s’occupe de le créer et de l’utiliser pour stocker/servir les images.
@@ -105,7 +105,7 @@ module.exports = {
     concurrencyDev: 2,
     maxTestTime: 10_000, // timeout par story (ms)
     remoteChunkSize: 50, // nb de screenshots par requête HTTP vers Docker
-    backend: "docker", // "docker" (défaut) ou "local"
+    backend: "docker", // "docker" (défaut, reproductible) ou "local" (opt-in — voir § Mode local)
     daemonUrl: "http://localhost:2810", // omis = port hôte dérivé du projet (recommandé)
   },
 
@@ -181,14 +181,14 @@ Les champs `label` / `icon` / `color` servent à **l’interface web** de valida
 
 #### `capture` — vitesse et technique de capture
 
-| Paramètre         | Défaut                     | En bref                                                                                                                                                  |
-| ----------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `concurrency`     | `2`–`8` (selon CPU)        | Workers en Storybook **static** et en **CI**. Plus haut = plus rapide, plus de RAM. Override : `VR_CONCURRENCY`.                                         |
-| `concurrencyDev`  | `2`                        | Workers en Storybook **dev** (Vite/HMR). Gardé bas pour ne pas saturer le serveur. Override : `VR_CONCURRENCY_DEV` (alias `VR_CAPTURE_DEV_CONCURRENCY`). |
-| `maxTestTime`     | `10000`                    | Temps max (ms) pour attendre qu’une story soit « stable » avant le screenshot.                                                                           |
-| `remoteChunkSize` | `20`                       | Nombre de captures envoyées **par lot** au daemon Docker. Augmentez (ex. `56`) pour une seule requête ; laissez `20` si vous avez des timeouts réseau.   |
-| `backend`         | `"docker"`                 | `"docker"` = capture dans le conteneur (recommandé). `"local"` = Playwright sur votre machine (debug avancé).                                            |
-| `daemonUrl`       | dérivé du projet (`18xxx`) | URL hôte du daemon. Omettre / laisser `http://localhost:2810` (sentinelle) → port déterministe. Override pour forcer un port.                            |
+| Paramètre         | Défaut                     | En bref                                                                                                                                                                                                                            |
+| ----------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `concurrency`     | `2`–`8` (selon CPU)        | Workers en Storybook **static** et en **CI**. Plus haut = plus rapide, plus de RAM. Override : `VR_CONCURRENCY`.                                                                                                                   |
+| `concurrencyDev`  | `2`                        | Workers en Storybook **dev** (Vite/HMR). Gardé bas pour ne pas saturer le serveur. Override : `VR_CONCURRENCY_DEV` (alias `VR_CAPTURE_DEV_CONCURRENCY`).                                                                           |
+| `maxTestTime`     | `10000`                    | Temps max (ms) pour `page.goto` + timer soft de capture. Source de vérité : `vr.config.cjs` (ou `VR_MAX_TEST_TIME`) — **pas** de plancher silencieux en mode dev.                                                                  |
+| `remoteChunkSize` | `20`                       | Nombre de captures envoyées **par lot** au daemon Docker. Augmentez (ex. `56`) pour une seule requête ; laissez `20` si vous avez des timeouts réseau.                                                                             |
+| `backend`         | `"docker"`                 | `"docker"` = capture dans le conteneur Linux (**recommandé**, baseline CI). `"local"` = Playwright sur l’hôte — **fort risque de diffs** (rendu différent par machine/OS). Voir [Mode local](#mode-local-opt-in-debug-uniquement). |
+| `daemonUrl`       | dérivé du projet (`18xxx`) | URL hôte du daemon. Omettre / laisser `http://localhost:2810` (sentinelle) → port déterministe. Override pour forcer un port.                                                                                                      |
 
 **Quel réglage s’applique ?**
 
@@ -201,10 +201,12 @@ Les champs `label` / `icon` / `color` servent à **l’interface web** de valida
 Le log au démarrage du pool l’indique explicitement, ex. :
 
 ```text
-⚡️ Pool de capture : 2 worker(s) [profil=dev · concurrencyDev=2 · concurrency(static/CI)=15] | 736 tâche(s) | mode full
+⚡️ Pool de capture : 2 worker(s) [concurrencyDev=2] | 736 tâche(s) | mode full
 ```
 
 **Variables d’env équivalentes** : `VR_CONCURRENCY`, `VR_CONCURRENCY_DEV`, `VR_MAX_TEST_TIME`, `VR_CAPTURE_REMOTE_CHUNK`, `VR_CAPTURE_BACKEND`, `VR_CAPTURE_DAEMON_URL`.
+
+> **Mode local** : `capture.backend: "local"` ou `VR_CAPTURE_BACKEND=local`. Activation **explicite uniquement** (si Docker est indispo, `yarn vr` s’arrête — pas de bascule automatique). Ce mode a de **très fortes chances** de générer des diffs : l’environnement n’est pas celui du conteneur Linux (polices, GPU, antialiasing, OS). Ne pas utiliser pour valider une baseline partagée avec la CI.
 
 ---
 
@@ -254,15 +256,15 @@ Le log au démarrage du pool l’indique explicitement, ex. :
 
 Réglages pour attendre que la story soit visuellement stable avant la capture. Voir aussi la section [SteadySnap](#steadysnap-anti-flake) et les tags Storybook (`burst-vr`, `live-animation-vr`, etc.).
 
-| Paramètre            | Défaut  | En bref                                                                            |
-| -------------------- | ------- | ---------------------------------------------------------------------------------- |
-| `freezeAnimations`   | `true`  | Fige les animations CSS pendant la capture.                                        |
-| `waitFonts`          | `true`  | Attend le chargement des polices.                                                  |
-| `waitNetworkQuietMs` | `0`     | Attend X ms sans requête réseau (ex. `300` pour des stories qui chargent des API). |
-| `maxStabilizeTime`   | `5000`  | Délai max total d’attente (ms).                                                    |
-| `burstCapture`       | `false` | Prend plusieurs frames et garde la plus stable (global).                           |
-| `burstFrames`        | `3`     | Nombre de frames si burst activé.                                                  |
-| `burstIntervalMs`    | `100`   | Intervalle entre frames burst (ms).                                                |
+| Paramètre            | Défaut  | En bref                                                                                 |
+| -------------------- | ------- | --------------------------------------------------------------------------------------- |
+| `freezeAnimations`   | `true`  | Fige les animations CSS pendant la capture.                                             |
+| `waitFonts`          | `true`  | Attend le chargement des polices.                                                       |
+| `waitNetworkQuietMs` | `0`     | Attend X ms sans requête réseau (ex. `300` pour des stories qui chargent des API).      |
+| `maxStabilizeTime`   | `5000`  | Délai max total d’attente (ms). Source de vérité : `vr.config.cjs` (ou override story). |
+| `burstCapture`       | `false` | Prend plusieurs frames et garde la plus stable (global).                                |
+| `burstFrames`        | `3`     | Nombre de frames si burst activé.                                                       |
+| `burstIntervalMs`    | `100`   | Intervalle entre frames burst (ms).                                                     |
 
 Vous pouvez surcharger par story via `parameters.vr.stabilize` dans vos fichiers CSF.
 
@@ -270,11 +272,11 @@ Vous pouvez surcharger par story via `parameters.vr.stabilize` dans vos fichiers
 
 #### `docker` — sidecar de capture _(avancé)_
 
-| Paramètre         | Défaut                                       | En bref                                                                                                                               |
-| ----------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `image`           | `vr-capture:1.61.1`                          | Image du conteneur qui exécute Storybook + Playwright.                                                                                |
-| `playwrightImage` | `mcr.microsoft.com/playwright:v1.61.1-jammy` | Image de base pour **builder** le sidecar localement.                                                                                 |
-| `showLogs`        | `false`                                      | Si `true`, affiche les logs du sidecar (`docker compose logs -f`) dans le terminal hôte — pratique en dev sans ouvrir Docker Desktop. |
+| Paramètre         | Défaut                                       | En bref                                                                                                                                                                                                                 |
+| ----------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `image`           | `vr-capture:1.61.1`                          | Image du conteneur qui exécute Storybook + Playwright.                                                                                                                                                                  |
+| `playwrightImage` | `mcr.microsoft.com/playwright:v1.61.1-jammy` | Image de base pour **builder** le sidecar localement.                                                                                                                                                                   |
+| `showLogs`        | `false`                                      | Si `true`, stream `docker compose logs -f` dans le terminal hôte — les logs de capture du conteneur remplacent la relecture hôte (pas de doublon `❇️` / `⚠️`). Si `false`, les logs sont rejoués côté hôte comme trace. |
 
 **Variable d’env équivalente** : `VR_DOCKER_IMAGE`, `VR_PLAYWRIGHT_IMAGE`, `VR_DOCKER_SHOW_LOGS` (`1` / `true` / `0` / `false`).
 
@@ -377,10 +379,12 @@ L'UI expose les actions **régénération volontaire** en mode full via le serve
 
 ### API serveur VR (config)
 
-| Route                             | Description                                                                      |
-| --------------------------------- | -------------------------------------------------------------------------------- |
-| `GET /regressions/config`         | Config publique résolue (`compareMode`, `storybookUrl`, `captureConcurrency`, …) |
-| `GET /regressions/config/devices` | Devices pour l'UI                                                                |
+| Route                             | Description                                                                                            |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `GET /regressions/config`         | Config publique résolue (`compareMode`, `storybookUrl`, `captureConcurrency`, …)                       |
+| `GET /regressions/config/devices` | Devices pour l'UI                                                                                      |
+| `GET /regressions/stories-tree`   | Catalogue Storybook × devices (`tree`, `fingerprint`, `storyCount`) — onglet UI « Toutes les stories » |
+| `GET /baselines/*`                | Sert une baseline depuis le dossier `Screenshots/` du composant (catalogue)                            |
 
 ---
 
@@ -418,19 +422,33 @@ storybook: {
 3. Les packages/apps délèguent à la racine (ex. `bash ../../scripts/vr-at-root.sh`) pour lancer la même CLI depuis n’importe quel workspace.
 4. Les stories vivent dans les packages UI ; le hub `apps/storybook` les charge via `main.ts`.
 
-### Prérequis navigateurs Playwright (mode local uniquement)
+### Mode local (opt-in, debug uniquement)
 
-> **Avec** `yarn vr` **(comportement par défaut), cette étape n'est pas nécessaire.**  
-> La capture passe par le sidecar Docker qui embarque déjà Chromium Linux (voir [Capture Docker](#capture-docker-obligatoire-reproductible) ci-dessous).
+> **⚠️ Non reproductible — risque élevé de fausses régressions.**  
+> En mode local, Storybook et Playwright tournent **sur votre machine**, pas dans le sidecar Docker Linux. Chaque OS (Windows, macOS Intel/M4, Linux) et chaque poste rend les stories **différemment** (moteur de polices, GPU, antialiasing, gestion des couleurs, version de Chromium). Les captures locales ont donc de **très grandes chances** de produire des **diffs** face à une baseline générée en Docker/CI — même sans changement de code. **Ne validez pas** de screenshots locaux comme référence d’équipe ; réservez ce mode au debug quand Docker est indisponible.
 
-L'installation locale de Playwright ne concerne que le **mode fallback** `VR_CAPTURE_BACKEND=local` (tests internes du package ou désactivation explicite de Docker) :
+**Activation** (obligatoire — jamais automatique si Docker est arrêté) :
+
+| Méthode                   | Exemple                            |
+| ------------------------- | ---------------------------------- |
+| `vr.config.cjs`           | `capture: { backend: "local" }`    |
+| Variable d’env (ponctuel) | `VR_CAPTURE_BACKEND=local yarn vr` |
+
+Priorité : `VR_CAPTURE_BACKEND` > `capture.backend` > `"docker"` (défaut).
+
+**Prérequis navigateurs Playwright**
+
+> **Avec** `capture.backend: "docker"` **(défaut), cette étape n’est pas nécessaire.**  
+> Le sidecar Docker embarque déjà Chromium Linux (voir [Capture Docker](#capture-docker-obligatoire-reproductible)).
+
+En mode local uniquement :
 
 ```bash
 cd <projet-hôte>
 npx playwright install chromium
 ```
 
-Sans ces binaires en mode local, la comparaison peut échouer avec `TimeoutError: launch: Timeout 180000ms exceeded`. Sur Windows, le script tente d'abord Edge/Chrome système avant Chromium bundlé (plus lent).
+Sans ces binaires, la comparaison peut échouer avec `TimeoutError: launch: Timeout 180000ms exceeded`. Sur Windows, le script tente d’abord Edge/Chrome système avant Chromium bundlé (plus lent).
 
 ---
 
@@ -449,15 +467,15 @@ Les **screenshots sont identiques** sur toutes les machines : la capture s'exéc
 
 ---
 
-## Capture Docker (obligatoire, reproductible)
+## Capture Docker (obligatoire par défaut, reproductible)
 
-Pour garantir des screenshots **identiques quelle que soit la machine** (Windows Intel, Mac M4, CI Linux…), **toute capture s'exécute dans un conteneur Docker**. Les différences de rendu entre OS (moteur de police DirectWrite vs CoreText, GPU, gestion des couleurs) disparaissent car l'environnement de capture est figé.
+Pour garantir des screenshots **identiques quelle que soit la machine** (Windows Intel, Mac M4, CI Linux…), **toute capture en mode par défaut** (`capture.backend: "docker"`) s’exécute dans un conteneur Docker. Les différences de rendu entre OS (moteur de police DirectWrite vs CoreText, GPU, gestion des couleurs) disparaissent car l’environnement de capture est figé. Le [mode local](#mode-local-opt-in-debug-uniquement) est une exception opt-in, non comparable à la CI.
 
 ### Principe
 
 - Un **sidecar Docker** (`vr-capture`) héberge **Storybook** (dev HMR) + un **daemon de capture** (Playwright Chromium Linux).
-- L'hôte (serveur VR, UI Expo, comparaison pixelmatch, index) **ne lance jamais Playwright** : chaque `runCaptureBatch` est délégué au daemon via HTTP (`POST /capture/batch`).
-- Résultat : **100 % des screenshots** (compare globale, régénération depuis le TreePanel, CI) passent par Docker.
+- L’hôte (serveur VR, UI Expo, comparaison pixelmatch, index) **ne lance pas Playwright** en mode `docker` : chaque `runCaptureBatch` est délégué au daemon via HTTP (`POST /capture/batch`).
+- Résultat : **100 % des screenshots** de référence (compare globale, régénération depuis le TreePanel, CI) passent par Docker.
 
 ```
 Hôte (vr-server + UI Expo)  ──POST /capture/batch──▶  Conteneur (Storybook + daemon + Playwright)
@@ -505,17 +523,17 @@ Un exemple complet GitHub Actions (cache `node_modules` + `storybook-static`, sh
 
 ### Variables d'environnement Docker
 
-| Variable                  | Défaut / `vr.config.cjs`         | Rôle                                                                                                   |
-| ------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `VR_CAPTURE_BACKEND`      | `capture.backend` → `docker`     | `docker` = capture déléguée au daemon ; `local` = capture directe (tests internes / dans le conteneur) |
-| `VR_CAPTURE_DAEMON_URL`   | `capture.daemonUrl`              | URL du daemon de capture                                                                               |
-| `VR_CAPTURE_REMOTE_CHUNK` | `capture.remoteChunkSize` → `20` | Taille des lots envoyés au daemon (évite les timeouts fetch)                                           |
-| `VR_STORYBOOK_MODE`       | `launcher.storybookMode` → auto  | `dev` (HMR) ou `static` (build + serve, CI)                                                            |
-| `VR_STORYBOOK_STATIC`     | alias → `static`                 | Rétrocompat : équivalent à `VR_STORYBOOK_MODE=static`                                                  |
-| `VR_DOCKER_IMAGE`         | `docker.image`                   | Image du sidecar (tag aligné sur la version Playwright)                                                |
-| `VR_PLAYWRIGHT_IMAGE`     | `docker.playwrightImage`         | Image de base Playwright pour builder le sidecar                                                       |
-| `VR_DOCKER_SHOW_LOGS`     | `docker.showLogs` → `false`      | `1`/`true` = streamer les logs du sidecar dans le terminal hôte                                        |
-| `VR_DOCKER`               | `1` (dans le conteneur)          | Active les flags Chromium déterministes                                                                |
+| Variable                  | Défaut / `vr.config.cjs`         | Rôle                                                                                                                                        |
+| ------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VR_CAPTURE_BACKEND`      | `capture.backend` → `docker`     | `docker` = capture déléguée au daemon (reproductible). `local` = capture hôte — **fort risque de diffs** entre machines (opt-in explicite). |
+| `VR_CAPTURE_DAEMON_URL`   | `capture.daemonUrl`              | URL du daemon de capture                                                                                                                    |
+| `VR_CAPTURE_REMOTE_CHUNK` | `capture.remoteChunkSize` → `20` | Taille des lots envoyés au daemon (évite les timeouts fetch)                                                                                |
+| `VR_STORYBOOK_MODE`       | `launcher.storybookMode` → auto  | `dev` (HMR) ou `static` (build + serve, CI)                                                                                                 |
+| `VR_STORYBOOK_STATIC`     | alias → `static`                 | Rétrocompat : équivalent à `VR_STORYBOOK_MODE=static`                                                                                       |
+| `VR_DOCKER_IMAGE`         | `docker.image`                   | Image du sidecar (tag aligné sur la version Playwright)                                                                                     |
+| `VR_PLAYWRIGHT_IMAGE`     | `docker.playwrightImage`         | Image de base Playwright pour builder le sidecar                                                                                            |
+| `VR_DOCKER_SHOW_LOGS`     | `docker.showLogs` → `false`      | `1`/`true` = streamer les logs du sidecar dans le terminal hôte                                                                             |
+| `VR_DOCKER`               | `1` (dans le conteneur)          | Active les flags Chromium déterministes                                                                                                     |
 
 ### Utiliser son propre Docker (image maison)
 
@@ -636,30 +654,30 @@ Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du pr
 
 ### 2. Variables d’environnement
 
-| Variable                            | Description                                                                          |
-| ----------------------------------- | ------------------------------------------------------------------------------------ |
-| `VR_PROJECT_ROOT`                   | Racine du projet hôte (défaut : `process.cwd()`)                                     |
-| `VR_CONCURRENCY`                    | Override de `capture.concurrency` (static / CI)                                      |
-| `VR_CONCURRENCY_DEV`                | Override de `capture.concurrencyDev` (Storybook dev)                                 |
-| `VR_CAPTURE_DEV_CONCURRENCY`        | Alias de `VR_CONCURRENCY_DEV` (rétrocompat)                                          |
-| `VR_MAX_TEST_TIME`                  | Override de `capture.maxTestTime` (ms)                                               |
-| `VR_COMPARE_MODE`                   | Override de `compare.mode` (`"incremental"` ou `"full"`)                             |
-| `VR_COMPARE_SCOPE`                  | Override de `compare.scope` (`"all"`, `"branch"`, `"working-tree"`)                  |
-| `VR_COMPARE_BASE`                   | Override de `compare.base` (ex. `origin/main`)                                       |
-| `VR_THRESHOLD`                      | Override de `compare.threshold` (seuil pixelmatch)                                   |
-| `VR_DIFF_VERIFY_MAX_ATTEMPTS`       | Override de `compare.diffVerificationMaxAttempts`                                    |
-| `VR_RUN_INITIAL_COMPARE`            | Override de `launcher.runInitialCompare`                                             |
-| `VR_STORYBOOK_MODE`                 | `"dev"` ou `"static"` — override de `launcher.storybookMode`                         |
-| `VR_STORYBOOK_STATIC`               | Alias de `VR_STORYBOOK_MODE=static` (rétrocompatibilité)                             |
-| `VR_STORYBOOK_STATIC_REBUILD`       | Override de `launcher.forceStaticRebuild` (`1` = rebuild forcé)                      |
-| `VR_STORYBOOK_URL`                  | Override de `storybook.url`                                                          |
-| `VR_SHARD_INDEX` / `VR_SHARD_TOTAL` | Sharding CI (index 0-based). Override de `compare.shardIndex` / `compare.shardTotal` |
-| `VR_CAPTURE_BACKEND`                | Override de `capture.backend` (`docker` ou `local`)                                  |
-| `VR_CAPTURE_DAEMON_URL`             | Override de `capture.daemonUrl`                                                      |
-| `VR_CAPTURE_REMOTE_CHUNK`           | Override de `capture.remoteChunkSize`                                                |
-| `VR_DOCKER_IMAGE`                   | Override de `docker.image`                                                           |
-| `VR_PLAYWRIGHT_IMAGE`               | Override de `docker.playwrightImage`                                                 |
-| `VR_DOCKER_SHOW_LOGS`               | Override de `docker.showLogs` (`1`/`true` ou `0`/`false`)                            |
+| Variable                            | Description                                                                                                   |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `VR_PROJECT_ROOT`                   | Racine du projet hôte (défaut : `process.cwd()`)                                                              |
+| `VR_CONCURRENCY`                    | Override de `capture.concurrency` (static / CI)                                                               |
+| `VR_CONCURRENCY_DEV`                | Override de `capture.concurrencyDev` (Storybook dev)                                                          |
+| `VR_CAPTURE_DEV_CONCURRENCY`        | Alias de `VR_CONCURRENCY_DEV` (rétrocompat)                                                                   |
+| `VR_MAX_TEST_TIME`                  | Override de `capture.maxTestTime` (ms)                                                                        |
+| `VR_COMPARE_MODE`                   | Override de `compare.mode` (`"incremental"` ou `"full"`)                                                      |
+| `VR_COMPARE_SCOPE`                  | Override de `compare.scope` (`"all"`, `"branch"`, `"working-tree"`)                                           |
+| `VR_COMPARE_BASE`                   | Override de `compare.base` (ex. `origin/main`)                                                                |
+| `VR_THRESHOLD`                      | Override de `compare.threshold` (seuil pixelmatch)                                                            |
+| `VR_DIFF_VERIFY_MAX_ATTEMPTS`       | Override de `compare.diffVerificationMaxAttempts`                                                             |
+| `VR_RUN_INITIAL_COMPARE`            | Override de `launcher.runInitialCompare`                                                                      |
+| `VR_STORYBOOK_MODE`                 | `"dev"` ou `"static"` — override de `launcher.storybookMode`                                                  |
+| `VR_STORYBOOK_STATIC`               | Alias de `VR_STORYBOOK_MODE=static` (rétrocompatibilité)                                                      |
+| `VR_STORYBOOK_STATIC_REBUILD`       | Override de `launcher.forceStaticRebuild` (`1` = rebuild forcé)                                               |
+| `VR_STORYBOOK_URL`                  | Override de `storybook.url`                                                                                   |
+| `VR_SHARD_INDEX` / `VR_SHARD_TOTAL` | Sharding CI (index 0-based). Override de `compare.shardIndex` / `compare.shardTotal`                          |
+| `VR_CAPTURE_BACKEND`                | Override de `capture.backend` (`docker` ou `local`). `local` = rendu hôte, **non comparable** à la CI/Docker. |
+| `VR_CAPTURE_DAEMON_URL`             | Override de `capture.daemonUrl`                                                                               |
+| `VR_CAPTURE_REMOTE_CHUNK`           | Override de `capture.remoteChunkSize`                                                                         |
+| `VR_DOCKER_IMAGE`                   | Override de `docker.image`                                                                                    |
+| `VR_PLAYWRIGHT_IMAGE`               | Override de `docker.playwrightImage`                                                                          |
+| `VR_DOCKER_SHOW_LOGS`               | Override de `docker.showLogs` (`1`/`true` ou `0`/`false`)                                                     |
 
 ### Benchmark performance (concurrency + sharding CI)
 

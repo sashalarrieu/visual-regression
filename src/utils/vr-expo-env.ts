@@ -8,6 +8,8 @@
 export const getExpoSpawnEnv = (base: NodeJS.ProcessEnv, projectRoot: string): NodeJS.ProcessEnv => ({
   ...base,
   VR_PROJECT_ROOT: projectRoot,
+  /** Expo n'ouvre pas le navigateur — le launcher le fait une seule fois à la fin. */
+  BROWSER: "none",
   EXPO_DOCTOR_SKIP_DEPENDENCY_VERSION_CHECK: "1",
   /** DevDeps du package (eslint-config-expo, etc.) absentes chez les consommateurs npm/pnpm. */
   EXPO_NO_DEPENDENCY_VALIDATION: "1",

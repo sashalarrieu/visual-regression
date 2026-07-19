@@ -27,7 +27,7 @@ import {
   waitForStorybookHostReady,
   waitForStorybookStories,
 } from "../utils/node";
-import { getCaptureDaemonUrl } from "../utils/vr-capture-backend";
+import { getCaptureBackend, getCaptureDaemonUrl } from "../utils/vr-capture-backend";
 import {
   fetchCaptureDaemonHealth,
   isCaptureDaemonReusableForProject,
@@ -80,6 +80,14 @@ const openInBrowser = (url: string): void => {
     log("yellow", "⚠️", `Ouverture automatique impossible (${url})`);
   });
   child.unref();
+};
+
+/** Une seule ouverture par URL et par session `yarn vr`. */
+const openedBrowserUrls = new Set<string>();
+const openInBrowserOnce = (url: string): void => {
+  if (openedBrowserUrls.has(url)) return;
+  openedBrowserUrls.add(url);
+  openInBrowser(url);
 };
 
 const isPortAvailable = async (port: number): Promise<boolean> => {
@@ -210,9 +218,14 @@ const parseStorybookPort = (storybookUrl: string): number => {
   }
 };
 
+const LOCAL_CAPTURE_HINT =
+  'Capture locale uniquement si configurée : capture.backend: "local" dans vr.config.cjs (ou VR_CAPTURE_BACKEND=local).';
+
 const main = async () => {
   assertVrConfig(PROJECT_ROOT);
   const vrConfig = resolveVrConfig(PROJECT_ROOT);
+  const captureBackend = getCaptureBackend(vrConfig);
+  const useLocalCapture = captureBackend === "local";
   const storybookUrl = vrConfig.storybook.url;
   const storybookPort = parseStorybookPort(storybookUrl);
   const explicitStorybookMode = vrConfig.launcher.storybookMode;
@@ -224,6 +237,9 @@ const main = async () => {
   const expoAvailable = await isPortAvailable(EXPO_PORT);
   const vrServerAvailable = await isPortAvailable(VR_SERVER_PORT);
   const storybookAvailable = await isPortAvailable(storybookPort);
+  /** Storybook déjà servi au démarrage → ne pas rouvrir l'onglet (sauf sidecar recréé). */
+  const storybookWasUpAtStart = !storybookAvailable;
+  let shouldOpenStorybookInBrowser = !storybookWasUpAtStart;
 
   if (!expoAvailable) {
     log("yellow", "⚠️", `Le port ${EXPO_PORT} est déjà utilisé`);
@@ -242,9 +258,7 @@ const main = async () => {
   const daemonAvailable = await isPortAvailable(daemonPort);
   let localStorybookProcess: ChildProcess | null = null;
   let dockerLogsProcess: ChildProcess | null = null;
-  let useDockerSidecar = true;
-  const allowExplicitLocalCaptureFallback =
-    (process.env.VR_CAPTURE_BACKEND || "").toLowerCase() === "local" || process.env.VR_FORCE_LOCAL_CAPTURE === "1";
+  let useDockerSidecar = !useLocalCapture;
 
   log("blue", "🔧", "Démarrage du serveur VR");
 
@@ -279,19 +293,63 @@ const main = async () => {
 
   log("green", "✅", "Serveur VR prêt");
 
-  const startLocalCaptureFallback = async (reason: string, opts?: { auto?: boolean }): Promise<void> => {
-    if (!allowExplicitLocalCaptureFallback && !opts?.auto) {
-      throw new Error(
-        `${reason}. Docker est obligatoire par défaut pour 'yarn vr'. ` +
-          "Pour désactiver Docker explicitement: VR_CAPTURE_BACKEND=local yarn vr " +
-          "(ou VR_FORCE_LOCAL_CAPTURE=1 yarn vr).",
-      );
+  let compareProcess: ChildProcess | null = null;
+
+  const cleanupOnFatal = (): void => {
+    killProcessTree(compareProcess);
+    killProcessTree(expo);
+    killProcessTree(vrServer);
+    stopStorybook(localStorybookProcess);
+    stopComposeLogs(dockerLogsProcess);
+    if (useDockerSidecar) {
+      composeDownSync(PROJECT_ROOT);
     }
+  };
+
+  const abortVr = (reason: string, detail?: string): never => {
+    log("red", "❌", reason);
+    if (detail) {
+      log("yellow", "⚠️", detail);
+    }
+    log("yellow", "ℹ️", LOCAL_CAPTURE_HINT);
+    cleanupOnFatal();
+    process.exit(1);
+  };
+
+  // Interface VR dès que le serveur API est prêt (en parallèle du sidecar / captures).
+  log("blue", "📱", "Démarrage de l'interface VR (Expo depuis le package)");
+  const expoArgs = ["expo", "start", "--web", "--port", String(EXPO_PORT)];
+  if (process.env.VR_CLEAR_METRO === "1") {
+    expoArgs.push("--clear");
+  }
+
+  const npxRunner = process.platform === "win32" ? "npx.cmd" : "npx";
+  const expo = spawn(npxRunner, expoArgs, {
+    stdio: "inherit",
+    cwd: EXPO_ROOT,
+    env: getExpoSpawnEnv(process.env, PROJECT_ROOT),
+    ...spawnShellOption,
+  });
+
+  const expoReadyPromise = waitForServer(EXPO_PORT, 60);
+
+  expo.on("error", err => {
+    log("red", "❌", `Erreur Expo: ${err.message}`);
+    cleanupOnFatal();
+    process.exit(1);
+  });
+
+  const startLocalCapture = async (): Promise<void> => {
     stopComposeLogs(dockerLogsProcess);
     dockerLogsProcess = null;
     useDockerSidecar = false;
     process.env.VR_CAPTURE_BACKEND = "local";
-    log("yellow", "⚠️", `Mode fallback local activé: ${reason}`);
+    log("blue", "📚", "Capture locale (Storybook + Playwright sur l'hôte)");
+    log(
+      "yellow",
+      "⚠️",
+      "Rendu non reproductible : fort risque de diffs vs baseline Docker/CI (polices, OS, GPU). Ne pas valider comme référence.",
+    );
     const mode = getStorybookMode();
     const storybook = await startStorybook({
       projectRoot: PROJECT_ROOT,
@@ -321,18 +379,16 @@ const main = async () => {
     startDockerLogFollow();
   };
 
-  // --- Sidecar Docker de capture (Storybook + daemon Playwright) ---
-  if (!isDockerDaemonRunning()) {
-    if (isDockerCliAvailable()) {
-      log(
-        "yellow",
-        "⚠️",
-        "Docker Desktop installé mais le daemon est arrêté — bascule en capture locale (Storybook + Playwright sur l'hôte)",
-      );
-    }
-    await startLocalCaptureFallback(
-      isDockerCliAvailable() ? "Docker Desktop n'est pas démarré" : "Docker indisponible",
-      { auto: true },
+  // --- Capture : Docker (défaut) ou locale si capture.backend === "local" ---
+  if (useLocalCapture) {
+    await startLocalCapture();
+    shouldOpenStorybookInBrowser = true;
+  } else if (!isDockerDaemonRunning()) {
+    abortVr(
+      isDockerCliAvailable()
+        ? "Docker Desktop est installé mais le daemon n'est pas démarré."
+        : "Docker n'est pas disponible sur cette machine.",
+      "La VR exige Docker pour la capture (sidecar Storybook + Playwright).",
     );
   } else {
     // Le conteneur choisit son mode Storybook via VR_STORYBOOK_MODE.
@@ -364,8 +420,10 @@ const main = async () => {
         "✅",
         `Sidecar de capture déjà actif — réutilisation (${getCaptureDaemonUrl()} → Storybook ${storybookUrl})`,
       );
+      shouldOpenStorybookInBrowser = false;
       startDockerLogFollow();
     } else {
+      shouldOpenStorybookInBrowser = true;
       if (thisProjectPortsBusy) {
         if (existingHealth?.ready && existingHealth.hostProjectRoot) {
           log(
@@ -408,13 +466,12 @@ const main = async () => {
       }
 
       if (composeCode !== 0) {
-        const autoFallback = !isDockerDaemonRunning();
-        if (autoFallback) {
-          log("yellow", "⚠️", "Le daemon Docker ne répond plus — bascule en capture locale");
-        }
         log("yellow", "📜", "Derniers logs Docker :");
         dumpComposeLogs(PROJECT_ROOT);
-        await startLocalCaptureFallback(`docker compose up a échoué (code ${composeCode})`, { auto: autoFallback });
+        abortVr(
+          `docker compose up a échoué (code ${composeCode}).`,
+          "Vérifiez Docker Desktop, les ports Storybook/daemon et vr.config.cjs (storybook.url / capture.daemonUrl).",
+        );
       } else {
         restartDockerLogFollow();
         log("blue", "⏳", "Attente du daemon de capture (Storybook + Playwright — le 1er build peut être long)");
@@ -442,7 +499,7 @@ const main = async () => {
             stopComposeLogs(dockerLogsProcess);
             dockerLogsProcess = null;
             await composeDown(PROJECT_ROOT).catch(() => undefined);
-            await startLocalCaptureFallback("daemon de capture injoignable");
+            abortVr("Daemon de capture injoignable après démarrage du sidecar Docker.");
           }
         }
         if (useDockerSidecar) {
@@ -462,7 +519,7 @@ const main = async () => {
       throw new Error(
         `Storybook inaccessible sur ${storybookUrl} depuis l'hôte après 180 s ` +
           `(dernier décompte: ${hostReady.storyCount} story). ` +
-          `Vérifiez Docker Desktop et le mapping Storybook (${storybookUrl}), ou relancez avec VR_CAPTURE_BACKEND=local.`,
+          `Vérifiez Docker Desktop et le mapping Storybook (${storybookUrl}).`,
       );
     }
   } else {
@@ -499,12 +556,15 @@ const main = async () => {
       log("blue", "🐳", `Daemon de capture sur ${getCaptureDaemonUrl()}`);
     } else {
       log("blue", "📚", `Storybook (local) disponible sur ${storybookUrl}`);
-      log("yellow", "⚠️", "Capture locale active (fallback) : Docker non utilisé pour cette session");
+      log("yellow", "ℹ️", "Capture locale (capture.backend: local) — Docker non utilisé pour cette session");
     }
-    openInBrowser(storybookUrl);
+    openInBrowserOnce(EXPO_URL);
+    if (shouldOpenStorybookInBrowser) {
+      openInBrowserOnce(storybookUrl);
+    }
   };
 
-  const runInitialCompareJob = (): Promise<number> => {
+  const spawnInitialCompare = (): ChildProcess => {
     const compareScriptInProject = path.join(
       PROJECT_ROOT,
       "node_modules",
@@ -517,7 +577,7 @@ const main = async () => {
     const compareScript = existsSync(compareScriptInProject)
       ? compareScriptInProject
       : path.join(SCRIPT_DIR, "compare-visual-regressions.ts");
-    log("blue", "🔍", "Comparaison initiale (incrémentale)…");
+    log("blue", "🔍", "Comparaison initiale (incrémentale) en arrière-plan…");
 
     const compareEnv = {
       ...process.env,
@@ -534,81 +594,51 @@ const main = async () => {
       log("yellow", "📌", "Script comparaison: npx tsx (fallback)");
     }
 
-    return new Promise((resolve, reject) => {
-      const compare =
-        tsxCli !== null
-          ? spawn("node", [tsxCli, compareScript], {
-              stdio: "inherit",
-              cwd: PROJECT_ROOT,
-              env: compareEnv,
-              shell: false,
-            })
-          : spawn(compareCommand, compareArgs, {
-              stdio: "inherit",
-              cwd: PROJECT_ROOT,
-              env: compareEnv,
-              ...spawnShellOption,
-            });
-
-      compare.on("error", err => reject(err));
-      compare.on("close", code => resolve(code ?? 1));
-    });
+    return tsxCli !== null
+      ? spawn("node", [tsxCli, compareScript], {
+          stdio: "inherit",
+          cwd: PROJECT_ROOT,
+          env: compareEnv,
+          shell: false,
+        })
+      : spawn(compareCommand, compareArgs, {
+          stdio: "inherit",
+          cwd: PROJECT_ROOT,
+          env: compareEnv,
+          ...spawnShellOption,
+        });
   };
 
-  // Compare avant Expo : évite que Metro surveille public/Screenshots pendant les captures
+  // Expo en parallèle des captures : Metro ignore public/Screenshots (metro.config.cjs blockList).
   if (!launcherConfig.runInitialCompare) {
     log("blue", "⏭️", "Comparaison initiale ignorée (launcher.runInitialCompare: false ou VR_RUN_INITIAL_COMPARE=0)");
   } else {
-    try {
-      const code = await runInitialCompareJob();
+    compareProcess = spawnInitialCompare();
+    compareProcess.on("error", err => {
+      log("red", "❌", `Erreur comparaison initiale: ${err.message}`);
+    });
+    compareProcess.on("close", code => {
+      compareProcess = null;
       if (code === 0) {
         log("green", "✅", "Comparaison initiale terminée");
       } else {
         log("yellow", "⚠️", `Comparaison terminée avec le code ${code}`);
       }
-    } catch (err) {
-      log("red", "❌", `Erreur comparaison initiale: ${err instanceof Error ? err.message : String(err)}`);
-    }
+      void rebuildIndex();
+    });
   }
 
-  log("blue", "📱", "Démarrage de l'interface VR (Expo depuis le package)");
-
-  const expoArgs = ["expo", "start", "--web", "--port", String(EXPO_PORT)];
-  if (process.env.VR_CLEAR_METRO === "1") {
-    expoArgs.push("--clear");
-  }
-
-  const expo = spawn("cross-env", expoArgs, {
-    stdio: "inherit",
-    shell: true,
-    cwd: EXPO_ROOT,
-    env: getExpoSpawnEnv(process.env, PROJECT_ROOT),
-  });
-
-  expo.on("error", err => {
-    log("red", "❌", `Erreur Expo: ${err.message}`);
-    killProcessTree(vrServer);
-    stopStorybook(localStorybookProcess);
-    stopComposeLogs(dockerLogsProcess);
-    if (useDockerSidecar) {
-      composeDownSync(PROJECT_ROOT);
-    }
-    process.exit(1);
-  });
-
-  const expoReady = await waitForServer(EXPO_PORT, 60);
+  const expoReady = await expoReadyPromise;
   if (!expoReady) {
     log("red", "❌", "Expo n'a pas démarré à temps");
-    killProcessTree(vrServer);
-    stopStorybook(localStorybookProcess);
-    stopComposeLogs(dockerLogsProcess);
-    if (useDockerSidecar) {
-      composeDownSync(PROJECT_ROOT);
-    }
+    cleanupOnFatal();
     process.exit(1);
   }
 
   log("green", "✅", "Expo prêt");
+  if (compareProcess) {
+    log("blue", "ℹ️", "Interface VR ouverte — les captures continuent en arrière-plan (mise à jour via SSE)");
+  }
   await rebuildIndex();
   printReadyMessage();
 
@@ -617,6 +647,7 @@ const main = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
     log("yellow", "⚠️", `Arrêt en cours (${signal})`);
+    killProcessTree(compareProcess);
     killProcessTree(expo);
     killProcessTree(vrServer);
     stopStorybook(localStorybookProcess);

@@ -2,17 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList } from "react-native";
 
 import { Box } from "./atoms/Box";
+import { Button } from "./atoms/Button";
 import { Divider } from "./atoms/Divider";
 import { EndOfList } from "./atoms/EndOfList";
 import { Modal } from "./atoms/Modal";
+import { TabBar } from "./atoms/TabBar";
 import { Typo } from "./atoms/Typo";
 import { CompareModal } from "./components/CompareModal";
-import { ContentPanel } from "./components/ContentPanel";
+import { ContentPanel, type ContentPanelMode } from "./components/ContentPanel";
 import { DeletedItemRow } from "./components/DeletedItemRow";
 import { ErrorState } from "./components/ErrorState";
-import { TreePanel } from "./components/TreePanel";
+import { TreePanel, type TreePanelMode } from "./components/TreePanel";
 import { VisualRegressionTopBar } from "./components/VisualRegressionTopBar";
-import { VR_SERVER_URL } from "./constants/constants";
+import { SCREENSHOTS_DIR, VR_SERVER_URL } from "./constants/constants";
 import { DeviceConfigProvider } from "./providers/DeviceConfigProvider";
 import { spacing } from "./themes/theme";
 import type { DeletedItem, DeviceDisplayConfig, Node, StoryScreenshotsPath } from "./types/types";
@@ -22,6 +24,8 @@ export type VisualRegressionsProps = {
   /** Config d'affichage des devices (label, icon, color). Optionnel : si absent, récupérée depuis le serveur VR (GET /regressions/config/devices, depuis vr.config.cjs). */
   devices?: DeviceDisplayConfig[];
 };
+
+type LeftTab = "regressions" | "all-stories";
 
 const useServerEvents = (onEvent: () => void) => {
   const onEventRef = useRef(onEvent);
@@ -103,7 +107,117 @@ const useRegressionTrees = () => {
     }
   }, []);
 
-  return { ...data, loading, error, refresh: rebuild };
+  return { ...data, loading, error, refresh: rebuild, refetch: fetchTrees };
+};
+
+const CATALOG_EMPTY_RETRY_MS = 2_500;
+const CATALOG_EMPTY_RETRY_MAX = 48; // ~2 min — Storybook peut démarrer après l'UI
+
+/** Catalogue Storybook × devices — fingerprint pour éviter les rebuilds UI inutiles. */
+const useAllStoriesTree = (enabled: boolean) => {
+  const [data, setData] = useState<{ tree: Node | null; fingerprint: string; storyCount: number }>({
+    tree: null,
+    fingerprint: "",
+    storyCount: 0,
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const fingerprintRef = useRef("");
+  const storyCountRef = useRef(0);
+  const hasTreeRef = useRef(false);
+
+  const fetchCatalog = useCallback(async (options?: { silent?: boolean }) => {
+    try {
+      if (!options?.silent) {
+        setLoading(true);
+        setError(null);
+      }
+      const response = await fetch(`${VR_SERVER_URL}/regressions/stories-tree`);
+      if (!response.ok) throw new Error("Failed to fetch stories catalog");
+      const result = (await response.json()) as {
+        tree: Node | null;
+        fingerprint: string;
+        storyCount: number;
+        error?: string;
+      };
+      if (result.error) throw new Error(result.error);
+      const sameFingerprint = result.fingerprint === fingerprintRef.current;
+      // Si on a déjà un arbre pour ce fingerprint, ignore. Sinon applique (1er succès / retry).
+      if (sameFingerprint && hasTreeRef.current) {
+        setError(null);
+        return { ok: true as const, storyCount: result.storyCount, empty: result.storyCount === 0 };
+      }
+      fingerprintRef.current = result.fingerprint;
+      hasTreeRef.current = Boolean(result.tree);
+      storyCountRef.current = result.storyCount;
+      setData({
+        tree: result.tree,
+        fingerprint: result.fingerprint,
+        storyCount: result.storyCount,
+      });
+      setError(null);
+      return { ok: true as const, storyCount: result.storyCount, empty: result.storyCount === 0 };
+    } catch (err) {
+      console.error("❌ Error fetching stories catalog:", err);
+      if (!options?.silent) {
+        setError(err instanceof Error ? err.message : "Unknown error");
+      }
+      return { ok: false as const, storyCount: storyCountRef.current, empty: true };
+    } finally {
+      if (!options?.silent) {
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  // Précharge dès le montage : l'UI Expo s'ouvre souvent avant que Storybook soit indexé.
+  useEffect(() => {
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const schedule = (delayMs: number) => {
+      timer = setTimeout(() => {
+        void tick();
+      }, delayMs);
+    };
+
+    const tick = async () => {
+      if (cancelled) return;
+      attempts += 1;
+      const result = await fetchCatalog({ silent: attempts > 1 });
+      if (cancelled) return;
+      if (result.ok && !result.empty && hasTreeRef.current) return;
+      if (attempts >= CATALOG_EMPTY_RETRY_MAX) {
+        if (!hasTreeRef.current) {
+          setLoading(false);
+          setError(prev => prev ?? "Catalogue Storybook toujours vide après plusieurs tentatives.");
+        }
+        return;
+      }
+      schedule(CATALOG_EMPTY_RETRY_MS);
+    };
+
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [fetchCatalog]);
+
+  // Rafraîchit à l'ouverture de l'onglet Stories (sans flash si déjà chargé).
+  useEffect(() => {
+    if (!enabled) return;
+    void fetchCatalog({ silent: hasTreeRef.current });
+  }, [enabled, fetchCatalog]);
+
+  useServerEvents(
+    useCallback(() => {
+      void fetchCatalog({ silent: true });
+    }, [fetchCatalog]),
+  );
+
+  return { ...data, loading, error, refresh: fetchCatalog };
 };
 
 const useDeletedRegressions = () => {
@@ -164,11 +278,14 @@ const usePixelDiffMetrics = (diffPath: string | undefined, enabled: boolean) => 
   return countPixelDiff;
 };
 
+const DEVICES_FETCH_TIMEOUT_MS = 10_000;
+
 const useDevicesConfig = (devicesProp?: DeviceDisplayConfig[]) => {
   const hasProp = Boolean(devicesProp && devicesProp.length > 0);
   const [devices, setDevices] = useState<DeviceDisplayConfig[]>(devicesProp ?? []);
   const [loading, setLoading] = useState(!hasProp);
   const [error, setError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
     if (devicesProp?.length) {
@@ -177,56 +294,106 @@ const useDevicesConfig = (devicesProp?: DeviceDisplayConfig[]) => {
       setError(null);
       return;
     }
-    let cancelled = false;
+
+    const requestId = ++requestIdRef.current;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), DEVICES_FETCH_TIMEOUT_MS);
+
+    const isCurrent = () => requestId === requestIdRef.current;
+
     setLoading(true);
     setError(null);
-    fetch(`${VR_SERVER_URL}/regressions/config/devices`)
-      .then(res => {
+
+    fetch(`${VR_SERVER_URL}/regressions/config/devices`, { signal: controller.signal })
+      .then(async res => {
         if (!res.ok) {
           throw new Error(
             `Le serveur VR a répondu avec un statut ${res.status} (${res.statusText || "inconnu"}) pour la config devices.`,
           );
         }
-        return res.json();
-      })
-      .then(data => {
-        if (!cancelled && Array.isArray(data?.devices)) setDevices(data.devices);
+        const data = (await res.json()) as { devices?: DeviceDisplayConfig[] };
+        if (!Array.isArray(data?.devices) || data.devices.length === 0) {
+          throw new Error("Réponse devices invalide ou vide depuis le serveur VR.");
+        }
+        if (!isCurrent()) return;
+        setDevices(data.devices);
+        setError(null);
+        setLoading(false);
       })
       .catch(err => {
-        if (!cancelled) {
-          let message: string;
-          if (err instanceof TypeError || String(err).includes("Failed to fetch")) {
-            message = `Impossible de contacter le serveur VR (${VR_SERVER_URL}). Vérifie qu'il est bien démarré (script "vr:server") et accessible depuis ta machine.`;
-          } else if (err instanceof Error) {
-            message = err.message;
-          } else {
-            message = String(err);
-          }
-          setError(message);
+        if (!isCurrent()) return;
+        if (controller.signal.aborted && (err as Error)?.name === "AbortError") {
+          setError(`Délai dépassé en contactant le serveur VR (${VR_SERVER_URL}/regressions/config/devices).`);
+          setLoading(false);
+          return;
         }
+        let message: string;
+        if (err instanceof TypeError || String(err).includes("Failed to fetch")) {
+          message = `Impossible de contacter le serveur VR (${VR_SERVER_URL}). Vérifie qu'il est bien démarré (script "vr:server") et accessible depuis ta machine.`;
+        } else if (err instanceof Error) {
+          message = err.message;
+        } else {
+          message = String(err);
+        }
+        setError(message);
+        setLoading(false);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        clearTimeout(timeoutId);
       });
+
     return () => {
-      cancelled = true;
+      clearTimeout(timeoutId);
+      controller.abort();
     };
   }, [devicesProp]);
 
   return { devices, loading, error };
 };
 
+const resolveComponentDir = (node: Node): string | undefined => {
+  if (node.componentDir) return node.componentDir;
+  const path = node.path;
+  const screenshotsIdx = path.lastIndexOf(`/${SCREENSHOTS_DIR}/`);
+  if (screenshotsIdx > 0) return path.slice(0, screenshotsIdx);
+  const lastSlash = path.lastIndexOf("/");
+  return lastSlash > 0 ? path.slice(0, lastSlash) : undefined;
+};
+
 export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsProps) => {
+  const [leftTab, setLeftTab] = useState<LeftTab>("regressions");
   const [showDeleted, setShowDeleted] = useState(false);
   const [showCompareModal, setShowCompareModal] = useState(false);
   const [showHeatmap, setShowHeatmap] = useState(false);
-  const [selectedPath, setSelectedPath] = useState<string | undefined>();
+  const [selectedPathRegressions, setSelectedPathRegressions] = useState<string | undefined>();
+  const [selectedPathCatalog, setSelectedPathCatalog] = useState<string | undefined>();
   const [pendingRestorePath, setPendingRestorePath] = useState<string | undefined>();
   const [bulkLoading, setBulkLoading] = useState(false);
 
+  const isCatalog = leftTab === "all-stories";
+  const selectedPath = isCatalog ? selectedPathCatalog : selectedPathRegressions;
+  const setSelectedPath = isCatalog ? setSelectedPathCatalog : setSelectedPathRegressions;
+
   const { devices, loading: devicesLoading, error: devicesError } = useDevicesConfig(devicesProp);
-  const { tree, lastUpdate, loading, error: treeError, refresh } = useRegressionTrees();
+  const {
+    tree: regressionsTree,
+    lastUpdate,
+    loading: regressionsLoading,
+    error: regressionsError,
+    refresh: refreshRegressions,
+  } = useRegressionTrees();
+  const {
+    tree: catalogTree,
+    fingerprint: catalogFingerprint,
+    loading: catalogLoading,
+    error: catalogError,
+    refresh: refreshCatalog,
+  } = useAllStoriesTree(isCatalog);
   const { deletedList, refresh: refreshDeleted } = useDeletedRegressions();
+
+  const tree = isCatalog ? catalogTree : regressionsTree;
+  const loading = isCatalog ? catalogLoading : regressionsLoading;
+  const treeError = isCatalog ? catalogError : regressionsError;
 
   const flattenTree = useCallback((node: Node | null): Node[] => {
     if (!node) return [];
@@ -235,6 +402,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   }, []);
 
   const allList = useMemo(() => flattenTree(tree), [tree, flattenTree]);
+  const regressionsList = useMemo(() => flattenTree(regressionsTree), [regressionsTree, flattenTree]);
 
   const currentStory = useMemo(
     () => (selectedPath ? allList.find(n => n.path === selectedPath) : undefined),
@@ -242,9 +410,16 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   );
 
   const treeType = useMemo<"new" | "diff">(() => {
-    if (!currentStory?.storyType) return "new";
-    return currentStory.storyType;
+    if (currentStory?.storyType === "diff") return "diff";
+    return "new";
   }, [currentStory]);
+
+  const panelMode = useMemo<ContentPanelMode>(() => {
+    if (!isCatalog) return treeType;
+    if (currentStory?.storyType === "baseline") return "baseline";
+    if (currentStory?.storyType === "missing") return "missing";
+    return "missing";
+  }, [isCatalog, currentStory, treeType]);
 
   const imageUrls = useMemo<StoryScreenshotsPath>(
     () => currentStory?.imageUrls || { original: undefined, temp: undefined, diff: undefined, new: undefined },
@@ -256,9 +431,12 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     [currentStory],
   );
 
-  const goTo = useCallback((node: Node) => {
-    setSelectedPath(node.path);
-  }, []);
+  const goTo = useCallback(
+    (node: Node) => {
+      setSelectedPath(node.path);
+    },
+    [setSelectedPath],
+  );
 
   const goNext = useCallback(() => {
     if (!allList.length) {
@@ -275,7 +453,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     } else {
       setSelectedPath(allList[0].path);
     }
-  }, [allList, selectedPath]);
+  }, [allList, selectedPath, setSelectedPath]);
 
   const goPrev = useCallback(() => {
     if (!allList.length) {
@@ -292,17 +470,17 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     } else {
       setSelectedPath(allList[allList.length - 1].path);
     }
-  }, [allList, selectedPath]);
+  }, [allList, selectedPath, setSelectedPath]);
 
   const advanceAfterDelete = useCallback(() => {
-    const deletedPath = selectedPath;
-    const remaining = deletedPath ? allList.filter(n => n.path !== deletedPath) : allList;
+    const deletedPath = selectedPathRegressions;
+    const remaining = deletedPath ? regressionsList.filter(n => n.path !== deletedPath) : regressionsList;
     if (remaining.length > 0) {
-      setSelectedPath(remaining[0].path);
+      setSelectedPathRegressions(remaining[0].path);
     } else {
-      setSelectedPath(undefined);
+      setSelectedPathRegressions(undefined);
     }
-  }, [allList, selectedPath]);
+  }, [regressionsList, selectedPathRegressions]);
 
   const focusRestoredStory = useCallback((fullPath: string) => {
     setPendingRestorePath(fullPath);
@@ -310,15 +488,15 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
 
   useEffect(() => {
     if (!pendingRestorePath) return;
-    const match = allList.find(n => n.path === pendingRestorePath);
+    const match = regressionsList.find(n => n.path === pendingRestorePath);
     if (match) {
-      setSelectedPath(match.path);
+      setSelectedPathRegressions(match.path);
       setPendingRestorePath(undefined);
     }
-  }, [pendingRestorePath, allList]);
+  }, [pendingRestorePath, regressionsList]);
 
   useEffect(() => {
-    if (pendingRestorePath) return;
+    if (!isCatalog && pendingRestorePath) return;
     if (!selectedPath && allList.length > 0) {
       setSelectedPath(allList[0].path);
       return;
@@ -326,7 +504,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     if (selectedPath && allList.length > 0 && !allList.some(n => n.path === selectedPath)) {
       setSelectedPath(allList[0].path);
     }
-  }, [selectedPath, allList, pendingRestorePath]);
+  }, [selectedPath, allList, pendingRestorePath, isCatalog, setSelectedPath]);
 
   const {
     handleValid,
@@ -342,7 +520,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     onNext: goNext,
     onAfterDelete: advanceAfterDelete,
     onAfterRestore: focusRestoredStory,
-    onAfterBulk: () => setSelectedPath(undefined),
+    onAfterBulk: () => setSelectedPathRegressions(undefined),
   });
 
   const runBulk = useCallback(async (action: () => Promise<void>) => {
@@ -358,18 +536,20 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
 
   const countPixelDiff = usePixelDiffMetrics(
     storyScreenshotsPath?.diff,
-    showHeatmap && treeType === "diff" && Boolean(storyScreenshotsPath?.diff),
+    !isCatalog && showHeatmap && treeType === "diff" && Boolean(storyScreenshotsPath?.diff),
   );
 
   const handleCompareStoryFromTree = useCallback(
     async (node: Node) => {
-      if (!node.storyId || !node.deviceName) return;
+      if (!node.storyId || !node.deviceName || node.ignored) return;
       const path = node.path;
-      const lastSlash = path.lastIndexOf("/");
-      const componentDir = lastSlash > 0 ? path.slice(0, lastSlash) : undefined;
+      const componentDir = resolveComponentDir(node);
       setRegeneratingPaths(prev => new Set(prev).add(path));
       try {
         await handleCompareStory(node.storyId, node.deviceName, componentDir);
+        if (isCatalog) {
+          await refreshCatalog({ silent: true });
+        }
       } finally {
         setRegeneratingPaths(prev => {
           const next = new Set(prev);
@@ -378,12 +558,28 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
         });
       }
     },
-    [handleCompareStory],
+    [handleCompareStory, isCatalog, refreshCatalog],
   );
+
+  const handleRefresh = useCallback(() => {
+    if (isCatalog) {
+      void refreshCatalog();
+    } else {
+      void refreshRegressions();
+    }
+  }, [isCatalog, refreshCatalog, refreshRegressions]);
 
   useEffect(() => {
     if (showDeleted) refreshDeleted();
   }, [showDeleted, refreshDeleted]);
+
+  const leftTabs = useMemo(
+    () => [
+      { key: "regressions" as const, title: "Régressions", alertTextInfo: regressionsList.length },
+      { key: "all-stories" as const, title: "Stories", alertTextInfo: catalogTree?.countTotal },
+    ],
+    [regressionsList.length, catalogTree?.countTotal],
+  );
 
   if (devicesLoading) {
     return (
@@ -407,6 +603,8 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     );
   }
 
+  const treeMode: TreePanelMode = isCatalog ? "all-stories" : "regressions";
+
   return (
     <DeviceConfigProvider deviceConfigs={devices}>
       <>
@@ -415,15 +613,39 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
           flexDirection="row"
           backgroundColor="newTheme_background"
         >
-          <TreePanel
-            tree={tree}
-            loading={loading}
-            onRefresh={refresh}
-            onNodeClick={goTo}
-            currentStory={currentStory}
-            onCompareStoryNode={handleCompareStoryFromTree}
-            regeneratingPaths={regeneratingPaths}
-          />
+          <Box
+            flexDirection="column"
+            style={{ alignSelf: "stretch", width: 300 }}
+          >
+            <Box px="m">
+              <Box
+                flexDirection="row"
+                alignItems="center"
+                justifyContent="space-between"
+                pb="s"
+              >
+                <TabBar
+                  tabs={leftTabs}
+                  selectedTabKey={leftTab}
+                  onSelectedTabKey={setLeftTab}
+                />
+                <Button
+                  icon={{ name: "replay" }}
+                  color="base"
+                  onPress={handleRefresh}
+                  loading={loading}
+                />
+              </Box>
+            </Box>
+            <TreePanel
+              tree={tree}
+              onNodeClick={goTo}
+              currentStory={currentStory}
+              onCompareStoryNode={handleCompareStoryFromTree}
+              regeneratingPaths={regeneratingPaths}
+              mode={treeMode}
+            />
+          </Box>
           <Divider orientation="vertical" />
           <Box
             flex={1}
@@ -433,10 +655,11 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
               currentStory={currentStory}
               treeType={treeType}
               showHeatmap={showHeatmap}
-              countPixelDiff={showHeatmap ? countPixelDiff : undefined}
+              countPixelDiff={!isCatalog && showHeatmap ? countPixelDiff : undefined}
               storyScreenshotsPath={storyScreenshotsPath}
               hasItems={allList.length > 0}
               bulkLoading={bulkLoading}
+              variant={isCatalog ? "catalog" : "regressions"}
               onPrev={goPrev}
               onNext={goNext}
               onValid={() => handleValid(storyScreenshotsPath)}
@@ -450,13 +673,25 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
             <ContentPanel
               tree={tree}
               treeType={treeType}
+              panelMode={panelMode}
               showHeatmap={showHeatmap}
               imageUrls={imageUrls}
               isRegenerating={currentStory ? regeneratingPaths.has(currentStory.path) : false}
               storyId={currentStory?.storyId}
               deviceName={currentStory?.deviceName}
               fetchError={treeError}
-              contentKey={`${selectedPath ?? ""}-${lastUpdate}`}
+              loading={loading}
+              contentKey={
+                isCatalog ? `${selectedPath ?? ""}-${catalogFingerprint}` : `${selectedPath ?? ""}-${lastUpdate}`
+              }
+              ignored={Boolean(currentStory?.ignored)}
+              onGenerate={
+                currentStory && !currentStory.ignored
+                  ? () => {
+                      void handleCompareStoryFromTree(currentStory);
+                    }
+                  : undefined
+              }
             />
           </Box>
         </Box>
@@ -488,7 +723,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
           visible={showCompareModal}
           onClose={() => setShowCompareModal(false)}
           deletedList={deletedList}
-          allList={allList}
+          allList={regressionsList}
           onCompareSelected={handleCompareSelected}
           onCompareStory={handleCompareStory}
           onCompareByType={handleCompareByType}
