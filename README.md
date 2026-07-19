@@ -476,7 +476,7 @@ Hôte (vr-server + UI Expo)  ──POST /capture/batch──▶  Conteneur (Stor
 yarn vr
 ```
 
-`yarn vr` démarre automatiquement le sidecar (build de l'image au premier lancement), attend que le daemon soit prêt, puis lance le serveur VR, la comparaison initiale et l'UI. Storybook tourne **dans le conteneur** (écoute interne `6006`) et est forwardé sur un **port hôte dérivé** de la racine du projet (plage `16000–16999`, daemon `18000–18999`). Plusieurs projets peuvent ainsi garder un sidecar chaud en parallèle sans collision. Override possible via `storybook.url` / `capture.daemonUrl` ou `VR_STORYBOOK_URL` / `VR_CAPTURE_DAEMON_URL`.
+`yarn vr` démarre automatiquement le sidecar (build de l'image au premier lancement), attend que le daemon soit prêt, puis lance le serveur VR, la comparaison initiale et l'UI. Une fois Storybook et l'UI Expo prêts, le launcher **ouvre (ou focalise) les deux URLs dans le navigateur** — uniquement si un onglet avec la même origine n'existe pas déjà (détection native sur macOS ; sinon ouverture classique). Expo est lancé avec `BROWSER=none` pour éviter un double onglet. Storybook tourne **dans le conteneur** (écoute interne `6006`) et est forwardé sur un **port hôte dérivé** de la racine du projet (plage `16000–16999`, daemon `18000–18999`). Plusieurs projets peuvent ainsi garder un sidecar chaud en parallèle sans collision. Override possible via `storybook.url` / `capture.daemonUrl` ou `VR_STORYBOOK_URL` / `VR_CAPTURE_DAEMON_URL`.
 
 Commandes de contrôle du sidecar :
 
@@ -613,13 +613,13 @@ Le package contient ses scripts CLI dans `src/scripts/`, exposés via la command
 | `vr:compare`          | Lance la comparaison Playwright (régénération des screenshots)                                |
 | `vr:benchmark`        | Mesure la concurrency optimale sur 1 machine (`1..16`)                                        |
 | `vr:benchmark-shards` | Simule le sharding CI (shardTotal × concurrency) sans lancer toute la matrix                  |
-| `vr:test-validation`  | Checklist Phases 0–8 (`--static-only` sans Storybook)                                         |
-| `vr:storybook:static` | Build Storybook + stats (`preview-stats.json`) puis serve sur le port 6006                    |
 | `vr:app`              | Lance l’app Expo en mode régression (port 2804)                                               |
 | `vr:capture:up`       | Démarre le sidecar Docker de capture (+ attend le daemon)                                     |
 | `vr:capture:down`     | Arrête le sidecar Docker de capture                                                           |
 | `vr:capture:status`   | État du sidecar + health du daemon (port hôte dérivé)                                         |
 | `vr:kill-ports`       | Libère Expo `2804`, UI `2805`, et ports Storybook/daemon du projet courant                    |
+
+> **Réservé au package** (ne pas exposer dans le `package.json` hôte) : `vr:test-incremental`, `vr:test-validation`, `vr:storybook:static`.
 
 Exemple dans le `package.json` du projet hôte (à lancer depuis la racine du projet) :
 

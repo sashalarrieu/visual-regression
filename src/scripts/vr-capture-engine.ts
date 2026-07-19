@@ -347,7 +347,7 @@ const withCaptureTimeBudget = (config: VrConfig): VrConfig => {
   };
 };
 
-const formatDurationMs = (ms: number): string => {
+export const formatDurationMs = (ms: number): string => {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   const seconds = ms / 1000;
   if (seconds < 60) return `${seconds.toFixed(1)}s`;

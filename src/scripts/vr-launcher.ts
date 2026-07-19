@@ -44,6 +44,7 @@ import {
   stopComposeLogs,
 } from "../utils/vr-docker";
 import { getExpoSpawnEnv } from "../utils/vr-expo-env";
+import { openInBrowserIfNeeded } from "../utils/vr-open-browser";
 import {
   getStorybookMode,
   resolveStorybookModeForCapture,
@@ -62,24 +63,17 @@ const log = (color: keyof typeof LOG_COLORS, prefix: string, message: string) =>
   console.log(`${LOG_COLORS[color]}${prefix}${LOG_COLORS.reset} ${message}`);
 };
 
-const openInBrowser = (url: string): void => {
-  const platform = process.platform;
-  const command =
-    platform === "darwin"
-      ? { cmd: "open", args: [url] }
-      : platform === "win32"
-        ? { cmd: "cmd", args: ["/c", "start", "", url] }
-        : { cmd: "xdg-open", args: [url] };
-
-  const child = spawn(command.cmd, command.args, {
-    stdio: "ignore",
-    detached: true,
-    shell: false,
-  });
-  child.on("error", () => {
-    log("yellow", "⚠️", `Ouverture automatique impossible (${url})`);
-  });
-  child.unref();
+const openReadyUrlsInBrowser = (urls: string[]): void => {
+  for (const url of urls) {
+    const result = openInBrowserIfNeeded(url);
+    if (result === "focused") {
+      log("blue", "🌐", `Onglet déjà ouvert — focus (${url})`);
+    } else if (result === "opened") {
+      log("blue", "🌐", `Ouverture navigateur (${url})`);
+    } else {
+      log("yellow", "⚠️", `Ouverture automatique impossible (${url})`);
+    }
+  }
 };
 
 const isPortAvailable = async (port: number): Promise<boolean> => {
@@ -501,7 +495,7 @@ const main = async () => {
       log("blue", "📚", `Storybook (local) disponible sur ${storybookUrl}`);
       log("yellow", "⚠️", "Capture locale active (fallback) : Docker non utilisé pour cette session");
     }
-    openInBrowser(storybookUrl);
+    openReadyUrlsInBrowser([storybookUrl, EXPO_URL]);
   };
 
   const runInitialCompareJob = (): Promise<number> => {
