@@ -222,6 +222,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   const [showHeatmap, setShowHeatmap] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | undefined>();
   const [pendingRestorePath, setPendingRestorePath] = useState<string | undefined>();
+  const [bulkLoading, setBulkLoading] = useState(false);
 
   const { devices, loading: devicesLoading, error: devicesError } = useDevicesConfig(devicesProp);
   const { tree, lastUpdate, loading, error: treeError, refresh } = useRegressionTrees();
@@ -329,17 +330,29 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
 
   const {
     handleValid,
+    handleValidAll,
     handleCompareStory,
     handleCompareSelected,
     handleCompareByType,
     handleCompareAllStories,
     handleDelete,
+    handleDeleteAll,
     handleRestore,
   } = createVisualRegressionActions({
     onNext: goNext,
     onAfterDelete: advanceAfterDelete,
     onAfterRestore: focusRestoredStory,
+    onAfterBulk: () => setSelectedPath(undefined),
   });
+
+  const runBulk = useCallback(async (action: () => Promise<void>) => {
+    setBulkLoading(true);
+    try {
+      await action();
+    } finally {
+      setBulkLoading(false);
+    }
+  }, []);
 
   const [regeneratingPaths, setRegeneratingPaths] = useState<Set<string>>(new Set());
 
@@ -422,10 +435,14 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
               showHeatmap={showHeatmap}
               countPixelDiff={showHeatmap ? countPixelDiff : undefined}
               storyScreenshotsPath={storyScreenshotsPath}
+              hasItems={allList.length > 0}
+              bulkLoading={bulkLoading}
               onPrev={goPrev}
               onNext={goNext}
               onValid={() => handleValid(storyScreenshotsPath)}
               onDelete={() => handleDelete(storyScreenshotsPath)}
+              onValidAll={() => runBulk(handleValidAll)}
+              onDeleteAll={() => runBulk(handleDeleteAll)}
               onShowDeleted={() => setShowDeleted(true)}
               onToggleHeatmap={setShowHeatmap}
               onOpenCompareModal={() => setShowCompareModal(true)}

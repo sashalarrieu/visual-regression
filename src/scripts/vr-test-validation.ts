@@ -2,10 +2,11 @@
  * Checklist de validation Phases 0–9 (plan d'optimisation VR).
  *
  * Usage :
- *   yarn vr:test-validation              → checks statiques + Storybook si dispo
- *   yarn vr:test-validation --static-only → sans Storybook
+ *   yarn vr:test-validation              → checks statiques + Storybook (auto-start si besoin)
+ *   yarn vr:test-validation --static-only → sans Storybook (mode CI)
  *   yarn vr:test-validation --help
  */
+import type { ChildProcess } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 
@@ -15,6 +16,7 @@ import {
   IGNORE_VR_TAG,
   LIVE_ANIMATION_VR_TAG,
   SKIP_PLAY_VR_TAG,
+  STORYBOOK_PORT,
 } from "../constants/constants";
 import { clickByLabel, delay } from "../storybook/play-helpers";
 import { fromVRDeviceConfig } from "../utils";
@@ -34,9 +36,11 @@ import { getDiffVerificationMaxAttempts, shouldRetryDiffVerification } from "../
 import { getComposeFile, getDockerImage } from "../utils/vr-docker";
 import { filterCaptureTasks, getChangedFiles, type StoryIndexEntry } from "../utils/vr-incremental";
 import { estimateCiWallClockMs, partitionTasksByShardTotal } from "../utils/vr-sharding";
+import { parseUrlPort } from "../utils/vr-sidecar-ports";
 import { appendVrCaptureParam, expectsVrStoryPlay, waitForStoryStable } from "../utils/vr-steadysnap";
 import { normalizeStoryVrParameters, resolveEffectiveVrConfig, shouldUseBurstCapture } from "../utils/vr-story-config";
 import { resolveStoryPlayFunction } from "../utils/vr-story-play";
+import { startStorybook, stopStorybook } from "../utils/vr-storybook-runtime";
 
 import { compareAllStories, compareByType, compareSelectedStories } from "./compare-visual-regressions";
 import type { CaptureTask } from "./vr-capture-engine";
@@ -67,10 +71,10 @@ const printHelp = (): void => {
 Validation Phases 0–9 — @setshao/visual-regression
 
 Usage:
-  yarn vr:test-validation              Checks statiques + Storybook si disponible
-  yarn vr:test-validation --static-only  Sans prérequis Storybook
+  yarn vr:test-validation              Checks statiques + Storybook (démarre Storybook si besoin)
+  yarn vr:test-validation --static-only  Checks statiques uniquement (CI)
 
-Couvre : vr.config.cjs, env overrides, TurboSnap, sharding, exports compare UI.
+Couvre : vr.config.cjs, env overrides, TurboSnap, sharding, exports compare UI, incrémental live.
 `);
 };
 
@@ -421,63 +425,93 @@ const buildAllTasks = (stories: StoryIndexEntry[]): CaptureTask[] => {
 const runStorybookChecks = async (): Promise<CheckResult[]> => {
   const results: CheckResult[] = [];
   const config = resolveVrConfig(PROJECT_ROOT);
-  const ready = await waitForStorybookStories(1, 10, PROJECT_ROOT);
+  const storybookUrl = config.storybook.url;
+  const storybookPort = parseUrlPort(storybookUrl, STORYBOOK_PORT);
+
+  let ready = await waitForStorybookStories(1, 5, PROJECT_ROOT);
+  let startedProcess: ChildProcess | null = null;
+
+  if (!ready) {
+    console.log(`\n📚 Storybook absent sur ${storybookUrl} — démarrage automatique (port ${storybookPort})…\n`);
+    try {
+      const started = await startStorybook({
+        projectRoot: PROJECT_ROOT,
+        port: storybookPort,
+        mode: "dev",
+        waitMaxAttempts: 120,
+      });
+      startedProcess = started.process;
+      ready = started.ready;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      results.push(check(false, "", `Démarrage Storybook échoué : ${message}`));
+      stopStorybook(startedProcess);
+      return results;
+    }
+  }
 
   results.push(
     check(
       ready,
-      `Storybook prêt (${config.storybook.url})`,
-      `Storybook indisponible — lancez yarn storybook ou yarn vr`,
+      `Storybook prêt (${storybookUrl})`,
+      `Storybook indisponible sur ${storybookUrl} — vérifiez le port ou utilisez --static-only`,
     ),
   );
 
-  if (!ready) return results;
-
-  const stories = await fetchStories();
-  const allTasks = buildAllTasks(stories);
-  const deviceCount = Object.keys(getDevicesConfig(config.devices)).length;
-
-  results.push(
-    check(
-      stories.length > 0,
-      `${stories.length} stories × ${deviceCount} devices = ${allTasks.length} tâches`,
-      "Aucune story VR éligible",
-    ),
-  );
-
-  const changed = getChangedFiles(PROJECT_ROOT, config);
-  const { tasks: incrementalTasks } = filterCaptureTasks(allTasks, config, stories, {
-    projectRoot: PROJECT_ROOT,
-    publicScreenshotsDir: path.join(PROJECT_ROOT, "public", "Screenshots"),
-    changedFiles: changed,
-  });
-
-  if (changed.files.length === 0 && !changed.requiresFullRun) {
-    results.push(
-      check(
-        incrementalTasks.length === 0,
-        "Incrémental sans changement → 0 tâche à capturer",
-        `Incrémental sans changement : ${incrementalTasks.length} tâche(s) inattendue(s)`,
-      ),
-    );
-  } else {
-    results.push({
-      ok: true,
-      message: `ℹ️  Incrémental : ${incrementalTasks.length}/${allTasks.length} tâche(s) (${changed.files.length} fichier(s) modifié(s))`,
-    });
+  if (!ready) {
+    stopStorybook(startedProcess);
+    return results;
   }
 
-  const shard2 = partitionTasksByShardTotal(incrementalTasks.length > 0 ? incrementalTasks : allTasks, 2);
-  const shardCounts = shard2.map(s => s.length);
-  const total = shardCounts.reduce((a, b) => a + b, 0);
-  const base = incrementalTasks.length > 0 ? incrementalTasks.length : allTasks.length;
-  results.push(
-    check(
-      Math.abs(total - base) <= 0 && shardCounts.every(c => c >= 0),
-      `Sharding VR_SHARD_TOTAL=2 : [${shardCounts.join(", ")}] / ${base} tâches`,
-      "Répartition shard incorrecte",
-    ),
-  );
+  try {
+    const stories = await fetchStories();
+    const allTasks = buildAllTasks(stories);
+    const deviceCount = Object.keys(getDevicesConfig(config.devices)).length;
+
+    results.push(
+      check(
+        stories.length > 0,
+        `${stories.length} stories × ${deviceCount} devices = ${allTasks.length} tâches`,
+        "Aucune story VR éligible",
+      ),
+    );
+
+    const changed = getChangedFiles(PROJECT_ROOT, config);
+    const { tasks: incrementalTasks } = filterCaptureTasks(allTasks, config, stories, {
+      projectRoot: PROJECT_ROOT,
+      publicScreenshotsDir: path.join(PROJECT_ROOT, "public", "Screenshots"),
+      changedFiles: changed,
+    });
+
+    if (changed.files.length === 0 && !changed.requiresFullRun) {
+      results.push(
+        check(
+          incrementalTasks.length === 0,
+          "Incrémental sans changement → 0 tâche à capturer",
+          `Incrémental sans changement : ${incrementalTasks.length} tâche(s) inattendue(s)`,
+        ),
+      );
+    } else {
+      results.push({
+        ok: true,
+        message: `ℹ️  Incrémental : ${incrementalTasks.length}/${allTasks.length} tâche(s) (${changed.files.length} fichier(s) modifié(s))`,
+      });
+    }
+
+    const shard2 = partitionTasksByShardTotal(incrementalTasks.length > 0 ? incrementalTasks : allTasks, 2);
+    const shardCounts = shard2.map(s => s.length);
+    const total = shardCounts.reduce((a, b) => a + b, 0);
+    const base = incrementalTasks.length > 0 ? incrementalTasks.length : allTasks.length;
+    results.push(
+      check(
+        Math.abs(total - base) <= 0 && shardCounts.every(c => c >= 0),
+        `Sharding VR_SHARD_TOTAL=2 : [${shardCounts.join(", ")}] / ${base} tâches`,
+        "Répartition shard incorrecte",
+      ),
+    );
+  } finally {
+    stopStorybook(startedProcess);
+  }
 
   return results;
 };

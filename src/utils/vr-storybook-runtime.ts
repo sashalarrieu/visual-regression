@@ -76,16 +76,55 @@ export const getStorybookMode = (): StorybookMode => {
 };
 
 /**
- * Ajoute node_modules/.bin du projet au PATH.
- * Nécessaire quand on spawn des binaires locaux (storybook, cross-env, serve)
- * hors du contexte yarn/npm — notamment dans le conteneur où le daemon est lancé
- * directement (le PATH n'inclut pas node_modules/.bin).
+ * Répertoires node_modules/.bin où le CLI `storybook` peut se trouver
+ * (racine, package workspace, dossier dérivé de SBCONFIG_CONFIG_DIR).
+ */
+export const resolveStorybookBinDirs = (projectRoot: string): string[] => {
+  const dirs: string[] = [];
+  const seen = new Set<string>();
+  const add = (dir: string): void => {
+    const resolved = path.resolve(dir);
+    if (seen.has(resolved) || !existsSync(resolved)) return;
+    seen.add(resolved);
+    dirs.push(resolved);
+  };
+
+  add(path.join(projectRoot, "node_modules", ".bin"));
+  add(path.join(projectRoot, "apps", "storybook", "node_modules", ".bin"));
+
+  const sbconfig = process.env.SBCONFIG_CONFIG_DIR?.trim();
+  if (sbconfig) {
+    const configAbs = path.resolve(projectRoot, sbconfig);
+    // apps/storybook/.storybook → apps/storybook/node_modules/.bin
+    add(path.join(path.dirname(configAbs), "node_modules", ".bin"));
+  }
+
+  return dirs;
+};
+
+/** Chemin absolu du binaire storybook, ou null. */
+export const resolveStorybookBin = (projectRoot: string): string | null => {
+  for (const binDir of resolveStorybookBinDirs(projectRoot)) {
+    const candidate = path.join(binDir, "storybook");
+    if (existsSync(candidate)) return candidate;
+    if (process.platform === "win32" && existsSync(`${candidate}.cmd`)) return `${candidate}.cmd`;
+  }
+  return null;
+};
+
+/**
+ * Ajoute les node_modules/.bin pertinents au PATH (racine + workspace Storybook).
+ * Nécessaire quand on spawn des binaires locaux hors yarn/npm/pnpm — notamment Docker.
  */
 const withLocalBinPath = (projectRoot: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
-  const binDir = path.join(projectRoot, "node_modules", ".bin");
   const sep = process.platform === "win32" ? ";" : ":";
   const currentPath = env.PATH ?? process.env.PATH ?? "";
-  return { ...env, PATH: `${binDir}${sep}${currentPath}` };
+  const binDirs = resolveStorybookBinDirs(projectRoot);
+  if (binDirs.length === 0) {
+    const fallback = path.join(projectRoot, "node_modules", ".bin");
+    return { ...env, PATH: `${fallback}${sep}${currentPath}` };
+  }
+  return { ...env, PATH: `${binDirs.join(sep)}${sep}${currentPath}` };
 };
 
 const STORYBOOK_SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".cjs", ".mjs", ".css", ".scss", ".mdx"]);
@@ -197,11 +236,20 @@ export const startDevStorybookServer = (projectRoot: string, port: number): Chil
   if (process.env.VR_DOCKER === "1") {
     args.push("--host", "0.0.0.0");
   }
-  return spawn("storybook", args, {
+  const storybookBin = resolveStorybookBin(projectRoot);
+  const envForSpawn = withDockerPolling(withLocalBinPath(projectRoot, { ...process.env, STORYBOOK_ENV: "web" }));
+  if (!storybookBin) {
+    console.error(
+      "❌ [vr-storybook] Binaire `storybook` introuvable. " +
+        "Ajoutez la dépendance `storybook` (racine ou package workspace) " +
+        "ou définissez SBCONFIG_CONFIG_DIR vers le dossier .storybook du package qui l'embarque.",
+    );
+  }
+  return spawn(storybookBin ?? "storybook", args, {
     stdio: "inherit",
     shell: true,
     cwd: projectRoot,
-    env: withDockerPolling(withLocalBinPath(projectRoot, { ...process.env, STORYBOOK_ENV: "web" })),
+    env: envForSpawn,
   });
 };
 

@@ -278,6 +278,7 @@ export const getVrPublicConfig = (root: string): VrPublicConfig => {
     compareScope: config.compare.scope,
     compareBase: config.compare.base,
     captureConcurrency: config.capture.concurrency,
+    captureConcurrencyDev: config.capture.concurrencyDev,
     captureMaxTestTime: config.capture.maxTestTime,
     captureRemoteChunkSize: config.capture.remoteChunkSize,
     captureBackend: config.capture.backend,

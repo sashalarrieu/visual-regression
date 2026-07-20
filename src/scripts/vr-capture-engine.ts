@@ -58,7 +58,6 @@ const PROJECT_ROOT = getProjectRoot();
 const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR } = getProjectPaths(PROJECT_ROOT);
 
 const ABSOLUTE_MAX_CONCURRENCY = 16;
-const DEFAULT_DEV_CAPTURE_CONCURRENCY = 2;
 
 /** Suppression récursive manuelle (fallback Windows ENOTEMPTY). */
 const recursiveDeleteDir = (dir: string): void => {
@@ -288,13 +287,39 @@ const addLogs = ({ log, type = "error", logs }: { log: string; type?: "error" | 
   logs.errors.push(log);
 };
 
-export const resolveConcurrency = (taskCount: number, config: VrConfig): number => {
-  const requested = config.capture.concurrency;
-  const isDevStorybook = getStorybookMode() === "dev";
-  const devCap = Number(process.env.VR_CAPTURE_DEV_CONCURRENCY || DEFAULT_DEV_CAPTURE_CONCURRENCY);
-  const capped = isDevStorybook && Number.isFinite(devCap) && devCap > 0 ? Math.min(requested, devCap) : requested;
-  return Math.min(Math.max(1, capped), taskCount, ABSOLUTE_MAX_CONCURRENCY);
+/** Profil de concurrence selon le mode Storybook (dev vs static/CI). */
+export type ConcurrencyProfile = "dev" | "static";
+
+export type ResolvedConcurrency = {
+  workers: number;
+  profile: ConcurrencyProfile;
+  /** Valeur config du profil actif (`concurrencyDev` ou `concurrency`). */
+  configured: number;
+  concurrency: number;
+  concurrencyDev: number;
 };
+
+/**
+ * Choisit le nombre de workers :
+ * - Storybook **dev** → `capture.concurrencyDev` (défaut 2)
+ * - Storybook **static** (local ou CI) → `capture.concurrency`
+ * Puis borne par taskCount et ABSOLUTE_MAX_CONCURRENCY (16).
+ */
+export const resolveConcurrencyDetails = (taskCount: number, config: VrConfig): ResolvedConcurrency => {
+  const profile: ConcurrencyProfile = getStorybookMode() === "dev" ? "dev" : "static";
+  const configured = profile === "dev" ? config.capture.concurrencyDev : config.capture.concurrency;
+  const workers = Math.min(Math.max(1, configured), taskCount, ABSOLUTE_MAX_CONCURRENCY);
+  return {
+    workers,
+    profile,
+    configured,
+    concurrency: config.capture.concurrency,
+    concurrencyDev: config.capture.concurrencyDev,
+  };
+};
+
+export const resolveConcurrency = (taskCount: number, config: VrConfig): number =>
+  resolveConcurrencyDetails(taskCount, config).workers;
 
 const getStoryGotoWaitUntil = (): "commit" | "domcontentloaded" | "load" =>
   getStorybookMode() === "static" ? "load" : "commit";
@@ -322,7 +347,7 @@ const withCaptureTimeBudget = (config: VrConfig): VrConfig => {
   };
 };
 
-const formatDurationMs = (ms: number): string => {
+export const formatDurationMs = (ms: number): string => {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   const seconds = ms / 1000;
   if (seconds < 60) return `${seconds.toFixed(1)}s`;
@@ -331,9 +356,22 @@ const formatDurationMs = (ms: number): string => {
   return `${minutes}m ${remainingSeconds}s`;
 };
 
-/** Affiche le démarrage du pool (workers + tâches). */
-export const logCapturePoolStart = (concurrency: number, taskCount: number, mode: string): void => {
-  console.log(`\n⚡️ Pool de capture : ${concurrency} worker(s) | ${taskCount} tâche(s) | mode ${mode}`);
+/** Affiche le démarrage du pool (workers + tâches + profil concurrency). */
+export const logCapturePoolStart = (
+  concurrencyOrDetails: number | ResolvedConcurrency,
+  taskCount: number,
+  mode: string,
+): void => {
+  if (typeof concurrencyOrDetails === "number") {
+    console.log(`\n⚡️ Pool de capture : ${concurrencyOrDetails} worker(s) | ${taskCount} tâche(s) | mode ${mode}`);
+    return;
+  }
+  const { workers, profile, concurrency, concurrencyDev } = concurrencyOrDetails;
+  const profileHint =
+    profile === "dev"
+      ? `profil=dev · concurrencyDev=${concurrencyDev} · concurrency(static/CI)=${concurrency}`
+      : `profil=static/CI · concurrency=${concurrency} · concurrencyDev=${concurrencyDev}`;
+  console.log(`\n⚡️ Pool de capture : ${workers} worker(s) [${profileHint}] | ${taskCount} tâche(s) | mode ${mode}`);
 };
 
 /** Affiche la durée totale de génération. */
@@ -847,7 +885,8 @@ export const runCaptureBatch = async (
   }
 
   const devices = getDevicesConfig(config.devices);
-  const concurrency = options.concurrency ?? resolveConcurrency(tasks.length, config);
+  const concurrencyDetails = resolveConcurrencyDetails(tasks.length, config);
+  const concurrency = options.concurrency ?? concurrencyDetails.workers;
   const contextCache = new Map<string, BrowserContext>();
   const semaphore = new Semaphore(concurrency);
 
@@ -860,7 +899,11 @@ export const runCaptureBatch = async (
   let done = 0;
 
   if (!options.quietBatchLogs) {
-    logCapturePoolStart(concurrency, tasks.length, options.mode);
+    logCapturePoolStart(
+      options.concurrency !== undefined ? concurrency : concurrencyDetails,
+      tasks.length,
+      options.mode,
+    );
   }
 
   try {

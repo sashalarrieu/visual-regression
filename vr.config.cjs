@@ -44,7 +44,10 @@ module.exports = {
     },
   ],
   capture: {
+    // static (local) + CI — override CI : VR_CONCURRENCY
     concurrency: 15,
+    // Storybook dev (Vite) — override : VR_CONCURRENCY_DEV
+    concurrencyDev: 2,
     maxTestTime: 10000,
     remoteChunkSize: 50,
   },
@@ -61,9 +64,8 @@ module.exports = {
   launcher: {
     runInitialCompare: true,
   },
-  docker: {},
-  storybook: {
-    url: "http://localhost:6006",
+  docker: {
+    showLogs: true,
   },
   stabilize: {
     freezeAnimations: true,

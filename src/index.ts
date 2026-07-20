@@ -13,6 +13,7 @@ export {
 } from "./constants/constants";
 export { vrPreviewDecorators, withVrReanimatedFreeze, withVrStoryPlay } from "./storybook/preview";
 export type { DeviceDisplayConfig, DeviceStyle, VrStoryParameters } from "./types/types";
+export { defineVrParameters } from "./types/types";
 export { createVisualRegressionActions, fromVRDeviceConfig } from "./utils";
 export * from "./utils/vr-story-play";
 export { VisualRegressions } from "./VisualRegressions";

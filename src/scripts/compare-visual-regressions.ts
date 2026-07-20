@@ -26,10 +26,11 @@ import type { CaptureTask } from "./vr-capture-engine";
 import {
   deleteAllVisualRegressionsFiles,
   deleteVisualRegressionsFilesForDevice,
+  formatDurationMs,
   logCapturePoolStart,
   logCaptureTasks,
   logCaptureTimerEnd,
-  resolveConcurrency,
+  resolveConcurrencyDetails,
   runCaptureBatch,
 } from "./vr-capture-engine";
 
@@ -260,7 +261,10 @@ const buildTasksFromDeletedByType = async (
   return tasks;
 };
 
-const printLogsSummary = (logs: { errors: string[]; vrs: string[]; news: string[] }): void => {
+const printLogsSummary = (
+  logs: { errors: string[]; vrs: string[]; news: string[] },
+  options?: { durationMs?: number },
+): void => {
   const nbErrors = logs.errors.length;
   if (nbErrors) {
     console.log(`\n\n   ============================`);
@@ -298,9 +302,13 @@ const printLogsSummary = (logs: { errors: string[]; vrs: string[]; news: string[
     logs.news.forEach(log => console.log(log));
   }
 
-  if (nbErrors || nbVisualRegressions || nbNewScreenshot) {
-    console.error(`\n\n⚠️  Visual tests failed : ${nbVisualRegressions}`);
-    console.log(`❇️  New screenshots : ${nbNewScreenshot}`);
+  const durationMs = options?.durationMs;
+  console.log(`\n\n   ============================`);
+  console.error(`⚠️  Visual tests failed : ${nbVisualRegressions}`);
+  console.log(`❇️  New screenshots : ${nbNewScreenshot}`);
+  console.error(`🚫  Capture errors : ${nbErrors}`);
+  if (durationMs !== undefined) {
+    console.log(`⏱️  Total duration : ${formatDurationMs(durationMs)}`);
   }
 };
 
@@ -464,8 +472,8 @@ const compareVisualRegressions = async () => {
   }
 
   const batchMode = compareMode === "full" || reason === "global-trigger" ? "full" : "incremental";
-  const concurrency = resolveConcurrency(tasks.length, config);
-  logCapturePoolStart(concurrency, tasks.length, batchMode);
+  const concurrencyDetails = resolveConcurrencyDetails(tasks.length, config);
+  logCapturePoolStart(concurrencyDetails, tasks.length, batchMode);
 
   if (isDockerCaptureBackend(config)) {
     console.log(`🐳 Backend capture: ${getCaptureBackend(config)} (délégation au sidecar Docker)`);
@@ -474,7 +482,7 @@ const compareVisualRegressions = async () => {
   const result = await runCaptureBatch(tasks, {
     mode: batchMode,
     wipePublicDir,
-    concurrency,
+    concurrency: concurrencyDetails.workers,
     quietBatchLogs: true,
   });
 
@@ -482,7 +490,7 @@ const compareVisualRegressions = async () => {
 
   if (!result.success || result.error) {
     console.error(`\n❌ Échec de la capture: ${result.error ?? "erreur inconnue"}`);
-    printLogsSummary(result.logs);
+    printLogsSummary(result.logs, { durationMs: result.stats.durationMs });
     process.exit(1);
   }
 
@@ -491,13 +499,13 @@ const compareVisualRegressions = async () => {
       `\n❌ Aucune capture n'a été exécutée (${tasks.length} tâche(s) planifiées, durée ${result.stats.durationMs} ms).`,
     );
     console.error("   Vérifiez que le daemon Docker tourne (pnpm vr:capture:status) et que Storybook répond.");
-    printLogsSummary(result.logs);
+    printLogsSummary(result.logs, { durationMs: result.stats.durationMs });
     process.exit(1);
   }
 
   updateManifest(PROJECT_ROOT, config);
 
-  printLogsSummary(result.logs);
+  printLogsSummary(result.logs, { durationMs: result.stats.durationMs });
 
   const nbErrors = result.logs.errors.length;
   const nbVisualRegressions = result.logs.vrs.length;

@@ -59,7 +59,28 @@ fi
 # Sous-commande CLI à lancer : daemon (dev, défaut) ou oneshot (CI).
 CMD="${VR_ENTRYPOINT_CMD:-capture-daemon}"
 
-# Lancement via la CLI du package (résolue selon le contexte).
+# Sync des sources file: dans le package installé (deps Linux restent dans
+# node_modules du projet). Exécuter directement /visual-regression échoue car
+# son node_modules est un volume anonyme vide (masque les binaires Darwin).
+sync_linked_vr_sources() {
+  if [ ! -f /visual-regression/bin/visual-regression.mjs ]; then
+    return 0
+  fi
+  if [ ! -e node_modules/@setshao/visual-regression ]; then
+    return 0
+  fi
+  VR_PKG=$(cd node_modules/@setshao/visual-regression && pwd -P 2>/dev/null || true)
+  if [ -z "$VR_PKG" ] || [ "$VR_PKG" = "/visual-regression" ]; then
+    return 0
+  fi
+  echo "🐳 [vr-docker] Sync sources file: → $VR_PKG"
+  rm -rf "$VR_PKG/src" "$VR_PKG/bin"
+  cp -a /visual-regression/src "$VR_PKG/src"
+  cp -a /visual-regression/bin "$VR_PKG/bin"
+}
+
+sync_linked_vr_sources
+
 if [ -x node_modules/.bin/visual-regression ]; then
   exec node_modules/.bin/visual-regression "$CMD"
 elif [ -f bin/visual-regression.mjs ]; then

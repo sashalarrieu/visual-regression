@@ -18,10 +18,14 @@ export type VisualRegressionTopBarProps = {
   showHeatmap: boolean;
   countPixelDiff?: number | null;
   storyScreenshotsPath?: StoryScreenshotsPath;
+  hasItems?: boolean;
+  bulkLoading?: boolean;
   onPrev: () => void;
   onNext: () => void;
   onValid: () => void;
   onDelete: () => void;
+  onValidAll: () => void;
+  onDeleteAll: () => void;
   onShowDeleted: () => void;
   onToggleHeatmap: (value: boolean) => void;
   onOpenCompareModal: () => void;
@@ -33,10 +37,14 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
   showHeatmap,
   countPixelDiff,
   storyScreenshotsPath,
+  hasItems = false,
+  bulkLoading = false,
   onPrev,
   onNext,
   onValid,
   onDelete,
+  onValidAll,
+  onDeleteAll,
   onShowDeleted,
   onToggleHeatmap,
   onOpenCompareModal,
@@ -74,12 +82,30 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
             color="primary"
             width={80}
             onPress={onValid}
+            disabled={!currentStory || bulkLoading}
           />
           <Button
             label="Refuser"
             color="danger"
             width={80}
             onPress={onDelete}
+            disabled={!currentStory || bulkLoading}
+          />
+          <Button
+            label="Tout valider"
+            color="primary"
+            width={110}
+            onPress={onValidAll}
+            loading={bulkLoading}
+            disabled={!hasItems || bulkLoading}
+          />
+          <Button
+            label="Tout refuser"
+            color="danger"
+            width={110}
+            onPress={onDeleteAll}
+            loading={bulkLoading}
+            disabled={!hasItems || bulkLoading}
           />
           <Button
             icon={{ name: "chevron-right" }}
