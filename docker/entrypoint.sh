@@ -20,13 +20,14 @@ detect_lockfile() {
 LOCKFILE=$(detect_lockfile)
 
 install_deps() {
-  # Sidecar VR : pas de hooks git ; deps optionnelles (ex. msgpackr-extract natif) inutiles.
+  # Sidecar VR : pas de hooks git.
+  # Garder les deps optionnelles, certaines fournissent des bindings natifs requis en CI (ex. oxc-parser).
   export HUSKY=0
   case "$LOCKFILE" in
-    yarn.lock) yarn install --frozen-lockfile --ignore-optional ;;
-    pnpm-lock.yaml) corepack pnpm install --frozen-lockfile --no-optional ;;
-    package-lock.json) npm ci --omit=optional ;;
-    *) npm install --omit=optional ;;
+    yarn.lock) yarn install --frozen-lockfile ;;
+    pnpm-lock.yaml) corepack pnpm install --frozen-lockfile ;;
+    package-lock.json) npm ci ;;
+    *) npm install ;;
   esac
 }
 
