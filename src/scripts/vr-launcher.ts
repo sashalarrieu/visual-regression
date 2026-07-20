@@ -5,7 +5,6 @@ import { existsSync } from "fs";
 import path from "path";
 
 import {
-  CAPTURE_DAEMON_PORT,
   EXPO_PORT,
   EXPO_URL,
   LOCAL_URL,
@@ -29,15 +28,23 @@ import {
   waitForStorybookStories,
 } from "../utils/node";
 import { getCaptureDaemonUrl } from "../utils/vr-capture-backend";
-import { waitForCaptureDaemon } from "../utils/vr-capture-remote";
+import {
+  fetchCaptureDaemonHealth,
+  isCaptureDaemonReusableForProject,
+  waitForCaptureDaemon,
+} from "../utils/vr-capture-remote";
 import {
   composeDown,
   composeDownSync,
   composeUp,
+  dumpComposeLogs,
+  followComposeLogs,
   isDockerCliAvailable,
   isDockerDaemonRunning,
+  stopComposeLogs,
 } from "../utils/vr-docker";
 import { getExpoSpawnEnv } from "../utils/vr-expo-env";
+import { openInBrowserIfNeeded } from "../utils/vr-open-browser";
 import {
   getStorybookMode,
   resolveStorybookModeForCapture,
@@ -56,24 +63,17 @@ const log = (color: keyof typeof LOG_COLORS, prefix: string, message: string) =>
   console.log(`${LOG_COLORS[color]}${prefix}${LOG_COLORS.reset} ${message}`);
 };
 
-const openInBrowser = (url: string): void => {
-  const platform = process.platform;
-  const command =
-    platform === "darwin"
-      ? { cmd: "open", args: [url] }
-      : platform === "win32"
-        ? { cmd: "cmd", args: ["/c", "start", "", url] }
-        : { cmd: "xdg-open", args: [url] };
-
-  const child = spawn(command.cmd, command.args, {
-    stdio: "ignore",
-    detached: true,
-    shell: false,
-  });
-  child.on("error", () => {
-    log("yellow", "⚠️", `Ouverture automatique impossible (${url})`);
-  });
-  child.unref();
+const openReadyUrlsInBrowser = (urls: string[]): void => {
+  for (const url of urls) {
+    const result = openInBrowserIfNeeded(url);
+    if (result === "focused") {
+      log("blue", "🌐", `Onglet déjà ouvert — focus (${url})`);
+    } else if (result === "opened") {
+      log("blue", "🌐", `Ouverture navigateur (${url})`);
+    } else {
+      log("yellow", "⚠️", `Ouverture automatique impossible (${url})`);
+    }
+  }
 };
 
 const isPortAvailable = async (port: number): Promise<boolean> => {
@@ -231,11 +231,11 @@ const main = async () => {
     await new Promise(resolve => setTimeout(resolve, process.platform === "win32" ? 3500 : 2000));
   }
 
-  // Storybook et Playwright tournent dans le sidecar Docker (ports 6006 + 2810 forwardés).
-  // Le nettoyage/réutilisation du sidecar est géré plus bas via un test de santé du daemon
-  // (ne PAS killPort ces ports → tuerait le proxy Docker).
-  const daemonAvailable = await isPortAvailable(CAPTURE_DAEMON_PORT);
+  // Storybook et daemon : ports hôte dérivés (ou override config) — ne pas killPort ici.
+  const daemonPort = parseStorybookPort(vrConfig.capture.daemonUrl);
+  const daemonAvailable = await isPortAvailable(daemonPort);
   let localStorybookProcess: ChildProcess | null = null;
+  let dockerLogsProcess: ChildProcess | null = null;
   let useDockerSidecar = true;
   const allowExplicitLocalCaptureFallback =
     (process.env.VR_CAPTURE_BACKEND || "").toLowerCase() === "local" || process.env.VR_FORCE_LOCAL_CAPTURE === "1";
@@ -281,6 +281,8 @@ const main = async () => {
           "(ou VR_FORCE_LOCAL_CAPTURE=1 yarn vr).",
       );
     }
+    stopComposeLogs(dockerLogsProcess);
+    dockerLogsProcess = null;
     useDockerSidecar = false;
     process.env.VR_CAPTURE_BACKEND = "local";
     log("yellow", "⚠️", `Mode fallback local activé: ${reason}`);
@@ -296,6 +298,21 @@ const main = async () => {
       throw new Error(`Storybook local non prêt sur ${storybookUrl}`);
     }
     log("green", "✅", `Storybook local prêt (${storybookUrl}, mode=${storybook.mode})`);
+  };
+
+  const startDockerLogFollow = (): void => {
+    if (!useDockerSidecar || !vrConfig.docker.showLogs || dockerLogsProcess) return;
+    log("blue", "📜", "Suivi des logs Docker dans ce terminal (docker.showLogs / VR_DOCKER_SHOW_LOGS)");
+    dockerLogsProcess = followComposeLogs(PROJECT_ROOT);
+    dockerLogsProcess.on("error", err => {
+      log("yellow", "⚠️", `Impossible de suivre les logs Docker: ${err.message}`);
+    });
+  };
+
+  const restartDockerLogFollow = (): void => {
+    stopComposeLogs(dockerLogsProcess);
+    dockerLogsProcess = null;
+    startDockerLogFollow();
   };
 
   // --- Sidecar Docker de capture (Storybook + daemon Playwright) ---
@@ -329,31 +346,57 @@ const main = async () => {
       );
     }
 
-    // Réutiliser un sidecar déjà sain → redémarrage de `yarn vr` rapide et fiable
-    // (Storybook prend les changements de code via HMR sur le bind mount, pas besoin
-    // de recréer le conteneur). On ne recrée que si le sidecar est absent ou cassé.
-    const sidecarBusy = !storybookAvailable || !daemonAvailable;
-    const existingDaemonHealthy = sidecarBusy ? await waitForCaptureDaemon(1) : false;
+    // Réutiliser un sidecar déjà sain pour *ce* projet (ports dérivés).
+    // Les sidecars des autres projets restent intacts (ports / Compose distincts).
+    const thisProjectPortsBusy = !storybookAvailable || !daemonAvailable;
+    const existingHealth = thisProjectPortsBusy ? await fetchCaptureDaemonHealth() : null;
+    const canReuseSidecar = isCaptureDaemonReusableForProject(existingHealth, PROJECT_ROOT);
 
-    if (existingDaemonHealthy) {
-      log("green", "✅", `Sidecar de capture déjà actif — réutilisation (${getCaptureDaemonUrl()})`);
+    if (canReuseSidecar) {
+      log(
+        "green",
+        "✅",
+        `Sidecar de capture déjà actif — réutilisation (${getCaptureDaemonUrl()} → Storybook ${storybookUrl})`,
+      );
+      startDockerLogFollow();
     } else {
-      if (sidecarBusy) {
-        log("yellow", "⚠️", `Port ${storybookPort}/${CAPTURE_DAEMON_PORT} occupé par un sidecar non sain — recréation`);
+      if (thisProjectPortsBusy) {
+        if (existingHealth?.ready && existingHealth.hostProjectRoot) {
+          log(
+            "yellow",
+            "⚠️",
+            `Ports ${storybookPort}/${daemonPort} occupés par un sidecar inattendu — recréation de *ce* stack`,
+          );
+        } else {
+          log("yellow", "⚠️", `Port ${storybookPort}/${daemonPort} occupé par un sidecar non sain — recréation`);
+        }
+        stopComposeLogs(dockerLogsProcess);
+        dockerLogsProcess = null;
         await composeDown(PROJECT_ROOT).catch(() => undefined);
+        killPort(storybookPort);
+        killPort(daemonPort);
         await new Promise(resolve => setTimeout(resolve, 1500));
       }
 
-      log("blue", "🐳", "Démarrage du sidecar de capture (Docker)");
+      log(
+        "blue",
+        "🐳",
+        `Démarrage du sidecar de capture (Docker) — Storybook :${storybookPort}, daemon :${daemonPort}`,
+      );
       let composeCode = await composeUp(PROJECT_ROOT);
       if (composeCode !== 0) {
         log(
           "yellow",
           "⚠️",
-          `docker compose up a échoué (code ${composeCode}) — tentative de libération des ports ${storybookPort}/${CAPTURE_DAEMON_PORT}`,
+          `docker compose up a échoué (code ${composeCode}) — tentative de libération des ports ${storybookPort}/${daemonPort}`,
+        );
+        log(
+          "yellow",
+          "ℹ️",
+          "En cas de collision de ports, fixez storybook.url / capture.daemonUrl dans vr.config.cjs (ou VR_STORYBOOK_URL / VR_CAPTURE_DAEMON_URL).",
         );
         killPort(storybookPort);
-        killPort(CAPTURE_DAEMON_PORT);
+        killPort(daemonPort);
         await new Promise(resolve => setTimeout(resolve, process.platform === "win32" ? 3500 : 2000));
         composeCode = await composeUp(PROJECT_ROOT);
       }
@@ -363,24 +406,42 @@ const main = async () => {
         if (autoFallback) {
           log("yellow", "⚠️", "Le daemon Docker ne répond plus — bascule en capture locale");
         }
+        log("yellow", "📜", "Derniers logs Docker :");
+        dumpComposeLogs(PROJECT_ROOT);
         await startLocalCaptureFallback(`docker compose up a échoué (code ${composeCode})`, { auto: autoFallback });
       } else {
+        restartDockerLogFollow();
         log("blue", "⏳", "Attente du daemon de capture (Storybook + Playwright — le 1er build peut être long)");
         let daemonReady = await waitForCaptureDaemon(300);
         if (!daemonReady) {
           log("yellow", "⚠️", "Daemon non prêt après démarrage — rebuild forcé du sidecar");
+          if (!vrConfig.docker.showLogs) {
+            log("yellow", "📜", "Derniers logs Docker :");
+            dumpComposeLogs(PROJECT_ROOT);
+          }
+          stopComposeLogs(dockerLogsProcess);
+          dockerLogsProcess = null;
           await composeDown(PROJECT_ROOT).catch(() => undefined);
           const rebuildCode = await composeUp(PROJECT_ROOT, true);
           if (rebuildCode === 0) {
+            restartDockerLogFollow();
             log("blue", "⏳", "Attente du daemon après rebuild forcé");
             daemonReady = await waitForCaptureDaemon(300);
           }
           if (!daemonReady) {
+            if (!vrConfig.docker.showLogs) {
+              log("yellow", "📜", "Derniers logs Docker :");
+              dumpComposeLogs(PROJECT_ROOT);
+            }
+            stopComposeLogs(dockerLogsProcess);
+            dockerLogsProcess = null;
             await composeDown(PROJECT_ROOT).catch(() => undefined);
             await startLocalCaptureFallback("daemon de capture injoignable");
           }
         }
-        log("green", "✅", `Daemon de capture prêt (${getCaptureDaemonUrl()})`);
+        if (useDockerSidecar) {
+          log("green", "✅", `Daemon de capture prêt (${getCaptureDaemonUrl()})`);
+        }
       }
     }
   }
@@ -395,7 +456,7 @@ const main = async () => {
       throw new Error(
         `Storybook inaccessible sur ${storybookUrl} depuis l'hôte après 180 s ` +
           `(dernier décompte: ${hostReady.storyCount} story). ` +
-          "Vérifiez Docker Desktop et le mapping de port 6006, ou relancez avec VR_CAPTURE_BACKEND=local.",
+          `Vérifiez Docker Desktop et le mapping Storybook (${storybookUrl}), ou relancez avec VR_CAPTURE_BACKEND=local.`,
       );
     }
   } else {
@@ -434,7 +495,7 @@ const main = async () => {
       log("blue", "📚", `Storybook (local) disponible sur ${storybookUrl}`);
       log("yellow", "⚠️", "Capture locale active (fallback) : Docker non utilisé pour cette session");
     }
-    openInBrowser(storybookUrl);
+    openReadyUrlsInBrowser([storybookUrl, EXPO_URL]);
   };
 
   const runInitialCompareJob = (): Promise<number> => {
@@ -522,6 +583,7 @@ const main = async () => {
     log("red", "❌", `Erreur Expo: ${err.message}`);
     killProcessTree(vrServer);
     stopStorybook(localStorybookProcess);
+    stopComposeLogs(dockerLogsProcess);
     if (useDockerSidecar) {
       composeDownSync(PROJECT_ROOT);
     }
@@ -533,6 +595,7 @@ const main = async () => {
     log("red", "❌", "Expo n'a pas démarré à temps");
     killProcessTree(vrServer);
     stopStorybook(localStorybookProcess);
+    stopComposeLogs(dockerLogsProcess);
     if (useDockerSidecar) {
       composeDownSync(PROJECT_ROOT);
     }
@@ -551,6 +614,7 @@ const main = async () => {
     killProcessTree(expo);
     killProcessTree(vrServer);
     stopStorybook(localStorybookProcess);
+    stopComposeLogs(dockerLogsProcess);
     if (useDockerSidecar) {
       const downCode = composeDownSync(PROJECT_ROOT);
       if (downCode !== 0) {

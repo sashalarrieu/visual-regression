@@ -7,7 +7,7 @@ import { createRequire } from "module";
 import os from "os";
 import path from "path";
 
-import { CAPTURE_DAEMON_URL } from "../constants/constants";
+import { CAPTURE_DAEMON_PORT, CAPTURE_DAEMON_URL, LOCAL_URL, STORYBOOK_PORT } from "../constants/constants";
 import type {
   VrCaptureBackend,
   VrChangedFilesScope,
@@ -17,12 +17,14 @@ import type {
   VrStorybookMode,
 } from "../types/types";
 
+import { getHostSidecarPorts, SENTINEL_STORYBOOK_URL } from "./vr-sidecar-ports";
+
 const _require = createRequire(import.meta.url);
 
 export const VR_CONFIG_FILENAME = "vr.config.cjs";
 const LEGACY_CONFIG_FILENAME = "vr-devices.config.cjs";
 
-const DEFAULT_STORYBOOK_URL = "http://localhost:6006";
+const DEFAULT_STORYBOOK_URL = SENTINEL_STORYBOOK_URL;
 const DEFAULT_REMOTE_CHUNK_SIZE = 20;
 const DEFAULT_DOCKER_IMAGE = "vr-capture:1.61.1";
 const DEFAULT_PLAYWRIGHT_IMAGE = "mcr.microsoft.com/playwright:v1.61.1-jammy";
@@ -36,7 +38,11 @@ const DEFAULT_GLOBAL_TRIGGERS = [
   "vr.config.cjs",
 ];
 
+/** Défaut static/CI : borné par le nombre de CPU (max 8). */
 const defaultConcurrency = (): number => Math.max(2, Math.min(os.cpus().length, 8));
+
+/** Défaut Storybook dev : bas pour ne pas saturer Vite/HMR. */
+const DEFAULT_CONCURRENCY_DEV = 2;
 
 const parsePositiveEnv = (value: string | undefined): number | undefined => {
   if (value === undefined) return undefined;
@@ -104,6 +110,7 @@ export const getDefaultVrConfig = (): VrConfig => ({
   devices: [],
   capture: {
     concurrency: defaultConcurrency(),
+    concurrencyDev: DEFAULT_CONCURRENCY_DEV,
     maxTestTime: 10_000,
     remoteChunkSize: DEFAULT_REMOTE_CHUNK_SIZE,
     backend: "docker",
@@ -139,6 +146,7 @@ export const getDefaultVrConfig = (): VrConfig => ({
   docker: {
     image: DEFAULT_DOCKER_IMAGE,
     playwrightImage: DEFAULT_PLAYWRIGHT_IMAGE,
+    showLogs: false,
   },
 });
 
@@ -176,7 +184,7 @@ export const loadVrConfig = (root: string): VrConfig => {
     process.exit(1);
   }
 
-  const fileConfig = raw as VrConfigFile;
+  const fileConfig = normalizeVrConfigFile(raw as VrConfigFile & { launcher?: Record<string, unknown> });
   if (!Array.isArray(fileConfig.devices) || fileConfig.devices.length === 0) {
     console.error(`\n❌ Le fichier ${VR_CONFIG_FILENAME} doit définir un tableau "devices" non vide.\n`);
     process.exit(1);
@@ -185,9 +193,46 @@ export const loadVrConfig = (root: string): VrConfig => {
   return mergeVrConfig(fileConfig, getDefaultVrConfig());
 };
 
+/**
+ * Normalise les clés legacy du fichier (ex. `launcher.storybookStatic` → `storybookMode`).
+ * Sans muter le require cache : on clone la section launcher.
+ */
+const normalizeVrConfigFile = (raw: VrConfigFile & { launcher?: Record<string, unknown> }): VrConfigFile => {
+  const launcherRaw = raw.launcher;
+  if (!launcherRaw || typeof launcherRaw !== "object") return raw;
+
+  const { storybookStatic, ...rest } = launcherRaw;
+  if (storybookStatic === undefined) return raw;
+
+  const mappedMode: VrStorybookMode | undefined =
+    rest.storybookMode === "static" || rest.storybookMode === "dev"
+      ? rest.storybookMode
+      : storybookStatic === true
+        ? "static"
+        : storybookStatic === false
+          ? "dev"
+          : undefined;
+
+  if (mappedMode !== undefined && rest.storybookMode === undefined) {
+    console.warn(
+      `⚠️  [vr-config] launcher.storybookStatic est déprécié — utilisez launcher.storybookMode: "${mappedMode}".`,
+    );
+  }
+
+  return {
+    ...raw,
+    launcher: {
+      ...rest,
+      ...(mappedMode !== undefined && rest.storybookMode === undefined ? { storybookMode: mappedMode } : {}),
+    },
+  };
+};
+
 /** Applique les overrides VR_* (env > config fichier). */
 export const applyEnvOverridesToVrConfig = (config: VrConfig): VrConfig => {
   const envConcurrency = parsePositiveEnv(process.env.VR_CONCURRENCY);
+  const envConcurrencyDev =
+    parsePositiveEnv(process.env.VR_CONCURRENCY_DEV) ?? parsePositiveEnv(process.env.VR_CAPTURE_DEV_CONCURRENCY);
   const envMaxTestTime = parsePositiveEnv(process.env.VR_MAX_TEST_TIME);
   const envRemoteChunkSize = parsePositiveEnv(process.env.VR_CAPTURE_REMOTE_CHUNK);
   const envCaptureBackend = parseEnvCaptureBackend();
@@ -206,6 +251,7 @@ export const applyEnvOverridesToVrConfig = (config: VrConfig): VrConfig => {
   const envShardTotal = parseEnvShardTotal();
   const envDockerImage = process.env.VR_DOCKER_IMAGE?.trim();
   const envPlaywrightImage = process.env.VR_PLAYWRIGHT_IMAGE?.trim();
+  const envDockerShowLogs = envBool(process.env.VR_DOCKER_SHOW_LOGS);
 
   const storybookMode =
     envStorybookMode ??
@@ -216,6 +262,7 @@ export const applyEnvOverridesToVrConfig = (config: VrConfig): VrConfig => {
     capture: {
       ...config.capture,
       ...(envConcurrency !== undefined ? { concurrency: envConcurrency } : {}),
+      ...(envConcurrencyDev !== undefined ? { concurrencyDev: envConcurrencyDev } : {}),
       ...(envMaxTestTime !== undefined ? { maxTestTime: envMaxTestTime } : {}),
       ...(envRemoteChunkSize !== undefined ? { remoteChunkSize: envRemoteChunkSize } : {}),
       ...(envCaptureBackend !== undefined ? { backend: envCaptureBackend } : {}),
@@ -245,6 +292,7 @@ export const applyEnvOverridesToVrConfig = (config: VrConfig): VrConfig => {
       ...config.docker,
       ...(envDockerImage ? { image: envDockerImage } : {}),
       ...(envPlaywrightImage ? { playwrightImage: envPlaywrightImage } : {}),
+      ...(envDockerShowLogs !== undefined ? { showLogs: envDockerShowLogs } : {}),
     },
   };
 };
@@ -253,8 +301,52 @@ export const applyEnvOverridesToVrConfig = (config: VrConfig): VrConfig => {
 export const mergeVrConfigFile = (fileConfig: VrConfigFile, defaults: VrConfig = getDefaultVrConfig()): VrConfig =>
   mergeVrConfig(fileConfig, defaults);
 
-/** Résolution finale : env var (VR_*) > vr.config.cjs > défauts package. */
+/**
+ * Ports Storybook/daemon :
+ * - Dans le conteneur (VR_DOCKER=1) : toujours 6006 / 2810 (écoute interne).
+ * - Sur l'hôte : ports dérivés du projectRoot si sentinelles ; overrides custom respectés.
+ */
+export const applySidecarPortResolution = (config: VrConfig, projectRoot: string): VrConfig => {
+  if (process.env.VR_DOCKER === "1") {
+    return {
+      ...config,
+      storybook: { ...config.storybook, url: `${LOCAL_URL}:${STORYBOOK_PORT}` },
+      capture: { ...config.capture, daemonUrl: `${LOCAL_URL}:${CAPTURE_DAEMON_PORT}` },
+    };
+  }
+
+  // Backend local sur l'hôte : Storybook tourne souvent déjà sur 6006 — ne pas dériver.
+  if (config.capture.backend === "local") {
+    return config;
+  }
+
+  const hostPorts = getHostSidecarPorts(projectRoot, {
+    storybookUrl: config.storybook.url,
+    daemonUrl: config.capture.daemonUrl,
+  });
+
+  return {
+    ...config,
+    storybook: { ...config.storybook, url: hostPorts.storybookUrl },
+    capture: { ...config.capture, daemonUrl: hostPorts.daemonUrl },
+  };
+};
+
+/**
+ * Propage `storybook.configDir` → `SBCONFIG_CONFIG_DIR` si l'env n'est pas déjà définie.
+ * Monorepos : un seul `vr.config.cjs` suffit, sans préfixer chaque script.
+ */
+export const applyStorybookConfigDirEnv = (projectRoot: string, config: VrConfig): void => {
+  if (process.env.SBCONFIG_CONFIG_DIR?.trim()) return;
+  const dir = config.storybook.configDir?.trim();
+  if (!dir) return;
+  process.env.SBCONFIG_CONFIG_DIR = path.isAbsolute(dir) ? dir : path.resolve(projectRoot, dir);
+};
+
+/** Résolution finale : env var (VR_*) > vr.config.cjs > défauts package (+ ports sidecar). */
 export const resolveVrConfig = (root?: string): VrConfig => {
   const projectRoot = root ?? path.resolve(process.env.VR_PROJECT_ROOT || process.cwd());
-  return applyEnvOverridesToVrConfig(loadVrConfig(projectRoot));
+  const config = applySidecarPortResolution(applyEnvOverridesToVrConfig(loadVrConfig(projectRoot)), projectRoot);
+  applyStorybookConfigDirEnv(projectRoot, config);
+  return config;
 };

@@ -7,11 +7,45 @@
  */
 import { request as httpRequest } from "http";
 import { request as httpsRequest } from "https";
+import path from "path";
 
 import type { CaptureBatchOptions, CaptureBatchResult, CaptureTask } from "../scripts/vr-capture-engine";
 import type { VrConfig } from "../types/types";
 
 import { getCaptureDaemonUrl } from "./vr-capture-backend";
+
+/** Réponse de GET /health du sidecar. */
+export type CaptureDaemonHealth = {
+  ready?: boolean;
+  mode?: string;
+  storybook?: boolean;
+  /** Chemin absolu du projet hôte monté (pas /work dans le conteneur). */
+  hostProjectRoot?: string;
+  /** Nom Compose du stack qui sert ce daemon. */
+  composeProjectName?: string;
+};
+
+/** Lit /health sans attendre ready. */
+export const fetchCaptureDaemonHealth = async (config?: VrConfig): Promise<CaptureDaemonHealth | null> => {
+  try {
+    const res = await fetch(`${getCaptureDaemonUrl(config)}/health`);
+    if (!res.ok) return null;
+    return (await res.json()) as CaptureDaemonHealth;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * true si le sidecar actif correspond au projet courant.
+ * Sans hostProjectRoot (vieux daemon) → false pour forcer une recréation sûre.
+ */
+export const isCaptureDaemonReusableForProject = (health: CaptureDaemonHealth | null, projectRoot: string): boolean => {
+  if (!health?.ready) return false;
+  const remote = health.hostProjectRoot?.trim();
+  if (!remote) return false;
+  return path.resolve(remote) === path.resolve(projectRoot);
+};
 
 /** Options envoyées au daemon (onProgress n'est pas sérialisable). */
 type SerializableOptions = Omit<CaptureBatchOptions, "onProgress">;

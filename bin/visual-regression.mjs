@@ -15,6 +15,7 @@
  *   visual-regression capture-up       → démarre le sidecar Docker de capture (vr:capture:up)
  *   visual-regression capture-down     → arrête le sidecar Docker (vr:capture:down)
  *   visual-regression capture-status   → état du sidecar + health daemon (vr:capture:status)
+ *   visual-regression kill-ports       → libère Expo/UI + ports Storybook/daemon de ce projet
  *   visual-regression capture-daemon   → (interne conteneur) daemon de capture
  *   visual-regression capture-oneshot  → (interne conteneur) capture one-shot CI
  *
@@ -121,6 +122,10 @@ switch (subcommand) {
     // Contrôle du sidecar Docker depuis l'hôte.
     scriptPath = path.join(packageRootReal, "src", "scripts", "vr-capture-control.ts");
     scriptArgs = [subcommand.replace("capture-", "")];
+    break;
+  }
+  case "kill-ports": {
+    scriptPath = path.join(packageRootReal, "src", "scripts", "vr-kill-ports.ts");
     break;
   }
   case "app": {

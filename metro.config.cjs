@@ -1,6 +1,10 @@
 /**
  * Config Metro pour l'app standalone VR (expo start --web).
  * .cjs pour éviter sur Windows l'erreur ESM "Received protocol 'c:'" au chargement du config.
+ *
+ * Sous pnpm, les deps transitives (ex. semver pour reanimated) vivent dans le dossier
+ * `node_modules` du package isolé (.pnpm/<pkg>@ver/node_modules/), pas à la racine.
+ * On ajoute donc ces dossiers à nodeModulesPaths après résolution des deps directes.
  */
 const fs = require("fs");
 const path = require("path");
@@ -44,13 +48,31 @@ const buildExtraNodeModules = searchPaths => {
     for (const searchPath of searchPaths) {
       const depPath = path.join(searchPath, depName);
       if (fs.existsSync(depPath)) {
-        extras[depName] = depPath;
+        extras[depName] = fs.realpathSync(depPath);
         break;
       }
     }
   }
 
   return extras;
+};
+
+/**
+ * Pour chaque package résolu, ajoute le `node_modules` parent (isolation pnpm)
+ * afin que Metro trouve les deps transitives (semver, etc.).
+ */
+const collectPnpmIsolationNodeModules = extras => {
+  const result = [];
+  const seen = new Set();
+  for (const depPath of Object.values(extras)) {
+    // .../.pnpm/pkg@ver/node_modules/pkg → .../.pnpm/pkg@ver/node_modules
+    const isolationNm = path.dirname(depPath);
+    if (path.basename(isolationNm) !== "node_modules") continue;
+    if (seen.has(isolationNm) || !fs.existsSync(isolationNm)) continue;
+    seen.add(isolationNm);
+    result.push(isolationNm);
+  }
+  return result;
 };
 
 const nodeModulesPaths = collectNodeModulesPaths(projectRoot);
@@ -60,11 +82,18 @@ nodeModulesPaths.sort((a, b) => {
   return Number(bHasExpo) - Number(aHasExpo);
 });
 
+const extraNodeModules = buildExtraNodeModules(nodeModulesPaths);
+for (const isolationNm of collectPnpmIsolationNodeModules(extraNodeModules)) {
+  if (!nodeModulesPaths.includes(isolationNm)) {
+    nodeModulesPaths.push(isolationNm);
+  }
+}
+
 const config = getDefaultConfig(projectRoot);
 config.watchFolders = [hostProjectRoot, projectRoot];
 config.resolver.nodeModulesPaths = nodeModulesPaths;
 config.resolver.disableHierarchicalLookup = true;
-config.resolver.extraNodeModules = buildExtraNodeModules(nodeModulesPaths);
+config.resolver.extraNodeModules = extraNodeModules;
 
 // Screenshots VR : churn élevé pendant compare — évite ENOENT FallbackWatcher (Windows)
 config.resolver.blockList.push(/[\\/]public[\\/]Screenshots[\\/].*/);

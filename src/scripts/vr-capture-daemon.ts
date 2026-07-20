@@ -2,7 +2,7 @@
  * Daemon de capture VR (sidecar Docker).
  *
  * Démarre Storybook (dev HMR ou statique selon VR_STORYBOOK_MODE) puis expose :
- *   - GET  /health         → { ready, mode, storybook }
+ *   - GET  /health         → { ready, mode, storybook, hostProjectRoot, composeProjectName }
  *   - POST /capture/batch  → exécute runCaptureBatch localement et renvoie le résultat
  *
  * S'exécute *à l'intérieur* du conteneur (VR_DOCKER=1). Force le backend "local"
@@ -106,7 +106,13 @@ const main = async (): Promise<void> => {
     const url = new URL(req.url ?? "/", `http://localhost:${CAPTURE_DAEMON_PORT}`);
 
     if (req.method === "GET" && url.pathname === "/health") {
-      sendJson(res, { ready: storybookReady, mode, storybook: storybookReady });
+      sendJson(res, {
+        ready: storybookReady,
+        mode,
+        storybook: storybookReady,
+        hostProjectRoot: process.env.VR_HOST_PROJECT_ROOT || "",
+        composeProjectName: process.env.VR_COMPOSE_PROJECT_NAME || "",
+      });
       return;
     }
 
