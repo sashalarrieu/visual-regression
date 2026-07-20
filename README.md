@@ -693,7 +693,7 @@ Validez ensuite la config recommandée en vraie CI matrix avec `VR_SHARD_INDEX` 
 ### Validation Phases 0–8
 
 ```bash
-yarn vr:test-validation              # checklist complète (Storybook requis pour partie dynamique)
+yarn vr:test-validation              # checklist complète (démarre Storybook si besoin)
 yarn vr:test-validation --static-only  # config, exports, TurboSnap fichier, sharding — sans Storybook
 ```
 
