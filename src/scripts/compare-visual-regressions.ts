@@ -22,7 +22,7 @@ import { getCaptureBackend, isDockerCaptureBackend } from "../utils/vr-capture-b
 import { filterCaptureTasks, getChangedFiles, shouldWipePublicDir, updateManifest } from "../utils/vr-incremental";
 import { filterTasksByShard, parseShardConfig } from "../utils/vr-sharding";
 
-import type { CaptureTask } from "./vr-capture-engine";
+import type { CaptureTask, CaptureBatchResult } from "./vr-capture-engine";
 import {
   deleteAllVisualRegressionsFiles,
   deleteVisualRegressionsFilesForDevice,
@@ -312,6 +312,12 @@ const printLogsSummary = (
   }
 };
 
+/** Affiche le résumé capture (erreurs / VR / new) après un batch lancé depuis l'UI VR. */
+const finalizeCaptureBatch = (result: CaptureBatchResult): { success: boolean; error?: string } => {
+  printLogsSummary(result.logs, { durationMs: result.stats.durationMs });
+  return { success: result.success, error: result.error };
+};
+
 /**
  * Régénère une sélection de stories (storyId + deviceName).
  */
@@ -329,7 +335,7 @@ export const compareSelectedStories = async (
     mode: "full",
     clearScreenshotsBeforeCapture: true,
   });
-  return { success: result.success, error: result.error };
+  return finalizeCaptureBatch(result);
 };
 
 export const compareSingleStory = async (
@@ -365,7 +371,7 @@ export const compareAllStories = async (
     mode: "full",
     wipePublicDir: false,
   });
-  return { success: result.success, error: result.error };
+  return finalizeCaptureBatch(result);
 };
 
 export const compareByType = async (
@@ -386,7 +392,7 @@ export const compareByType = async (
     mode: "full",
     clearScreenshotsBeforeCapture: true,
   });
-  return { success: result.success, error: result.error };
+  return finalizeCaptureBatch(result);
 };
 
 const compareVisualRegressions = async () => {

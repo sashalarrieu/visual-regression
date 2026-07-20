@@ -669,7 +669,9 @@ const captureStoryScreenshot = async ({
   skipGoto?: boolean;
 }): Promise<boolean> => {
   const maxTestTime = config.capture.maxTestTime;
+  let captureTimedOut = false;
   const timer = setTimeout(() => {
+    captureTimedOut = true;
     addLogs({
       log: `⌛️ Waiting time expired for capture ${storyId} (${deviceName}) (${maxTestTime}ms)`,
       logs,
@@ -699,7 +701,9 @@ const captureStoryScreenshot = async ({
     await writeStoryScreenshot({ page, tempScreenshotPath, config, useBurst });
     return true;
   } catch {
-    addLogs({ log: `📸 Failed to capture screenshot for ${storyId} (${deviceName})`, logs });
+    if (!captureTimedOut) {
+      addLogs({ log: `📸 Failed to capture screenshot for ${storyId} (${deviceName})`, logs });
+    }
     return false;
   } finally {
     clearTimeout(timer);
