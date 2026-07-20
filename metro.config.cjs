@@ -35,10 +35,16 @@ const collectNodeModulesPaths = startDir => {
 };
 
 /**
+ * Packages singleton : une seule instance, version de l'hôte (évite react 19.2 / react-dom 19.1).
+ * Les autres deps déclarées du package VR restent résolues localement d'abord (ex. lru-cache@5).
+ */
+const HOST_FIRST_PACKAGES = new Set(["react", "react-dom", "react-native", "react-native-web", "scheduler"]);
+
+/**
  * Résout chaque dépendance du package.
- * - deps / peerDeps déclarées : le `node_modules` du package VR d'abord (évite qu'un
- *   lru-cache@10 hoisté sur l'hôte casse Babel v5-style sous disableHierarchicalLookup)
- * - puis les chemins consommateur (pnpm / monorepo) pour les peers non installés localement
+ * - singletons React : node_modules hôte d'abord
+ * - deps / peerDeps VR : node_modules du package d'abord (lru-cache hoisté, etc.)
+ * - puis les chemins consommateur (pnpm / monorepo)
  */
 const buildExtraNodeModules = searchPaths => {
   const pkg = require(path.join(projectRoot, "package.json"));
@@ -49,9 +55,13 @@ const buildExtraNodeModules = searchPaths => {
   });
   const extras = {};
   const packageLocalNm = path.join(projectRoot, "node_modules");
-  const orderedSearchPaths = [packageLocalNm, ...searchPaths.filter(searchPath => searchPath !== packageLocalNm)];
+  const hostSearchPaths = searchPaths.filter(searchPath => searchPath !== packageLocalNm);
 
   for (const depName of depNames) {
+    const orderedSearchPaths = HOST_FIRST_PACKAGES.has(depName)
+      ? [...hostSearchPaths, packageLocalNm]
+      : [packageLocalNm, ...hostSearchPaths];
+
     for (const searchPath of orderedSearchPaths) {
       const depPath = path.join(searchPath, depName);
       if (fs.existsSync(depPath)) {

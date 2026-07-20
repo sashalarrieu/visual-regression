@@ -9,7 +9,9 @@ ENV VR_DOCKER=1 \
     VR_PROJECT_ROOT=/work \
     VR_CAPTURE_BACKEND=local \
     VR_STORYBOOK_MODE=dev \
-    CI=1
+    CI=1 \
+    HUSKY=0 \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # corepack fournit yarn/pnpm (Node est inclus dans l'image de base).
 RUN corepack enable || true
