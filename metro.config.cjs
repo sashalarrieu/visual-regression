@@ -34,7 +34,12 @@ const collectNodeModulesPaths = startDir => {
   return result.length > 0 ? result : [path.join(projectRoot, "node_modules")];
 };
 
-/** Résout chaque dépendance du package depuis les node_modules pnpm du consommateur. */
+/**
+ * Résout chaque dépendance du package.
+ * - deps / peerDeps déclarées : le `node_modules` du package VR d'abord (évite qu'un
+ *   lru-cache@10 hoisté sur l'hôte casse Babel v5-style sous disableHierarchicalLookup)
+ * - puis les chemins consommateur (pnpm / monorepo) pour les peers non installés localement
+ */
 const buildExtraNodeModules = searchPaths => {
   const pkg = require(path.join(projectRoot, "package.json"));
   const depNames = Object.keys({
@@ -43,9 +48,11 @@ const buildExtraNodeModules = searchPaths => {
     ...pkg.devDependencies,
   });
   const extras = {};
+  const packageLocalNm = path.join(projectRoot, "node_modules");
+  const orderedSearchPaths = [packageLocalNm, ...searchPaths.filter(searchPath => searchPath !== packageLocalNm)];
 
   for (const depName of depNames) {
-    for (const searchPath of searchPaths) {
+    for (const searchPath of orderedSearchPaths) {
       const depPath = path.join(searchPath, depName);
       if (fs.existsSync(depPath)) {
         extras[depName] = fs.realpathSync(depPath);
