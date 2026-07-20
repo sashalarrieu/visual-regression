@@ -34,7 +34,18 @@ const collectNodeModulesPaths = startDir => {
   return result.length > 0 ? result : [path.join(projectRoot, "node_modules")];
 };
 
-/** Résout chaque dépendance du package depuis les node_modules pnpm du consommateur. */
+/**
+ * Packages singleton : une seule instance, version de l'hôte (évite react 19.2 / react-dom 19.1).
+ * Les autres deps déclarées du package VR restent résolues localement d'abord (ex. lru-cache@5).
+ */
+const HOST_FIRST_PACKAGES = new Set(["react", "react-dom", "react-native", "react-native-web", "scheduler"]);
+
+/**
+ * Résout chaque dépendance du package.
+ * - singletons React : node_modules hôte d'abord
+ * - deps / peerDeps VR : node_modules du package d'abord (lru-cache hoisté, etc.)
+ * - puis les chemins consommateur (pnpm / monorepo)
+ */
 const buildExtraNodeModules = searchPaths => {
   const pkg = require(path.join(projectRoot, "package.json"));
   const depNames = Object.keys({
@@ -43,9 +54,15 @@ const buildExtraNodeModules = searchPaths => {
     ...pkg.devDependencies,
   });
   const extras = {};
+  const packageLocalNm = path.join(projectRoot, "node_modules");
+  const hostSearchPaths = searchPaths.filter(searchPath => searchPath !== packageLocalNm);
 
   for (const depName of depNames) {
-    for (const searchPath of searchPaths) {
+    const orderedSearchPaths = HOST_FIRST_PACKAGES.has(depName)
+      ? [...hostSearchPaths, packageLocalNm]
+      : [packageLocalNm, ...hostSearchPaths];
+
+    for (const searchPath of orderedSearchPaths) {
       const depPath = path.join(searchPath, depName);
       if (fs.existsSync(depPath)) {
         extras[depName] = fs.realpathSync(depPath);
