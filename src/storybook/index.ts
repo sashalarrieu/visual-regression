@@ -1,5 +1,7 @@
 export { vrPreviewDecorators, withVrReanimatedFreeze, withVrStoryPlay } from "./preview";
 
+export { patchStorybookFocusForDocs } from "./patch-storybook-focus";
+
 export {
   BURST_VR_TAG,
   FORCE_VR_TAG,

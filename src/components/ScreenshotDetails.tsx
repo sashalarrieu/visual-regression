@@ -11,17 +11,10 @@ export type ScreenshotDetailsProps = {
   deviceName?: string;
   storyId?: string;
   countPixelDiff?: number | null;
-  showHeatmap?: boolean;
   bold?: boolean;
 };
 
-export const ScreenshotDetails: React.FC<ScreenshotDetailsProps> = ({
-  deviceName,
-  storyId,
-  countPixelDiff,
-  showHeatmap,
-  bold,
-}) => {
+export const ScreenshotDetails: React.FC<ScreenshotDetailsProps> = ({ deviceName, storyId, countPixelDiff, bold }) => {
   const { getDeviceStyle, getDeviceDisplayName } = useDeviceConfig();
   const deviceStyle = getDeviceStyle(deviceName);
   const deviceDisplayName = deviceName ? getDeviceDisplayName(deviceName) : undefined;
@@ -48,12 +41,12 @@ export const ScreenshotDetails: React.FC<ScreenshotDetailsProps> = ({
         </Box>
       )}
       <Typo variant={variant as TypoProps["variant"]}>{storyDisplayName}</Typo>
-      {countPixelDiff !== undefined && countPixelDiff !== null && (
+      {typeof countPixelDiff === "number" && countPixelDiff > 0 && (
         <Typo
           variant="paragraphe_regular"
           color="newTheme_danger"
         >
-          {countPixelDiff ?? "- "}px
+          {countPixelDiff}px
         </Typo>
       )}
     </Box>

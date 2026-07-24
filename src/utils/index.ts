@@ -85,18 +85,21 @@ export const createVisualRegressionActions = (
   serverUrl: string = VR_SERVER_URL,
 ) => {
   const { onBeforeRemove, onAfterDelete, onAfterRestore, onAfterBulk } = handlers;
+
   const handleValid = async (storyScreenshotsPath?: StoryScreenshotsPath) => {
     if (!storyScreenshotsPath) return;
+    // Snapshot avant onBeforeRemove (qui change la sélection UI).
+    const payload = { ...storyScreenshotsPath };
     onBeforeRemove?.();
     try {
       const res = await fetch(`${serverUrl}/validate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(storyScreenshotsPath),
+        body: JSON.stringify(payload),
       });
-      const result = await res.json();
+      const result = await res.json().catch(() => ({}));
       if (!res.ok || !result.success) {
-        console.error("❌ Validation échouée :", result.error);
+        console.error("❌ Validation échouée :", result.error ?? res.statusText);
         return;
       }
       console.log("✅ Validation réussie");
@@ -138,12 +141,13 @@ export const createVisualRegressionActions = (
 
   const handleDelete = async (storyScreenshotsPath?: StoryScreenshotsPath) => {
     if (!storyScreenshotsPath) return;
+    const payload = { ...storyScreenshotsPath };
     onBeforeRemove?.();
     try {
       const res = await fetch(`${serverUrl}/delete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(storyScreenshotsPath),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) return;
       console.log("✅ Deleted successfully");

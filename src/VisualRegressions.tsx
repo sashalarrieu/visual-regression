@@ -309,7 +309,8 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
       pendingSelectPathRef.current = null;
       return;
     }
-    const nextIndex = index === -1 ? 0 : Math.min(index, remaining.length - 1);
+    // Après suppression de l’index i : l’ex-i+1 est à i. Si i était le dernier → boucle sur [0].
+    const nextIndex = index === -1 ? 0 : index < remaining.length ? index : 0;
     const nextPath = remaining[nextIndex].path;
     pendingSelectPathRef.current = nextPath;
     // Optimistic : bascule tout de suite (storyScreenshotsPath déjà capturé par l’appelant)
@@ -394,9 +395,10 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
 
   const [regeneratingPaths, setRegeneratingPaths] = useState<Set<string>>(new Set());
 
+  // Toujours charger les métriques dès qu’il y a un diff (pas seulement en mode heatmap).
   const countPixelDiff = usePixelDiffMetrics(
     storyScreenshotsPath?.diff,
-    showHeatmap && treeType === "diff" && Boolean(storyScreenshotsPath?.diff),
+    treeType === "diff" && Boolean(storyScreenshotsPath?.diff),
   );
 
   const handleCompareStoryFromTree = useCallback(
@@ -471,14 +473,21 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
               currentStory={currentStory}
               treeType={treeType}
               showHeatmap={showHeatmap}
-              countPixelDiff={showHeatmap ? countPixelDiff : undefined}
+              countPixelDiff={countPixelDiff}
               storyScreenshotsPath={storyScreenshotsPath}
               hasItems={allList.length > 0}
               bulkLoading={bulkLoading}
               onPrev={goPrev}
               onNext={goNext}
-              onValid={() => handleValid(storyScreenshotsPath)}
-              onDelete={() => handleDelete(storyScreenshotsPath)}
+              onValid={() => {
+                // Snapshot sync avant re-render (onBeforeRemove change la sélection).
+                const path = storyScreenshotsPath;
+                void handleValid(path);
+              }}
+              onDelete={() => {
+                const path = storyScreenshotsPath;
+                void handleDelete(path);
+              }}
               onValidAll={() => runBulk(handleValidAll)}
               onDeleteAll={() => runBulk(handleDeleteAll)}
               onShowDeleted={() => setShowDeleted(true)}

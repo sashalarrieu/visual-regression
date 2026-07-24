@@ -131,8 +131,7 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
         <ScreenshotDetails
           deviceName={currentStory?.deviceName}
           storyId={currentStory?.storyId || currentStory?.name}
-          countPixelDiff={showHeatmap && storyScreenshotsPath?.diff ? countPixelDiff : undefined}
-          showHeatmap={showHeatmap && !!storyScreenshotsPath?.diff}
+          countPixelDiff={storyScreenshotsPath?.diff ? countPixelDiff : undefined}
         />
         <Box
           px="s"

@@ -8,6 +8,11 @@ import { addons } from "storybook/preview-api";
 import { LIVE_ANIMATION_VR_TAG, PLAY_FN_TAG, SKIP_PLAY_VR_TAG } from "../constants/constants";
 import { resolveStoryPlayFunction, runVrStoryPlay, type VrStoryPlayFunction } from "../utils/vr-story-play";
 
+import { patchStorybookFocusForDocs } from "./patch-storybook-focus";
+
+// Storybook 10.5+ : sans ce patch, addon-docs crash (Illegal invocation sur focus).
+patchStorybookFocusForDocs();
+
 declare global {
   interface Window {
     /** true quand la story est capturée par Playwright (SteadySnap). */

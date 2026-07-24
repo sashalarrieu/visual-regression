@@ -488,19 +488,24 @@ const parseDeleted = (filePath: string): DeletedItem | null => {
     .replace(/^Screenshots\//, ""); // Retire "Screenshots/" au cas où
 
   // Pour les diff, on affiche l'image __temp__, pour les new on affiche __new__
-  // Le préfixe est maintenant au début, donc on remplace __diff__ par __temp__ au début
+  // Le préfixe est sur le nom de fichier (pas en tête du chemin complet).
   const imagePath = isDiff
     ? cleanPath.replace(
-        new RegExp(`^${DIFF_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
-        TEMP_SCREENSHOT_NAME,
+        new RegExp(`(^|/)${DIFF_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+        `$1${TEMP_SCREENSHOT_NAME}`,
       )
-    : cleanPath; // Pour __new__, on garde tel quel
+    : cleanPath;
 
   // Construire l'URL complète pour l'image (imagePath commence déjà par "src/")
   const imageUrl = getImageUrl(`Screenshots/deleted/${imagePath}`);
 
   // Extraire le storyId
   const storyId = parsed.label.includes(" - ") ? parsed.label.split(" - ")[1] : parsed.label;
+
+  // Compter les pixels rouges sur le fichier __diff__ encore présent dans deleted/
+  const normalizedScanPath = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const absDiffPath = isDiff ? join(PUBLIC_DIR, ...normalizedScanPath.split("/")) : null;
+  const countPixelDiff = absDiffPath ? countRedPixelsInDiffImage(absDiffPath) : undefined;
 
   return {
     ...parsed,
@@ -509,6 +514,7 @@ const parseDeleted = (filePath: string): DeletedItem | null => {
     imagePath,
     imageUrl,
     storyId,
+    countPixelDiff,
   };
 };
 
