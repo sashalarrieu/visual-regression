@@ -70,8 +70,9 @@ export const fromVRDeviceConfig = (devices: VRDeviceConfig[]): DeviceDisplayConf
   }));
 
 export type VisualRegressionActionHandlers = {
-  onNext: () => void;
-  /** Appelé après un refus : avance la sélection en excluant l'élément supprimé. */
+  /** Figé le path suivant AVANT l’appel API (liste encore complète). */
+  onBeforeRemove?: () => void;
+  /** Appelé après un refus/validate réussi : applique le path préparé. */
   onAfterDelete: () => void;
   /** Appelé après une restauration depuis l'historique des refusés. */
   onAfterRestore?: (fullPath: string) => void;
@@ -83,9 +84,10 @@ export const createVisualRegressionActions = (
   handlers: VisualRegressionActionHandlers,
   serverUrl: string = VR_SERVER_URL,
 ) => {
-  const { onNext, onAfterDelete, onAfterRestore, onAfterBulk } = handlers;
+  const { onBeforeRemove, onAfterDelete, onAfterRestore, onAfterBulk } = handlers;
   const handleValid = async (storyScreenshotsPath?: StoryScreenshotsPath) => {
     if (!storyScreenshotsPath) return;
+    onBeforeRemove?.();
     try {
       const res = await fetch(`${serverUrl}/validate`, {
         method: "POST",
@@ -98,7 +100,7 @@ export const createVisualRegressionActions = (
         return;
       }
       console.log("✅ Validation réussie");
-      onNext();
+      onAfterDelete();
     } catch (err) {
       console.error("Erreur de communication avec le serveur VR:", err);
     }
@@ -136,6 +138,7 @@ export const createVisualRegressionActions = (
 
   const handleDelete = async (storyScreenshotsPath?: StoryScreenshotsPath) => {
     if (!storyScreenshotsPath) return;
+    onBeforeRemove?.();
     try {
       const res = await fetch(`${serverUrl}/delete`, {
         method: "POST",

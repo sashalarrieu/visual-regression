@@ -12,8 +12,9 @@ import path from "path";
 import type { CaptureBatchOptions, CaptureBatchResult, CaptureTask } from "../scripts/vr-capture-engine";
 import type { VrConfig } from "../types/types";
 
+import { getProjectRoot } from "./node";
 import { getCaptureDaemonUrl } from "./vr-capture-backend";
-
+import { formatCaptureProgressLine, readCaptureProgress, writeCaptureProgress } from "./vr-capture-progress";
 /** Réponse de GET /health du sidecar. */
 export type CaptureDaemonHealth = {
   ready?: boolean;
@@ -70,11 +71,11 @@ export const waitForCaptureDaemon = async (maxAttempts = 120, config?: VrConfig)
     try {
       const res = await fetch(url);
       if (res.ok) {
-        const body = (await res.json()) as { ready?: boolean };
+        const body = (await res.json()) as { ready?: boolean; mode?: string; storybook?: unknown };
         if (body.ready) return true;
       }
     } catch {
-      // daemon pas encore joignable
+      // retry until maxAttempts
     }
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
@@ -146,6 +147,37 @@ const postBatch = async (
   return result;
 };
 
+/** Suit `.vr-cache/capture-progress.json` pendant l'attente d'un lot Docker. */
+const watchCaptureProgress = (
+  projectRoot: string,
+  meta: { chunk: number; chunks: number; chunkTotal: number },
+): { stop: () => void } => {
+  let lastKey = "";
+  const tick = (): void => {
+    const snapshot = readCaptureProgress(projectRoot);
+    if (!snapshot) return;
+    const key = `${snapshot.done}:${snapshot.storyId}:${snapshot.deviceName}`;
+    if (key === lastKey) return;
+    lastKey = key;
+    console.log(
+      formatCaptureProgressLine({
+        ...snapshot,
+        total: snapshot.total || meta.chunkTotal,
+        chunk: meta.chunk,
+        chunks: meta.chunks,
+      }),
+    );
+  };
+  const timer = setInterval(tick, 1500);
+  tick();
+  return {
+    stop: () => {
+      clearInterval(timer);
+      tick();
+    },
+  };
+};
+
 /**
  * Exécute un batch de capture via le daemon Docker, en découpant en lots.
  * wipePublicDir n'est appliqué que sur le premier lot.
@@ -184,26 +216,47 @@ export const runCaptureBatchRemote = async (
 
   console.log(`\n🐳 Capture via daemon Docker (${tasks.length} tâche(s), ${chunks.length} lot(s) de ${chunkSize})…`);
 
+  const showDockerLogs = config.docker.showLogs === true;
+  const projectRoot = getProjectRoot();
+
   for (let i = 0; i < chunks.length; i++) {
     const chunkOptions: SerializableOptions = {
       ...serializable,
       wipePublicDir: i === 0 ? serializable.wipePublicDir : false,
     };
 
+    console.log(`🐳 Lot ${i + 1}/${chunks.length} (${chunks[i].length} tâche(s))…`);
+    writeCaptureProgress(projectRoot, {
+      done: 0,
+      total: chunks[i].length,
+      chunk: i + 1,
+      chunks: chunks.length,
+      updatedAt: Date.now(),
+    });
+    // Si docker.showLogs : la progression/compare sort déjà via `vr-capture-1 |` — pas de doublon hôte.
+    const progressWatch = showDockerLogs
+      ? null
+      : watchCaptureProgress(projectRoot, {
+          chunk: i + 1,
+          chunks: chunks.length,
+          chunkTotal: chunks[i].length,
+        });
+
     let result: CaptureBatchResult;
     try {
       result = await postBatch(chunks[i], chunkOptions, config);
     } catch (err) {
+      progressWatch?.stop();
       const message = err instanceof Error ? err.message : String(err);
       aggregate.success = false;
       aggregate.error = message;
       aggregate.logs.errors.push(`🚫 Capture daemon: ${message}`);
       break;
     }
+    progressWatch?.stop();
 
-    // Rejoue la sortie console du daemon dans la console de l'hôte (yarn vr) :
-    // restaure l'affichage des logs de capture perdu depuis le passage en Docker.
-    if (result.consoleOutput?.length) {
+    // Rejoue la console daemon sur l'hôte seulement si on ne suit pas déjà docker logs.
+    if (!showDockerLogs && result.consoleOutput?.length) {
       for (const line of result.consoleOutput) {
         process.stdout.write(`${line}\n`);
       }
@@ -223,7 +276,6 @@ export const runCaptureBatchRemote = async (
 
     onProgress?.(aggregate.stats.completed, tasks.length);
   }
-
   if (tasks.length > 0 && aggregate.success && aggregate.stats.completed === 0 && aggregate.stats.durationMs < 100) {
     aggregate.success = false;
     aggregate.error = "Aucune capture exécutée par le daemon (durée ~0 ms)";

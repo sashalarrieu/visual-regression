@@ -2,12 +2,27 @@
 
 export const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
+const normalizeLabel = (value: string): string => value.trim().toLowerCase();
+
+const elementMatchesLabel = (el: HTMLElement, label: string): boolean => {
+  const normLabel = normalizeLabel(label);
+  const aria = el.getAttribute("aria-label");
+  if (aria && normalizeLabel(aria).includes(normLabel)) return true;
+  const text = el.textContent?.trim() ?? "";
+  if (!text) return false;
+  return text === label || normalizeLabel(text).includes(normLabel) || text.includes(label);
+};
+
 const findClickableByLabel = (root: HTMLElement, label: string): HTMLElement | null => {
+  const byAria = root.querySelector<HTMLElement>(`[aria-label="${label}"]`);
+  if (byAria) return byAria;
+
   const candidates = [
     ...Array.from(root.querySelectorAll<HTMLElement>('[role="button"]')),
     ...Array.from(root.querySelectorAll<HTMLElement>("button")),
+    ...Array.from(root.querySelectorAll<HTMLElement>('[tabindex="0"]')),
   ];
-  return candidates.find(el => el.textContent?.trim() === label) ?? null;
+  return candidates.find(el => elementMatchesLabel(el, label)) ?? null;
 };
 
 /**

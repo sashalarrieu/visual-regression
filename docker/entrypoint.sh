@@ -51,6 +51,7 @@ if [ -f "$HASH_FILE" ]; then
   OLD_HASH=$(cat "$HASH_FILE" 2>/dev/null || echo "")
 fi
 
+
 if [ ! -d node_modules ] || [ -z "$(ls -A node_modules 2>/dev/null)" ] || [ "$OLD_HASH" != "$NEW_HASH" ]; then
   echo "📦 [vr-docker] Installation des dépendances (${LOCKFILE:-npm})…"
   install_deps

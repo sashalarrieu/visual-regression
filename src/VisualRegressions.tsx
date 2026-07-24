@@ -223,6 +223,8 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   const [selectedPath, setSelectedPath] = useState<string | undefined>();
   const [pendingRestorePath, setPendingRestorePath] = useState<string | undefined>();
   const [bulkLoading, setBulkLoading] = useState(false);
+  /** Path à sélectionner après validate/refuse — figé AVANT l’API pour survivre au SSE. */
+  const pendingSelectPathRef = useRef<string | null>(null);
 
   const { devices, loading: devicesLoading, error: devicesError } = useDevicesConfig(devicesProp);
   const { tree, lastUpdate, loading, error: treeError, refresh } = useRegressionTrees();
@@ -294,15 +296,33 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     }
   }, [allList, selectedPath]);
 
-  const advanceAfterDelete = useCallback(() => {
+  /** Calcule le path suivant à partir de la liste courante (avant retrait SSE). */
+  const prepareAdvanceAfterRemove = useCallback(() => {
     const deletedPath = selectedPath;
-    const remaining = deletedPath ? allList.filter(n => n.path !== deletedPath) : allList;
-    if (remaining.length > 0) {
-      setSelectedPath(remaining[0].path);
-    } else {
-      setSelectedPath(undefined);
+    if (!deletedPath || allList.length === 0) {
+      pendingSelectPathRef.current = null;
+      return;
     }
+    const index = allList.findIndex(n => n.path === deletedPath);
+    const remaining = allList.filter(n => n.path !== deletedPath);
+    if (remaining.length === 0) {
+      pendingSelectPathRef.current = null;
+      return;
+    }
+    const nextIndex = index === -1 ? 0 : Math.min(index, remaining.length - 1);
+    const nextPath = remaining[nextIndex].path;
+    pendingSelectPathRef.current = nextPath;
+    // Optimistic : bascule tout de suite (storyScreenshotsPath déjà capturé par l’appelant)
+    setSelectedPath(nextPath);
   }, [allList, selectedPath]);
+
+  /** Après succès API : ré-applique le pending (no-op si déjà appliqué). */
+  const advanceAfterDelete = useCallback(() => {
+    const nextPath = pendingSelectPathRef.current;
+    if (nextPath) {
+      setSelectedPath(nextPath);
+    }
+  }, [allList]);
 
   const focusRestoredStory = useCallback((fullPath: string) => {
     setPendingRestorePath(fullPath);
@@ -319,6 +339,21 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
 
   useEffect(() => {
     if (pendingRestorePath) return;
+    const pending = pendingSelectPathRef.current;
+    if (pending) {
+      // Garder le pending jusqu’à ce que le tree SSE le contienne (ou liste vide)
+      if (allList.length === 0) {
+        pendingSelectPathRef.current = null;
+        setSelectedPath(undefined);
+        return;
+      }
+      if (allList.some(n => n.path === pending)) {
+        if (selectedPath !== pending) setSelectedPath(pending);
+        pendingSelectPathRef.current = null;
+      }
+      // Tant que pending existe : ne jamais forcer allList[0]
+      return;
+    }
     if (!selectedPath && allList.length > 0) {
       setSelectedPath(allList[0].path);
       return;
@@ -339,10 +374,13 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     handleDeleteAll,
     handleRestore,
   } = createVisualRegressionActions({
-    onNext: goNext,
+    onBeforeRemove: prepareAdvanceAfterRemove,
     onAfterDelete: advanceAfterDelete,
     onAfterRestore: focusRestoredStory,
-    onAfterBulk: () => setSelectedPath(undefined),
+    onAfterBulk: () => {
+      pendingSelectPathRef.current = null;
+      setSelectedPath(undefined);
+    },
   });
 
   const runBulk = useCallback(async (action: () => Promise<void>) => {

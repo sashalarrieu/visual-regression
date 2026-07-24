@@ -5,7 +5,7 @@
 import { writeFileSync } from "fs";
 
 import pixelmatch from "pixelmatch";
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { PNG } from "pngjs";
 
 import { PLAY_FN_TAG, SKIP_PLAY_VR_TAG } from "../constants/constants";
@@ -176,6 +176,30 @@ export const waitForStoryStable = async (
     { timeout: stepTimeout() },
   );
 
+  // Si un Modal RNW est déjà porté hors root, attendre une bbox non nulle puis
+  // forcer opacity avant freeze CSS (fade figé à 0 sinon).
+  const hasPortalDialog = await page.evaluate(`(() => {
+    const root = document.querySelector("#storybook-root");
+    return Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).some(
+      (el) => !root || !root.contains(el)
+    );
+  })()`);
+  if (hasPortalDialog) {
+    try {
+      await page.waitForFunction(
+        () =>
+          Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).some(el => {
+            const r = el.getBoundingClientRect();
+            return r.width >= 1 && r.height >= 1;
+          }),
+        { timeout: Math.min(1500, stepTimeout()) },
+      );
+    } catch {
+      // continue — prepare + capture tenteront quand même
+    }
+    await preparePortalOverlaysForCapture(page);
+  }
+
   if (config.stabilize.freezeAnimations) {
     await page.addStyleTag({
       content: `
@@ -199,20 +223,209 @@ export const waitForStoryStable = async (
   }
 };
 
+export type CaptureClip = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export const unionCaptureClips = (a: CaptureClip, b: CaptureClip): CaptureClip => {
+  const left = Math.min(a.x, b.x);
+  const top = Math.min(a.y, b.y);
+  const right = Math.max(a.x + a.width, b.x + b.width);
+  const bottom = Math.max(a.y + a.height, b.y + b.height);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+};
+
+/** Clip Playwright : entier, dans le viewport (sinon `page.screenshot({ clip })` échoue). */
+export const clampCaptureClipToViewport = (
+  clip: CaptureClip,
+  viewport: { width: number; height: number },
+): CaptureClip => {
+  const x = Math.max(0, clip.x);
+  const y = Math.max(0, clip.y);
+  const right = Math.min(viewport.width, clip.x + clip.width);
+  const bottom = Math.min(viewport.height, clip.y + clip.height);
+  return {
+    x: Math.floor(x),
+    y: Math.floor(y),
+    width: Math.max(1, Math.ceil(right - x)),
+    height: Math.max(1, Math.ceil(bottom - y)),
+  };
+};
+
+/**
+ * RNW Modal (`animationType=fade`) + freeze / ReduceMotion : le dialog est dans le DOM
+ * mais les couches (backdrop Reanimated, wrapper CSS fade) restent à opacity 0 →
+ * clip élargi = grand blanc + trigger visible à travers.
+ * Force opacity sur tout l'arbre portal + coupe les animations CSS.
+ */
+export const preparePortalOverlaysForCapture = async (page: Page): Promise<void> => {
+  // Soften only: kill CSS animation/transition on dialog shells.
+  // Do NOT force opacity:1 on every descendant — that turns RNW black backdrops
+  // (rgb(0,0,0) at animated opacity 0) into a full-viewport black screenshot.
+  await page.evaluate(`(() => {
+    const root = document.querySelector("#storybook-root");
+    const softForce = (node) => {
+      node.style.setProperty("animation", "none", "important");
+      node.style.setProperty("transition", "none", "important");
+    };
+    for (const el of Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'))) {
+      if (root && root.contains(el)) continue;
+      let node = el;
+      while (node && node !== document.body) {
+        if (!root || !root.contains(node)) softForce(node);
+        node = node.parentElement;
+      }
+      softForce(el);
+      const style = getComputedStyle(el);
+      // Only the dialog shell if still fully transparent (Reanimated mid-open)
+      if (Number(style.opacity) === 0) {
+        el.style.setProperty("opacity", "1", "important");
+        el.style.setProperty("visibility", "visible", "important");
+      }
+    }
+  })()`);
+};
+
+/**
+ * Calcule le clip de capture élargi si des overlays portailés (modals, dialogs)
+ * sont hors de `#storybook-root`. Sinon `null` → screenshot élément root (crop serré).
+ *
+ * Cas typique : backdrop `position:fixed` recouvre le root (visible dans le crop),
+ * mais le panneau modal est centré viewport hors de la bbox du root.
+ */
+export const resolveExpandedCaptureClip = async (page: Page): Promise<CaptureClip | null> => {
+  // String evaluate: tsx/esbuild keepNames injects `__name(...)` into function
+  // bodies serialized by Playwright, which throws ReferenceError in the browser.
+  const raw = (await page.evaluate(`(() => {
+    const root = document.querySelector("#storybook-root");
+    if (!root) return { clip: null, viewport: null, diag: { noRoot: true } };
+
+    const overlayBoxes = [];
+    const skipTag = { SCRIPT: 1, STYLE: 1, LINK: 1, NOSCRIPT: 1, META: 1, TEMPLATE: 1 };
+    const dialogEls = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'));
+    const diagSamples = [];
+
+    const visible = (r) => r.width >= 1 && r.height >= 1;
+    const presentBox = (el) => {
+      const style = window.getComputedStyle(el);
+      if (style.display === "none") return false;
+      return visible(el.getBoundingClientRect());
+    };
+    const painted = (el) => {
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      if (Number(style.opacity) === 0) return false;
+      return visible(el.getBoundingClientRect());
+    };
+    const overlayLayer = (el) => {
+      const style = window.getComputedStyle(el);
+      return style.position === "fixed" || style.position === "absolute" || style.position === "sticky";
+    };
+    const pushBox = (el, requirePainted) => {
+      if (root.contains(el)) return;
+      if (requirePainted ? !painted(el) : !presentBox(el)) return;
+      const r = el.getBoundingClientRect();
+      overlayBoxes.push({ x: r.x, y: r.y, width: r.width, height: r.height });
+    };
+
+    for (const el of dialogEls) {
+      const style = window.getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      if (diagSamples.length < 3) {
+        diagSamples.push({
+          inRoot: root.contains(el),
+          opacity: style.opacity,
+          visibility: style.visibility,
+          display: style.display,
+          position: style.position,
+          w: Math.round(r.width),
+          h: Math.round(r.height),
+          role: el.getAttribute("role"),
+          ariaModal: el.getAttribute("aria-modal"),
+        });
+      }
+      // Dialogs / aria-modal : taille suffit (opacity 0 géré par preparePortalOverlaysForCapture)
+      pushBox(el, false);
+    }
+
+    for (const child of Array.from(document.body.children)) {
+      if (child === root || child.id === "storybook-root") continue;
+      if (skipTag[child.tagName]) continue;
+      if (child.id === "storybook-docs" && child.childElementCount === 0) continue;
+      if (overlayLayer(child) && painted(child)) pushBox(child, true);
+      for (const el of Array.from(child.querySelectorAll("*"))) {
+        if (overlayLayer(el) && painted(el)) pushBox(el, true);
+      }
+    }
+
+    const diag = {
+      dialogCount: dialogEls.length,
+      overlayBoxCount: overlayBoxes.length,
+      bodyChildCount: document.body.children.length,
+      samples: diagSamples,
+    };
+
+    if (overlayBoxes.length === 0) {
+      return { clip: null, viewport: { width: window.innerWidth, height: window.innerHeight }, diag };
+    }
+
+    const rootRect = root.getBoundingClientRect();
+    let union = visible(rootRect)
+      ? { x: rootRect.x, y: rootRect.y, width: rootRect.width, height: rootRect.height }
+      : null;
+
+    for (const box of overlayBoxes) {
+      if (!union) {
+        union = box;
+        continue;
+      }
+      const left = Math.min(union.x, box.x);
+      const top = Math.min(union.y, box.y);
+      const right = Math.max(union.x + union.width, box.x + box.width);
+      const bottom = Math.max(union.y + union.height, box.y + box.height);
+      union = { x: left, y: top, width: right - left, height: bottom - top };
+    }
+
+    if (!union) return { clip: null, viewport: { width: window.innerWidth, height: window.innerHeight }, diag };
+    return {
+      clip: union,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      diag,
+    };
+  })()`)) as {
+    clip: { x: number; y: number; width: number; height: number } | null;
+    viewport: { width: number; height: number } | null;
+    diag?: Record<string, unknown>;
+  } | null;
+
+  if (!raw?.clip || !raw.viewport) return null;
+  return clampCaptureClipToViewport(raw.clip, raw.viewport);
+};
+
+/** Une frame PNG : root serré, ou clip élargi si modals / portals hors root. */
+export const captureStoryFrame = async (page: Page): Promise<Buffer> => {
+  await preparePortalOverlaysForCapture(page);
+  const expandedClip = await resolveExpandedCaptureClip(page);
+  if (expandedClip) {
+    // Pas `animations: "disabled"` : Playwright peut remettre le fade RNW à opacity 0.
+    await preparePortalOverlaysForCapture(page);
+    return page.screenshot({ type: "png", clip: expandedClip });
+  }
+  return page.locator("#storybook-root").screenshot({ type: "png", animations: "disabled" });
+};
+
 /** Capture burst : N frames → sélection consensus (paire identique ou frame la plus stable). */
-export const captureWithBurst = async (
-  page: Page,
-  locator: Locator,
-  config: VrConfig,
-  outputPath: string,
-): Promise<void> => {
+export const captureWithBurst = async (page: Page, config: VrConfig, outputPath: string): Promise<void> => {
   const frameCount = Math.max(2, config.stabilize.burstFrames);
   const interval = Math.max(0, config.stabilize.burstIntervalMs);
   const threshold = config.compare.threshold;
   const frames: Buffer[] = [];
 
   for (let i = 0; i < frameCount; i++) {
-    frames.push(await locator.screenshot());
+    frames.push(await captureStoryFrame(page));
     if (i < frameCount - 1 && interval > 0) {
       await sleep(interval);
     }

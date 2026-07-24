@@ -273,16 +273,26 @@ const printLogsSummary = (
     if (nbErrors <= 15) {
       logs.errors.forEach(log => console.error(log));
     } else {
-      const byMessage = new Map<string, number>();
+      // Agrège par message mais affiche assez d'exemples (story+device) pour diagnostiquer.
+      const byMessage = new Map<string, string[]>();
       for (const log of logs.errors) {
         const idx = log.indexOf(": ");
-        const msg = idx >= 0 ? log.slice(idx + 2).slice(0, 100) : log;
-        byMessage.set(msg, (byMessage.get(msg) ?? 0) + 1);
+        const msg = idx >= 0 ? log.slice(idx + 2).slice(0, 120) : log.slice(0, 120);
+        const list = byMessage.get(msg) ?? [];
+        list.push(log);
+        byMessage.set(msg, list);
       }
       [...byMessage.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 8)
-        .forEach(([msg, count]) => console.error(`  ×${count} ${msg}${msg.length >= 100 ? "…" : ""}`));
+        .sort((a, b) => b[1].length - a[1].length)
+        .forEach(([msg, examples]) => {
+          console.error(`  ×${examples.length} ${msg}${msg.length >= 120 ? "…" : ""}`);
+          for (const example of examples.slice(0, 5)) {
+            console.error(`      • ${example}`);
+          }
+          if (examples.length > 5) {
+            console.error(`      • … +${examples.length - 5} autres`);
+          }
+        });
     }
   }
 

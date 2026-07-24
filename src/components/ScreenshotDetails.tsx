@@ -48,7 +48,7 @@ export const ScreenshotDetails: React.FC<ScreenshotDetailsProps> = ({
         </Box>
       )}
       <Typo variant={variant as TypoProps["variant"]}>{storyDisplayName}</Typo>
-      {showHeatmap && countPixelDiff !== undefined && countPixelDiff !== null && (
+      {countPixelDiff !== undefined && countPixelDiff !== null && (
         <Typo
           variant="paragraphe_regular"
           color="newTheme_danger"

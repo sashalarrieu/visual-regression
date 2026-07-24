@@ -175,7 +175,9 @@ export const invalidateDockerDepsCacheIfLinkedPackagesChanged = (projectRoot: st
     .digest("hex");
 
   const previousHash = existsSync(linkedHashFile) ? readFileSync(linkedHashFile, "utf8").trim() : "";
-  if (currentHash === previousHash) return;
+  if (currentHash === previousHash) {
+    return;
+  }
 
   if (existsSync(depsHashFile)) {
     try {
@@ -387,17 +389,37 @@ export const composeDown = (projectRoot: string): Promise<number> => runCompose(
 /** Affiche l'état des services compose. */
 export const composeStatus = (projectRoot: string): Promise<number> => runCompose(projectRoot, ["ps"]);
 
+/** Lignes d'accès HTTP de `serve` (bruit inutile pendant la capture). */
+const isServeHttpAccessLog = (line: string): boolean =>
+  /\bHTTP\s+\d{1,2}\/\d{1,2}\/\d{4}\b/.test(line) || /\bReturned\s+\d+\s+in\s+\d+\s*ms\b/.test(line);
+
 /**
  * Suit les logs du sidecar dans le terminal hôte (`docker compose logs -f`).
  * À utiliser quand `docker.showLogs` / `VR_DOCKER_SHOW_LOGS` est activé.
+ * Filtre les access logs `serve` (GET /assets… / Returned 200) pour garder
+ * progression capture / erreurs lisibles.
  */
 export const followComposeLogs = (projectRoot: string, options?: { tail?: number }): ChildProcess => {
   const tail = options?.tail ?? 100;
-  return spawn("docker", composeArgs(projectRoot, ["logs", "-f", "--tail", String(tail)]), {
-    stdio: "inherit",
+  const proc = spawn("docker", composeArgs(projectRoot, ["logs", "-f", "--tail", String(tail)]), {
+    stdio: ["ignore", "pipe", "pipe"],
     cwd: getComposeDirectory(),
     env: composeEnv(projectRoot),
   });
+
+  const forwardFiltered = (chunk: Buffer, stream: NodeJS.WriteStream): void => {
+    const text = chunk.toString("utf8");
+    for (const line of text.split(/\r?\n/)) {
+      if (line.length === 0) continue;
+      if (isServeHttpAccessLog(line)) continue;
+      stream.write(`${line}\n`);
+    }
+  };
+
+  proc.stdout?.on("data", (chunk: Buffer) => forwardFiltered(chunk, process.stdout));
+  proc.stderr?.on("data", (chunk: Buffer) => forwardFiltered(chunk, process.stderr));
+
+  return proc;
 };
 
 /** Arrête le processus de suivi des logs (sans toucher au conteneur). */
