@@ -404,25 +404,11 @@ export type CompareScreenshotResult = {
   diffPixels: number;
 };
 
-const agentDebugLog = (
-  hypothesisId: string,
-  location: string,
-  message: string,
-  data: Record<string, unknown>,
-): void => {};
-
 export async function launchBrowser(): Promise<Browser> {
-  agentDebugLog("F", "vr-capture-engine.ts:launchBrowser", "launch start", {
-    vrDocker: process.env.VR_DOCKER === "1",
-  });
-  const launchedAt = Date.now();
   // En conteneur de capture : toujours Chromium bundlé + args déterministes,
   // jamais Edge/Chrome système (garantit un rendu reproductible).
   if (process.env.VR_DOCKER === "1") {
     const browser = await chromium.launch(DOCKER_LAUNCH_OPTIONS);
-    agentDebugLog("F", "vr-capture-engine.ts:launchBrowser", "launch done", {
-      elapsedMs: Date.now() - launchedAt,
-    });
     return browser;
   }
   if (process.platform === "win32") {
@@ -791,12 +777,6 @@ const runSingleTask = async ({
 
   const paths = buildScreenshotPaths(task.componentDir, task.deviceName, task.storyId);
   const iframeUrl = getStoryIframeUrl(captureConfig.storybook.url, task.storyId);
-  agentDebugLog("G", "vr-capture-engine.ts:runSingleTask", "task start", {
-    storyId: task.storyId,
-    deviceName: task.deviceName,
-    storybookUrl: captureConfig.storybook.url,
-    iframeUrl,
-  });
   const context = await getOrCreateContext(
     browser,
     task.deviceName,
@@ -806,33 +786,14 @@ const runSingleTask = async ({
   );
   const page = await context.newPage();
   const networkTracker = new NetworkQuietTracker();
-  agentDebugLog("I", "vr-capture-engine.ts:runSingleTask", "getStoryTags before", {
-    storyId: task.storyId,
-    storybookUrl: captureConfig.storybook.url,
-  });
-  const tagsStartedAt = Date.now();
   const storyTags = await getStoryTags(task.storyId, captureConfig.storybook.url);
-  agentDebugLog("I", "vr-capture-engine.ts:runSingleTask", "getStoryTags after", {
-    storyId: task.storyId,
-    elapsedMs: Date.now() - tagsStartedAt,
-    tagCount: storyTags.length,
-  });
   const screenshotKey = `${task.deviceName}-${task.storyId}`;
 
   try {
     networkTracker.attach(page);
-    agentDebugLog("G", "vr-capture-engine.ts:runSingleTask", "page.goto before", {
-      storyId: task.storyId,
-      iframeUrl,
-    });
-    const gotoStartedAt = Date.now();
     await page.goto(iframeUrl, {
       waitUntil: getStoryGotoWaitUntil(),
       timeout: getStoryGotoTimeout(captureConfig),
-    });
-    agentDebugLog("G", "vr-capture-engine.ts:runSingleTask", "page.goto after", {
-      storyId: task.storyId,
-      elapsedMs: Date.now() - gotoStartedAt,
     });
 
     const storyVr = await readStoryVrParameters(page, task.storyId);
