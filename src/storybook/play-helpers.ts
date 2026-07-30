@@ -28,9 +28,8 @@ const findClickableByLabel = (root: HTMLElement, label: string): HTMLElement | n
 /**
  * Attend qu'un bouton cliquable existe avant de le renvoyer.
  * Indispensable car `play()` (useLayoutEffect) démarre parfois avant que le
- * contenu de la story soit rendu (SafeAreaProvider/GestureHandler rendent leurs
- * enfants après une passe de layout) → sans cette attente, les premiers clics
- * sont perdus et le résultat devient aléatoire.
+ * contenu de la story soit rendu (providers client / layout asynchrones) → sans
+ * cette attente, les premiers clics sont perdus et le résultat devient aléatoire.
  */
 export const waitForClickable = async (root: HTMLElement, label: string, timeout = 2000): Promise<HTMLElement> => {
   const deadline = Date.now() + timeout;

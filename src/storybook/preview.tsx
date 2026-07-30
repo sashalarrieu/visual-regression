@@ -1,8 +1,6 @@
 import type { Decorator } from "@storybook/react-webpack5";
 import { useEffect, type JSX } from "react";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { ReduceMotion, ReducedMotionConfig } from "react-native-reanimated";
-import { SafeAreaProvider } from "react-native-safe-area-context";
 import { addons } from "storybook/preview-api";
 
 import { LIVE_ANIMATION_VR_TAG, PLAY_FN_TAG, SKIP_PLAY_VR_TAG } from "../constants/constants";
@@ -31,24 +29,16 @@ export const withVrReanimatedFreeze: Decorator = (Story, context) => {
   const keepLiveAnimation = context.tags?.includes(LIVE_ANIMATION_VR_TAG) ?? false;
   const shouldFreeze = inCapture && !keepLiveAnimation;
 
-  const shell = (
-    <SafeAreaProvider>
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <Story />
-      </GestureHandlerRootView>
-    </SafeAreaProvider>
-  );
-
   if (shouldFreeze) {
     return (
       <>
         <ReducedMotionConfig mode={ReduceMotion.Always} />
-        {shell}
+        <Story />
       </>
     );
   }
 
-  return shell;
+  return <Story />;
 };
 
 type VrStoryPlayRunnerProps = {
