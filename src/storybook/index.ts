@@ -1,5 +1,7 @@
 export { vrPreviewDecorators, withVrReanimatedFreeze, withVrStoryPlay } from "./preview";
 
+export { patchStorybookFocusForDocs } from "./patch-storybook-focus";
+
 export {
   BURST_VR_TAG,
   FORCE_VR_TAG,
@@ -18,8 +20,8 @@ export {
   type VrStoryPlayStep,
 } from "../utils/vr-story-play";
 
-export type { VrStoryParameters } from "../types/types";
 export { defineVrParameters } from "../types/types";
+export type { VrStoryParameters } from "../types/types";
 
 export {
   clickByLabel,

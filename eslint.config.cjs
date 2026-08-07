@@ -213,6 +213,21 @@ module.exports = [
     },
   },
 
+  // Node ESM scripts (espree needs ecmaVersion for ?? / optional chaining)
+  {
+    files: ["**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      "import/no-default-export": "off",
+    },
+  },
+
   // Ignored files
   {
     ignores: ["dist/*", "node_modules/*", "web-build/*", "bin/*", "storybook-static/*", "vr.config.cjs"],

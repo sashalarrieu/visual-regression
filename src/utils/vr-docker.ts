@@ -6,7 +6,7 @@
 import type { ChildProcess } from "child_process";
 import { spawn, spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
 
 import { CAPTURE_DAEMON_PORT, STORYBOOK_PORT } from "../constants/constants";
@@ -126,40 +126,24 @@ export const getLinkedFileDependencyMounts = (projectRoot: string): DockerVolume
   return mounts;
 };
 
-const LINKED_PACKAGE_SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".sh"]);
-
-/** Empreinte du code source d'un package file: monté (src + bin + package.json). */
-const hashLinkedPackageSources = (hostRoot: string): string => {
+/**
+ * Empreinte du manifeste d'un package file: monté (package.json uniquement).
+ * Les sources sont resync via entrypoint (sync_linked_vr_sources) — pas besoin
+ * d'invalider yarn/pnpm install à chaque edit TS.
+ */
+const hashLinkedPackageManifest = (hostRoot: string): string => {
   const hash = createHash("sha1");
   const pkgJson = path.join(hostRoot, "package.json");
   if (existsSync(pkgJson)) {
     hash.update(readFileSync(pkgJson));
   }
-
-  const walk = (dir: string): void => {
-    if (!existsSync(dir)) return;
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name === "node_modules") continue;
-        walk(full);
-        continue;
-      }
-      if (!LINKED_PACKAGE_SOURCE_EXTENSIONS.has(path.extname(entry.name))) continue;
-      hash.update(full);
-      hash.update(readFileSync(full));
-    }
-  };
-
-  walk(path.join(hostRoot, "src"));
-  walk(path.join(hostRoot, "bin"));
   return hash.digest("hex");
 };
 
 /**
- * Invalide le cache d'install Docker (.vr-cache/docker-deps.hash) quand le code
- * d'une dépendance file: change. Sinon pnpm réutilise une copie figée dans le volume
- * node_modules du conteneur et ignore le bind mount /visual-regression.
+ * Invalide le cache d'install Docker (.vr-cache/docker-deps.hash) quand le
+ * package.json d'une dépendance file: change (nouvelles deps). Les edits source
+ * ne forcent plus de réinstall (évite les 404 packages privés sans auth npm).
  */
 export const invalidateDockerDepsCacheIfLinkedPackagesChanged = (projectRoot: string): void => {
   const mounts = getLinkedFileDependencyMounts(projectRoot);
@@ -167,28 +151,67 @@ export const invalidateDockerDepsCacheIfLinkedPackagesChanged = (projectRoot: st
 
   const cacheDir = path.join(projectRoot, ".vr-cache");
   mkdirSync(cacheDir, { recursive: true });
-  const linkedHashFile = path.join(cacheDir, "docker-linked-src.hash");
+  const linkedHashFile = path.join(cacheDir, "docker-linked-manifest.hash");
+  const legacyLinkedHashFile = path.join(cacheDir, "docker-linked-src.hash");
   const depsHashFile = path.join(cacheDir, "docker-deps.hash");
 
   const currentHash = createHash("sha1")
-    .update(mounts.map(m => `${m.container}:${hashLinkedPackageSources(m.host)}`).join("|"))
+    .update(mounts.map(m => `${m.container}:${hashLinkedPackageManifest(m.host)}`).join("|"))
     .digest("hex");
 
   const previousHash = existsSync(linkedHashFile) ? readFileSync(linkedHashFile, "utf8").trim() : "";
-  if (currentHash === previousHash) return;
+  if (currentHash === previousHash) {
+    return;
+  }
 
-  if (existsSync(depsHashFile)) {
+  // Migration : l'ancien hash incluait tout le src — ne pas forcer une réinstall
+  // juste parce qu'on change de schéma de hash.
+  const hadLegacyHash = existsSync(legacyLinkedHashFile);
+  if (existsSync(depsHashFile) && previousHash && !hadLegacyHash) {
     try {
       unlinkSync(depsHashFile);
     } catch {
       // ignore
     }
+    console.log("🐳 [vr-docker] Manifeste file: modifié — réinstallation au démarrage du sidecar");
   }
+
   writeFileSync(linkedHashFile, currentHash, "utf8");
-  console.log("🐳 [vr-docker] Dépendance(s) file: modifiée(s) — réinstallation au démarrage du sidecar");
+  if (hadLegacyHash) {
+    try {
+      unlinkSync(legacyLinkedHashFile);
+    } catch {
+      // ignore
+    }
+  }
 };
 
 const formatDockerVolumePath = (hostPath: string): string => path.resolve(hostPath).replace(/\\/g, "/");
+
+/**
+ * Override compose : monte ~/.npmrc hôte pour les packages npm privés.
+ * Le `.npmrc` projet est déjà dans /work ; le token est souvent seulement dans ~/.npmrc.
+ */
+export const writeComposeNpmAuthOverride = (projectRoot: string): string | null => {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const hostNpmrc = home ? path.join(home, ".npmrc") : "";
+  if (!hostNpmrc || !existsSync(hostNpmrc)) {
+    return null;
+  }
+
+  const cacheDir = path.join(projectRoot, ".vr-cache");
+  mkdirSync(cacheDir, { recursive: true });
+  const overridePath = path.join(cacheDir, "docker-compose.npm-auth.yml");
+  writeFileSync(
+    overridePath,
+    `# Généré par @setshao/visual-regression — auth npm privée (~/.npmrc → /root/.npmrc)\n` +
+      `services:\n  vr-capture:\n    volumes:\n` +
+      `      - "${formatDockerVolumePath(hostNpmrc)}:/root/.npmrc:ro"\n`,
+    "utf8",
+  );
+  console.log("🔐 [vr-docker] ~/.npmrc hôte monté dans le sidecar (packages privés)");
+  return overridePath;
+};
 
 /** Génère un override compose pour monter les packages locaux liés via file:. */
 export const writeComposeLinkedPackagesOverride = (projectRoot: string): string | null => {
@@ -228,8 +251,10 @@ export const writeComposeLinkedPackagesOverride = (projectRoot: string): string 
 
 export const getComposeFiles = (projectRoot: string): string[] => {
   const files = [getComposeFile()];
-  const override = writeComposeLinkedPackagesOverride(projectRoot);
-  if (override) files.push(override);
+  const linked = writeComposeLinkedPackagesOverride(projectRoot);
+  if (linked) files.push(linked);
+  const npmAuth = writeComposeNpmAuthOverride(projectRoot);
+  if (npmAuth) files.push(npmAuth);
   return files;
 };
 
@@ -387,17 +412,37 @@ export const composeDown = (projectRoot: string): Promise<number> => runCompose(
 /** Affiche l'état des services compose. */
 export const composeStatus = (projectRoot: string): Promise<number> => runCompose(projectRoot, ["ps"]);
 
+/** Lignes d'accès HTTP de `serve` (bruit inutile pendant la capture). */
+const isServeHttpAccessLog = (line: string): boolean =>
+  /\bHTTP\s+\d{1,2}\/\d{1,2}\/\d{4}\b/.test(line) || /\bReturned\s+\d+\s+in\s+\d+\s*ms\b/.test(line);
+
 /**
  * Suit les logs du sidecar dans le terminal hôte (`docker compose logs -f`).
  * À utiliser quand `docker.showLogs` / `VR_DOCKER_SHOW_LOGS` est activé.
+ * Filtre les access logs `serve` (GET /assets… / Returned 200) pour garder
+ * progression capture / erreurs lisibles.
  */
 export const followComposeLogs = (projectRoot: string, options?: { tail?: number }): ChildProcess => {
   const tail = options?.tail ?? 100;
-  return spawn("docker", composeArgs(projectRoot, ["logs", "-f", "--tail", String(tail)]), {
-    stdio: "inherit",
+  const proc = spawn("docker", composeArgs(projectRoot, ["logs", "-f", "--tail", String(tail)]), {
+    stdio: ["ignore", "pipe", "pipe"],
     cwd: getComposeDirectory(),
     env: composeEnv(projectRoot),
   });
+
+  const forwardFiltered = (chunk: Buffer, stream: NodeJS.WriteStream): void => {
+    const text = chunk.toString("utf8");
+    for (const line of text.split(/\r?\n/)) {
+      if (line.length === 0) continue;
+      if (isServeHttpAccessLog(line)) continue;
+      stream.write(`${line}\n`);
+    }
+  };
+
+  proc.stdout?.on("data", (chunk: Buffer) => forwardFiltered(chunk, process.stdout));
+  proc.stderr?.on("data", (chunk: Buffer) => forwardFiltered(chunk, process.stderr));
+
+  return proc;
 };
 
 /** Arrête le processus de suivi des logs (sans toucher au conteneur). */

@@ -7,6 +7,7 @@ export { EndOfList } from "./EndOfList";
 export { Icon } from "./Icon";
 export { Modal } from "./Modal";
 export { Picture } from "./Picture";
+export { SearchField } from "./SearchField";
 export { TabBar } from "./TabBar";
 export { Tag } from "./Tag";
 export { TagNew } from "./TagNew";

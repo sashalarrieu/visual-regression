@@ -2,20 +2,34 @@
 
 export const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
+const normalizeLabel = (value: string): string => value.trim().toLowerCase();
+
+const elementMatchesLabel = (el: HTMLElement, label: string): boolean => {
+  const normLabel = normalizeLabel(label);
+  const aria = el.getAttribute("aria-label");
+  if (aria && normalizeLabel(aria).includes(normLabel)) return true;
+  const text = el.textContent?.trim() ?? "";
+  if (!text) return false;
+  return text === label || normalizeLabel(text).includes(normLabel) || text.includes(label);
+};
+
 const findClickableByLabel = (root: HTMLElement, label: string): HTMLElement | null => {
+  const byAria = root.querySelector<HTMLElement>(`[aria-label="${label}"]`);
+  if (byAria) return byAria;
+
   const candidates = [
     ...Array.from(root.querySelectorAll<HTMLElement>('[role="button"]')),
     ...Array.from(root.querySelectorAll<HTMLElement>("button")),
+    ...Array.from(root.querySelectorAll<HTMLElement>('[tabindex="0"]')),
   ];
-  return candidates.find(el => el.textContent?.trim() === label) ?? null;
+  return candidates.find(el => elementMatchesLabel(el, label)) ?? null;
 };
 
 /**
  * Attend qu'un bouton cliquable existe avant de le renvoyer.
  * Indispensable car `play()` (useLayoutEffect) démarre parfois avant que le
- * contenu de la story soit rendu (SafeAreaProvider/GestureHandler rendent leurs
- * enfants après une passe de layout) → sans cette attente, les premiers clics
- * sont perdus et le résultat devient aléatoire.
+ * contenu de la story soit rendu (providers client / layout asynchrones) → sans
+ * cette attente, les premiers clics sont perdus et le résultat devient aléatoire.
  */
 export const waitForClickable = async (root: HTMLElement, label: string, timeout = 2000): Promise<HTMLElement> => {
   const deadline = Date.now() + timeout;

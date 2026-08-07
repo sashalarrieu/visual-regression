@@ -9,11 +9,15 @@
  */
 import { spawn } from "child_process";
 import type { ChildProcess } from "child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 
 import { getPackageScriptCommand, getProjectRoot, spawnShellOption, waitForStorybookStories } from "./node";
 import { resolveVrConfig } from "./vr-config";
+
+/** Racine du package visual-regression (src/utils → ../..). */
+const PACKAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 export type StorybookMode = "dev" | "static";
 
@@ -33,7 +37,9 @@ export const usesNextJsViteStorybook = (projectRoot: string): boolean => {
 
 /**
  * Mode Storybook pour la capture (daemon Docker ou scripts).
- * En Docker + nextjs-vite : statique par défaut (le dev Vite ne rend pas les stories en headless).
+ * Capture via Docker (sidecar ou VR_DOCKER=1) : **static** par défaut
+ * (Vite dev = lent, HMR reload mid-capture, concurrencyDev trop bas).
+ * Forcer le HMR : `VR_STORYBOOK_MODE=dev` ou `launcher.storybookMode: "dev"`.
  */
 export const resolveStorybookModeForCapture = (projectRoot: string): StorybookMode => {
   const envMode = (process.env.VR_STORYBOOK_MODE || "").toLowerCase();
@@ -47,32 +53,25 @@ export const resolveStorybookModeForCapture = (projectRoot: string): StorybookMo
     return config.launcher.storybookMode;
   }
 
-  if (process.env.VR_DOCKER === "1" && usesNextJsViteStorybook(projectRoot)) {
+  // Sidecar Docker (hôte backend docker, ou process dans le conteneur).
+  if (process.env.VR_DOCKER === "1" || config.capture.backend !== "local") {
     return "static";
   }
 
   return "dev";
 };
 
-/** Mode Storybook résolu (env > vr.config > auto). */
+/** Mode Storybook résolu (env > vr.config > auto Docker/static). */
 export const getStorybookMode = (): StorybookMode => {
-  const envMode = (process.env.VR_STORYBOOK_MODE || "").toLowerCase();
-  if (envMode === "static" || envMode === "dev") {
-    return envMode === "static" ? "static" : "dev";
-  }
-  if (process.env.VR_STORYBOOK_STATIC === "1") return "static";
-  if (process.env.VR_DOCKER === "1") {
-    return resolveStorybookModeForCapture(getProjectRoot());
-  }
   try {
-    const config = resolveVrConfig(getProjectRoot());
-    if (config.launcher.storybookMode === "static" || config.launcher.storybookMode === "dev") {
-      return config.launcher.storybookMode;
-    }
+    return resolveStorybookModeForCapture(getProjectRoot());
   } catch {
-    // pas de vr.config (tests internes)
+    const envMode = (process.env.VR_STORYBOOK_MODE || "").toLowerCase();
+    if (envMode === "static" || envMode === "dev") {
+      return envMode === "static" ? "static" : "dev";
+    }
+    return process.env.VR_DOCKER === "1" ? "static" : "dev";
   }
-  return "dev";
 };
 
 /**
@@ -129,7 +128,7 @@ const withLocalBinPath = (projectRoot: string, env: NodeJS.ProcessEnv): NodeJS.P
 
 const STORYBOOK_SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".cjs", ".mjs", ".css", ".scss", ".mdx"]);
 
-/** mtime le plus récent parmi src/ et .storybook/ (inputs du build Storybook). */
+/** mtime le plus récent parmi src/, .storybook/ et le package VR lié (decorators preview). */
 export const getNewestStorybookInputMtime = (projectRoot: string): number => {
   const roots = ["src", ".storybook"];
   let newest = 0;
@@ -156,7 +155,47 @@ export const getNewestStorybookInputMtime = (projectRoot: string): number => {
   for (const root of roots) {
     walk(path.join(projectRoot, root));
   }
+
+  // Decorators `@setshao/visual-regression/storybook` sont bundlés dans storybook-static :
+  // un changement lib doit invalider le build (symlink file: ou node_modules).
+  const vrStorybookDirs = [
+    path.join(projectRoot, "node_modules", "@setshao", "visual-regression", "src", "storybook"),
+    path.join(projectRoot, "..", "visual-regression", "src", "storybook"),
+  ];
+  for (const dir of vrStorybookDirs) {
+    walk(dir);
+  }
+
   return newest;
+};
+
+/**
+ * Copie le contenu de `assets/` dans `storybook-static/assets/` (merge).
+ * `preview-head.html` référence `../assets/fonts/…` → `/assets/fonts/…` en static ;
+ * sans staticDirs Storybook, ces fichiers 404 et les captures tombent en serif système.
+ *
+ * Attention : `storybook-static/assets/` existe déjà (JS Vite). On merge les enfants
+ * (`fonts/`, …) — pas un `cp assets → assets` qui créerait `assets/assets/`.
+ */
+export const ensureStorybookStaticAssets = (projectRoot: string): void => {
+  const staticDir = path.join(projectRoot, "storybook-static");
+  const from = path.join(projectRoot, "assets");
+  const to = path.join(staticDir, "assets");
+  if (!existsSync(staticDir) || !existsSync(from)) return;
+
+  try {
+    mkdirSync(to, { recursive: true });
+    for (const entry of readdirSync(from, { withFileTypes: true })) {
+      const src = path.join(from, entry.name);
+      const dest = path.join(to, entry.name);
+      cpSync(src, dest, { recursive: true, force: true });
+    }
+  } catch (error) {
+    console.warn(
+      "[vr-storybook] Impossible de copier assets/ → storybook-static/assets/:",
+      error instanceof Error ? error.message : error,
+    );
+  }
 };
 
 /** true si un build statique de Storybook est nécessaire (absent, stats manquantes ou sources plus récentes). */
@@ -192,12 +231,49 @@ export const buildStaticStorybook = (projectRoot: string): Promise<number> =>
     proc.on("close", code => resolve(code ?? 1));
   });
 
-/** Démarre `serve storybook-static` sur le port donné. */
+/** Démarre le serveur static storybook-static (vr-static-server, pas `serve`). */
 export const startStaticStorybookServer = (projectRoot: string, port: number): ChildProcess => {
+  const staticDir = path.join(projectRoot, "storybook-static");
+  ensureStorybookStaticAssets(projectRoot);
+
+  // Ancien serve.json laissé pour compat / outils externes — plus utilisé par le serveur VR.
+  try {
+    writeFileSync(
+      path.join(staticDir, "serve.json"),
+      `${JSON.stringify(
+        {
+          cleanUrls: false,
+          trailingSlash: false,
+          directoryListing: false,
+          redirects: [{ source: "/", destination: "/index.html", type: 302 }],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  } catch {
+    // best-effort
+  }
+
+  const serverScript = path.join(PACKAGE_ROOT, "src", "scripts", "vr-static-server.mjs");
   const listenArg = process.env.VR_DOCKER === "1" ? `tcp://0.0.0.0:${port}` : String(port);
-  return spawn("npx", ["serve", "storybook-static", "-l", listenArg], {
+
+  // Résoudre le script depuis le package lié (node_modules ou monorepo).
+  const candidates = [
+    serverScript,
+    path.join(projectRoot, "node_modules", "@setshao", "visual-regression", "src", "scripts", "vr-static-server.mjs"),
+    path.join(projectRoot, "..", "visual-regression", "src", "scripts", "vr-static-server.mjs"),
+  ];
+  const scriptPath = candidates.find(p => existsSync(p));
+  if (!scriptPath) {
+    throw new Error(
+      "[vr-storybook] vr-static-server.mjs introuvable — vérifiez @setshao/visual-regression (src/scripts).",
+    );
+  }
+
+  return spawn(process.execPath, [scriptPath, staticDir, listenArg], {
     stdio: "inherit",
-    shell: true,
     cwd: projectRoot,
     env: withLocalBinPath(projectRoot, { ...process.env, STORYBOOK_ENV: "web" }),
   });
@@ -283,6 +359,10 @@ export const startStorybook = async (options: StartStorybookOptions): Promise<St
       if (code !== 0) {
         throw new Error(`Build Storybook statique échoué (code ${code})`);
       }
+      ensureStorybookStaticAssets(projectRoot);
+    } else {
+      // Build déjà là : quand même (re)copier fonts/assets (souvent oubliés hors staticDirs).
+      ensureStorybookStaticAssets(projectRoot);
     }
     const proc = startStaticStorybookServer(projectRoot, port);
     const ready = await waitForStorybookStories(1, waitMaxAttempts, projectRoot);

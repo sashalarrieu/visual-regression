@@ -333,17 +333,20 @@ const main = async () => {
     const captureStorybookMode = resolveStorybookModeForCapture(PROJECT_ROOT);
     if (captureStorybookMode === "static") {
       process.env.VR_STORYBOOK_MODE = "static";
+      if (explicitStorybookMode !== "static") {
+        log(
+          "yellow",
+          "ℹ️",
+          "Storybook statique activé dans Docker (capture rapide) — VR_STORYBOOK_MODE=dev pour forcer le HMR",
+        );
+      }
     }
     if (
       explicitStorybookMode !== "static" &&
       captureStorybookMode === "static" &&
       usesNextJsViteStorybook(PROJECT_ROOT)
     ) {
-      log(
-        "yellow",
-        "ℹ️",
-        "Storybook statique activé dans Docker (@storybook/nextjs-vite — le mode dev ne rend pas les stories en capture headless)",
-      );
+      log("yellow", "ℹ️", "@storybook/nextjs-vite : le mode dev ne rend pas les stories en capture headless");
     }
 
     // Réutiliser un sidecar déjà sain pour *ce* projet (ports dérivés).

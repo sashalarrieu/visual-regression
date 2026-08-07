@@ -1,6 +1,16 @@
 // scripts/vr-server.ts (package @setshao/visual-regression)
 import { spawn } from "child_process";
-import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, watch } from "fs";
+import {
+  copyFileSync,
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  watch,
+} from "fs";
 import type { IncomingMessage, ServerResponse } from "http";
 import { createServer } from "http";
 import path from "path";
@@ -12,6 +22,7 @@ import {
   SCREENSHOT_EXTENSION,
   SCREENSHOTS_DIR,
   TEMP_SCREENSHOT_NAME,
+  VALIDATED_DIR_NAME,
   VR_SERVER_PORT,
   VR_SERVER_URL,
 } from "../constants/constants";
@@ -27,6 +38,7 @@ import {
   resolveVrConfig,
   spawnShellOption,
 } from "../utils/node";
+import { readCaptureErrors } from "../utils/vr-capture-errors";
 
 import {
   buildIndexFromScan,
@@ -36,18 +48,45 @@ import {
   getDiffScreenshotVariants,
   pickScreenshotPathForLog,
 } from "./vr-server-index";
+import { buildOrphansTree } from "./vr-server-orphans-tree";
+import { buildStoriesTree } from "./vr-server-stories-tree";
 
 const PROJECT_ROOT = getProjectRoot();
 const {
   publicDir: PUBLIC_DIR,
   publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR,
   deletedDir: DELETED_DIR,
+  validatedDir: VALIDATED_DIR,
 } = getProjectPaths(PROJECT_ROOT);
 const SCRIPT_DIR = getScriptDir(import.meta);
 const join = path.join;
 const dirname = path.dirname;
+const resolvePath = path.resolve;
 
 const importCompareModule = () => import(pathToFileURL(join(SCRIPT_DIR, "compare-visual-regressions.ts")).href);
+
+type CompareRunResult = { success: boolean; error?: string };
+
+/** Lance une compare en arrière-plan — la route HTTP répond tout de suite (comme POST /compare). */
+const runCompareAsync = (
+  label: string,
+  run: () => Promise<CompareRunResult>,
+  options?: { allowEmptyRefresh?: boolean },
+): void => {
+  void (async () => {
+    try {
+      const result = await run();
+      if (result.success) {
+        refreshIndex({ notify: true, allowEmpty: options?.allowEmptyRefresh ?? false });
+        console.log(`✅ ${label}`);
+      } else {
+        console.error(`❌ ${label}:`, result.error ?? "erreur inconnue");
+      }
+    } catch (err) {
+      console.error(`❌ ${label}:`, err);
+    }
+  })();
+};
 
 // ============================================
 // INDEX DES RÉGRESSIONS (en mémoire)
@@ -57,8 +96,10 @@ let index: RegressionIndex = {
   diffPaths: [],
   newPaths: [],
   deletedPaths: [],
+  validatedPaths: [],
   tree: null,
   deletedItems: [],
+  validatedItems: [],
   lastUpdate: 0,
 };
 const metricsCache = new Map<string, number | null>();
@@ -115,6 +156,7 @@ const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Private-Network": "true",
 };
 
 const sendJson = (res: ServerResponse, data: unknown, status = 200) => {
@@ -333,6 +375,30 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
     return;
   }
 
+  // 📖 GET /regressions/stories-tree — catalogue Storybook × devices (baseline / missing / ignored)
+  if (req.method === "GET" && url.pathname === "/regressions/stories-tree") {
+    try {
+      const result = await buildStoriesTree(PROJECT_ROOT);
+      sendJson(res, result);
+    } catch (err) {
+      console.error("❌ Error building stories tree:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  // 📖 GET /regressions/orphans-tree — screenshots disque sans story Storybook
+  if (req.method === "GET" && url.pathname === "/regressions/orphans-tree") {
+    try {
+      const result = await buildOrphansTree(PROJECT_ROOT);
+      sendJson(res, result);
+    } catch (err) {
+      console.error("❌ Error building orphans tree:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
   // 📖 GET /regressions/config/devices - Config d'affichage des devices (pour l'UI, depuis vr.config.cjs)
   if (req.method === "GET" && url.pathname === "/regressions/config/devices") {
     try {
@@ -364,6 +430,29 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
       sendJson(res, { deleted: index.deletedItems, lastUpdate: index.lastUpdate });
     } catch (err) {
       console.error("❌ Error fetching deleted:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  // 📖 GET /regressions/validated - Historique des validations (revert possible)
+  if (req.method === "GET" && url.pathname === "/regressions/validated") {
+    try {
+      sendJson(res, { validated: index.validatedItems, lastUpdate: index.lastUpdate });
+    } catch (err) {
+      console.error("❌ Error fetching validated:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  // 📖 GET /regressions/capture-errors — stories × devices en échec de capture
+  if (req.method === "GET" && url.pathname === "/regressions/capture-errors") {
+    try {
+      const errors = readCaptureErrors(PROJECT_ROOT);
+      sendJson(res, { errors, count: errors.length, lastUpdate: Date.now() });
+    } catch (err) {
+      console.error("❌ Error fetching capture errors:", err);
       sendJson(res, { error: String(err) }, 500);
     }
     return;
@@ -438,7 +527,26 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
   // ============================================
 
   /**
-   * Valide une régression (new ou diff) : déplace vers le Screenshots/ du composant.
+   * Archive une régression dans validated/ avant validation (permet le revert).
+   * DIFF : original + __temp__ + __diff__ ; NEW : __new__ seulement.
+   */
+  const archiveValidation = (body: StoryScreenshotsPath, isDiffCase: boolean): void => {
+    const files = isDiffCase ? [body.original, body.temp, body.diff].filter(Boolean) : [body.new].filter(Boolean);
+
+    for (const p of files) {
+      const rel = p!;
+      if (!rel.startsWith(`${SCREENSHOTS_DIR}/`)) continue;
+      const absSource = join(PUBLIC_DIR, rel);
+      if (!existsSync(absSource)) continue;
+      const cleanPath = rel.replace(/^Screenshots\//, "");
+      const absTarget = join(VALIDATED_DIR, cleanPath);
+      mkdirSync(dirname(absTarget), { recursive: true });
+      copyFileSync(absSource, absTarget);
+    }
+  };
+
+  /**
+   * Valide une régression (new ou diff) : archive pour historique, puis déplace vers le Screenshots/ du composant.
    * @returns chemin cible relatif au projet
    */
   const validateRegression = (body: StoryScreenshotsPath): string => {
@@ -471,6 +579,8 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
       "",
     );
 
+    archiveValidation(body, isDiffCase);
+
     const target = [...componentPath, SCREENSHOTS_DIR, cleanFileName].join("/");
     const absSource = join(PUBLIC_DIR, source);
     const absTarget = join(PROJECT_ROOT, target);
@@ -500,7 +610,71 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
     return target;
   };
 
-  /** Refuse une régression : déplace les artefacts vers deleted/. */
+  /**
+   * Annule une validation : restaure la baseline précédente (diff) ou retire la NEW,
+   * et remet les artefacts dans public/ pour réafficher la régression.
+   */
+  const revertValidated = (cleanPath: string, isDiff: boolean): void => {
+    if (isDiff) {
+      const { diff, temp, original } = getDiffScreenshotVariants(cleanPath);
+      const filesToRestore = [diff, temp, original];
+      let restoredCount = 0;
+
+      for (const file of filesToRestore) {
+        const absValidated = join(VALIDATED_DIR, file);
+        const absPublic = join(PUBLIC_SCREENSHOTS_DIR, file);
+        if (!existsSync(absValidated)) {
+          console.warn(`⚠️  Not in validated/: ${file}`);
+          continue;
+        }
+        if (existsSync(absPublic)) rmSync(absPublic, { force: true });
+        mkdirSync(dirname(absPublic), { recursive: true });
+        renameSync(absValidated, absPublic);
+        restoredCount++;
+      }
+
+      if (restoredCount === 0) {
+        throw new Error("No files found in validated/");
+      }
+
+      // Remettre l'ancienne baseline source (fichier original sans préfixe)
+      const absPrevBaseline = join(PUBLIC_SCREENSHOTS_DIR, original);
+      if (existsSync(absPrevBaseline)) {
+        const parts = original.split("/");
+        const baseName = parts[parts.length - 1];
+        const componentDir = parts.slice(0, -1).join("/");
+        const absSourceBaseline = join(PROJECT_ROOT, componentDir, SCREENSHOTS_DIR, baseName);
+        mkdirSync(dirname(absSourceBaseline), { recursive: true });
+        copyFileSync(absPrevBaseline, absSourceBaseline);
+      }
+
+      console.log(`↩️  Reverted validated diff ${formatScreenshotLogLabel(cleanPath)}`);
+      return;
+    }
+
+    const absValidated = join(VALIDATED_DIR, cleanPath);
+    const absPublic = join(PUBLIC_SCREENSHOTS_DIR, cleanPath);
+    if (!existsSync(absValidated)) {
+      throw new Error("Not found in validated/");
+    }
+
+    // Retirer la baseline source validée
+    const parts = cleanPath
+      .replace(new RegExp(`(^|/)${NEW_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), "$1")
+      .split("/");
+    const baseName = parts[parts.length - 1];
+    const componentDir = parts.slice(0, -1).join("/");
+    const absSourceBaseline = join(PROJECT_ROOT, componentDir, SCREENSHOTS_DIR, baseName);
+    if (existsSync(absSourceBaseline)) {
+      rmSync(absSourceBaseline, { force: true });
+    }
+
+    mkdirSync(dirname(absPublic), { recursive: true });
+    renameSync(absValidated, absPublic);
+    console.log(`↩️  Reverted validated new ${formatScreenshotLogLabel(cleanPath)}`);
+  };
+
+  /** Refuse une régression : déplace les artefacts public vers deleted/ ; rm les baselines source orphelines. */
   const deleteRegression = (body: StoryScreenshotsPath): boolean => {
     const { temp, diff, new: newPath, original } = body || {};
     const files = [original, temp, diff, newPath].filter(Boolean);
@@ -510,9 +684,25 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
 
     let movedAny = false;
     for (const p of files) {
-      const absSource = join(PUBLIC_DIR, p!);
+      const rel = p!;
+      // Baseline co-localisée (orphelins source) : chemin relatif au projet, hors public/
+      if (!rel.startsWith(`${SCREENSHOTS_DIR}/`)) {
+        const absSource = join(PROJECT_ROOT, rel);
+        const resolvedRoot = resolvePath(PROJECT_ROOT);
+        const resolvedFile = resolvePath(absSource);
+        if (
+          (resolvedFile === resolvedRoot || resolvedFile.startsWith(resolvedRoot + path.sep)) &&
+          existsSync(absSource)
+        ) {
+          rmSync(absSource, { force: true });
+          movedAny = true;
+        }
+        continue;
+      }
+
+      const absSource = join(PUBLIC_DIR, rel);
       if (!existsSync(absSource)) continue;
-      const cleanPath = p!.replace(/^Screenshots\//, "");
+      const cleanPath = rel.replace(/^Screenshots\//, "");
       const absTarget = join(DELETED_DIR, cleanPath);
       mkdirSync(dirname(absTarget), { recursive: true });
       renameSync(absSource, absTarget);
@@ -575,6 +765,41 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
     return;
   }
 
+  // ✅ POST /validate/selected - Valider une sélection de régressions
+  if (req.method === "POST" && url.pathname === "/validate/selected") {
+    try {
+      const body = JSON.parse(await readBody(req)) as { items: StoryScreenshotsPath[] };
+      const { items } = body || {};
+      if (!Array.isArray(items) || items.length === 0) {
+        sendJson(
+          res,
+          { success: false, error: "Missing or empty items array (expected { items: StoryScreenshotsPath[] })" },
+          400,
+        );
+        return;
+      }
+
+      let validated = 0;
+      let failed = 0;
+      for (const item of items) {
+        try {
+          validateRegression(item);
+          validated++;
+        } catch (err) {
+          failed++;
+          console.warn(`⚠️  Validate selected skip:`, err);
+        }
+      }
+      refreshIndex(true);
+      console.log(`✅ Validate selected: ${validated} ok, ${failed} failed (${items.length} total)`);
+      sendJson(res, { success: true, validated, failed, total: items.length });
+    } catch (err) {
+      console.error("❌ Validate selected error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
   // 🔍 POST /compare - Lancer la comparaison
   if (req.method === "POST" && url.pathname === "/compare") {
     try {
@@ -610,16 +835,11 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
         sendJson(res, { success: false, error: "Missing storyId or deviceName" }, 400);
         return;
       }
-      // Importer et appeler la fonction de comparaison pour une story spécifique
       const { compareSingleStory } = await importCompareModule();
-      const result = await compareSingleStory(storyId, deviceName, componentDir);
-      if (result.success) {
-        // Rafraîchir le cache après la comparaison et notifier les clients
-        refreshIndex(true);
-        sendJson(res, { success: true, message: "Comparaison lancée" });
-      } else {
-        sendJson(res, { success: false, error: result.error || "Unknown error" }, 500);
-      }
+      runCompareAsync(`Comparaison ${deviceName}/${storyId}`, () =>
+        compareSingleStory(storyId, deviceName, componentDir),
+      );
+      sendJson(res, { success: true, message: "Comparaison lancée" });
     } catch (err) {
       console.error("❌ Compare single error:", err);
       sendJson(res, { error: String(err) }, 500);
@@ -627,28 +847,31 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
     return;
   }
 
-  // 🔍 POST /compare/by-type - Lancer la comparaison par type (new, diff, rejected) et optionnellement par device
+  // 🔍 POST /compare/by-type - Lancer la comparaison par type (new, diff, rejected, validated)
   if (req.method === "POST" && url.pathname === "/compare/by-type") {
     try {
-      const body = JSON.parse(await readBody(req)) as { type: "new" | "diff" | "rejected"; deviceName?: string };
-      const { type, deviceName } = body || {};
-      if (!type || !["new", "diff", "rejected"].includes(type)) {
-        sendJson(res, { success: false, error: "Missing or invalid type (must be 'new', 'diff', or 'rejected')" }, 400);
+      const body = JSON.parse(await readBody(req)) as {
+        type: "new" | "diff" | "rejected" | "validated";
+        deviceName?: string;
+        history?: "deleted" | "validated";
+      };
+      const { type, deviceName, history } = body || {};
+      if (!type || !["new", "diff", "rejected", "validated"].includes(type)) {
+        sendJson(
+          res,
+          { success: false, error: "Missing or invalid type (must be 'new', 'diff', 'rejected', or 'validated')" },
+          400,
+        );
         return;
       }
-      // Importer et appeler la fonction de comparaison par type
       const { compareByType } = await importCompareModule();
-      const result = await compareByType(type, deviceName);
-      if (result.success) {
-        // Rafraîchir le cache après la comparaison et notifier les clients
-        refreshIndex(true);
-        sendJson(res, {
-          success: true,
-          message: `Comparaison lancée pour le type ${type}${deviceName ? ` sur ${deviceName}` : ""}`,
-        });
-      } else {
-        sendJson(res, { success: false, error: result.error || "Unknown error" }, 500);
-      }
+      runCompareAsync(`Comparaison type ${type}${deviceName ? ` (${deviceName})` : ""}`, () =>
+        compareByType(type, deviceName, history),
+      );
+      sendJson(res, {
+        success: true,
+        message: `Comparaison lancée pour le type ${type}${deviceName ? ` sur ${deviceName}` : ""}`,
+      });
     } catch (err) {
       console.error("❌ Compare by type error:", err);
       sendJson(res, { error: String(err) }, 500);
@@ -662,18 +885,18 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
       const body = JSON.parse(await readBody(req)) as { deviceName?: string };
       const { deviceName } = body || {};
       const { compareAllStories } = await importCompareModule();
-      const result = await compareAllStories(deviceName, {
-        onDirectoryWiped: () => refreshIndex({ notify: true, allowEmpty: true }),
+      runCompareAsync(
+        `Régénération toutes les stories${deviceName ? ` (${deviceName})` : ""}`,
+        () =>
+          compareAllStories(deviceName, {
+            onDirectoryWiped: () => refreshIndex({ notify: true, allowEmpty: true }),
+          }),
+        { allowEmptyRefresh: true },
+      );
+      sendJson(res, {
+        success: true,
+        message: `Régénération lancée pour toutes les stories${deviceName ? ` sur ${deviceName}` : " (tous les devices)"}`,
       });
-      if (result.success) {
-        refreshIndex({ notify: true, allowEmpty: true });
-        sendJson(res, {
-          success: true,
-          message: `Régénération lancée pour toutes les stories${deviceName ? ` sur ${deviceName}` : " (tous les devices)"}`,
-        });
-      } else {
-        sendJson(res, { success: false, error: result.error || "Unknown error" }, 500);
-      }
     } catch (err) {
       console.error("❌ Compare all stories error:", err);
       sendJson(res, { error: String(err) }, 500);
@@ -696,16 +919,11 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
       }
 
       const { compareSelectedStories } = await importCompareModule();
-      const result = await compareSelectedStories(stories);
-      if (result.success) {
-        refreshIndex(true);
-        sendJson(res, {
-          success: true,
-          message: `Régénération lancée pour ${stories.length} comparaison${stories.length > 1 ? "s" : ""}`,
-        });
-      } else {
-        sendJson(res, { success: false, error: result.error || "Unknown error" }, 500);
-      }
+      runCompareAsync(`Régénération sélection (${stories.length})`, () => compareSelectedStories(stories));
+      sendJson(res, {
+        success: true,
+        message: `Régénération lancée pour ${stories.length} comparaison${stories.length > 1 ? "s" : ""}`,
+      });
     } catch (err) {
       console.error("❌ Compare selected error:", err);
       sendJson(res, { error: String(err) }, 500);
@@ -745,6 +963,40 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
       sendJson(res, { success: true, deleted, failed, total: entries.length });
     } catch (err) {
       console.error("❌ Delete all error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  // 🗃️ POST /delete/selected - Refuser / supprimer une sélection de régressions
+  if (req.method === "POST" && url.pathname === "/delete/selected") {
+    try {
+      const body = JSON.parse(await readBody(req)) as { items: StoryScreenshotsPath[] };
+      const { items } = body || {};
+      if (!Array.isArray(items) || items.length === 0) {
+        sendJson(
+          res,
+          { success: false, error: "Missing or empty items array (expected { items: StoryScreenshotsPath[] })" },
+          400,
+        );
+        return;
+      }
+
+      let deleted = 0;
+      let failed = 0;
+      for (const item of items) {
+        try {
+          if (deleteRegression(item)) deleted++;
+        } catch (err) {
+          failed++;
+          console.warn(`⚠️  Delete selected skip:`, err);
+        }
+      }
+      refreshIndex(true);
+      console.log(`🗃️  Delete selected: ${deleted} ok, ${failed} failed (${items.length} total)`);
+      sendJson(res, { success: true, deleted, failed, total: items.length });
+    } catch (err) {
+      console.error("❌ Delete selected error:", err);
       sendJson(res, { error: String(err) }, 500);
     }
     return;
@@ -821,6 +1073,85 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
     return;
   }
 
+  // ↩️ POST /revert-validated — annuler une validation (baseline précédente + régression public)
+  if (req.method === "POST" && url.pathname === "/revert-validated") {
+    try {
+      const body = JSON.parse(await readBody(req)) as { path: string; isDiff: boolean };
+      const { path: rawPath, isDiff } = body || {};
+      if (!rawPath) throw new Error("Missing path");
+
+      const cleanPath = rawPath
+        .replace(/^public\//, "")
+        .replace(new RegExp(`^Screenshots/${VALIDATED_DIR_NAME}/`), "")
+        .replace(/^Screenshots\//, "");
+
+      revertValidated(cleanPath, Boolean(isDiff));
+      refreshIndex(true);
+      sendJson(res, { success: true });
+    } catch (err) {
+      console.error("❌ Revert validated error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  const streamImageFile = (filePath: string) => {
+    const contentType = filePath.endsWith(".png")
+      ? "image/png"
+      : filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")
+        ? "image/jpeg"
+        : "application/octet-stream";
+    res.writeHead(200, { "Content-Type": contentType, "Cache-Control": "no-cache", ...corsHeaders });
+    const stream = createReadStream(filePath);
+    stream.on("error", err => {
+      console.warn(`⚠️  Error streaming ${filePath}:`, err);
+      if (!res.headersSent) {
+        res.writeHead(404, corsHeaders);
+        res.end("File not found");
+      } else {
+        res.destroy();
+      }
+    });
+    stream.pipe(res);
+  };
+
+  // Orphelins source : /project-file/src/.../*.screenshot.png (dossier Screenshots optionnel)
+  if (req.method === "GET" && url.pathname.startsWith("/project-file/")) {
+    try {
+      const rel = decodeURIComponent(url.pathname.slice("/project-file/".length)).replace(/\\/g, "/");
+      const baseName = rel.split("/").pop() ?? "";
+      const underSrc = rel.startsWith("src/") || rel.includes("/src/");
+      const looksLikeScreenshot =
+        baseName.endsWith(SCREENSHOT_EXTENSION) &&
+        (baseName.includes(".screenshot.") || baseName.includes(".screenshot "));
+      if (!rel || rel.includes("..") || !underSrc || !looksLikeScreenshot) {
+        res.writeHead(403, corsHeaders);
+        res.end("Forbidden");
+        return;
+      }
+      const resolvedRoot = resolvePath(PROJECT_ROOT);
+      const filePath = resolvePath(join(PROJECT_ROOT, ...rel.split("/").filter(Boolean)));
+      if (filePath !== resolvedRoot && !filePath.startsWith(resolvedRoot + path.sep)) {
+        res.writeHead(403, corsHeaders);
+        res.end("Forbidden");
+        return;
+      }
+      if (!existsSync(filePath)) {
+        res.writeHead(404, corsHeaders);
+        res.end("File not found");
+        return;
+      }
+      streamImageFile(filePath);
+    } catch (err) {
+      console.error("❌ Error serving project file:", err);
+      if (!res.headersSent) {
+        res.writeHead(500, corsHeaders);
+        res.end("Internal Server Error");
+      }
+    }
+    return;
+  }
+
   if (req.method === "GET" && url.pathname.startsWith("/Screenshots/")) {
     try {
       // url.pathname est du type "/Screenshots/src/..." ; sur Windows il faut joindre avec PUBLIC_DIR sans que le "/" soit interprété comme absolu
@@ -831,23 +1162,7 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
         res.end("File not found");
         return;
       }
-      const contentType = filePath.endsWith(".png")
-        ? "image/png"
-        : filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")
-          ? "image/jpeg"
-          : "application/octet-stream";
-      res.writeHead(200, { "Content-Type": contentType, "Cache-Control": "no-cache", ...corsHeaders });
-      const stream = createReadStream(filePath);
-      stream.on("error", err => {
-        console.warn(`⚠️  Error streaming ${filePath}:`, err);
-        if (!res.headersSent) {
-          res.writeHead(404, corsHeaders);
-          res.end("File not found");
-        } else {
-          res.destroy();
-        }
-      });
-      stream.pipe(res);
+      streamImageFile(filePath);
     } catch (err) {
       console.error("❌ Error serving file:", err);
       if (!res.headersSent) {
