@@ -9,7 +9,7 @@ export type BulletProps = {
 };
 
 export const Bullet: React.FC<BulletProps> = ({ value, color }) => (
-  <View style={{ flexDirection: "row", alignItems: "center", marginRight: 8 }}>
+  <View style={{ flexDirection: "row", alignItems: "center" }}>
     <View
       style={{
         width: 8,

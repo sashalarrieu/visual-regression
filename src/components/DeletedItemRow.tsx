@@ -59,7 +59,6 @@ export const DeletedItemRow: React.FC<DeletedItemRowProps> = ({
           deviceName={item.deviceName}
           storyId={item.storyId || item.label}
           countPixelDiff={item.isDiff ? item.countPixelDiff : undefined}
-          showHeatmap={item.isDiff && item.countPixelDiff != null}
         />
       </Touchable>
       <Box

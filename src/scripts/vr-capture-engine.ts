@@ -32,6 +32,12 @@ import {
 import type { DeviceConfig, LogsType, VrConfig } from "../types/types";
 import { getDevicesConfig, getProjectPaths, getProjectRoot, resolveVrConfig } from "../utils/node";
 import { isDockerCaptureBackend } from "../utils/vr-capture-backend";
+import {
+  syncCaptureErrorsAfterBatch,
+  syncCaptureErrorsFromBatch,
+  type CaptureErrorItem,
+} from "../utils/vr-capture-errors";
+import { writeCaptureProgress } from "../utils/vr-capture-progress";
 import { runCaptureBatchRemote } from "../utils/vr-capture-remote";
 import {
   formatDiffConfirmedLog,
@@ -41,6 +47,7 @@ import {
 } from "../utils/vr-diff-verify";
 import {
   appendVrCaptureParam,
+  captureStoryFrame,
   captureWithBurst,
   getStoryTags,
   NetworkQuietTracker,
@@ -222,6 +229,8 @@ export type CaptureBatchResult = {
   stats: CaptureStats;
   logs: LogsType;
   storiesWithDiff: string[];
+  /** Erreurs structurées story × device (pour UI / `.vr-cache/capture-errors.json`). */
+  storiesWithErrors: CaptureErrorItem[];
   error?: string;
   /**
    * Sortie console produite pendant le batch (rempli par le daemon Docker afin
@@ -229,6 +238,8 @@ export type CaptureBatchResult = {
    */
   consoleOutput?: string[];
 };
+
+export type { CaptureErrorItem };
 
 type ScreenshotPaths = {
   screenshotPath: string;
@@ -284,6 +295,8 @@ const addLogs = ({ log, type = "error", logs }: { log: string; type?: "error" | 
     logs.vrs.push(log);
     return;
   }
+  // Toujours visible dans docker.showLogs / consoleOutput (sinon échecs silencieux).
+  console.error(log);
   logs.errors.push(log);
 };
 
@@ -388,9 +401,9 @@ export const logCaptureTimerEnd = (durationMs: number, taskCount: number): void 
 
 export const getStoryIframeUrl = (storybookUrl: string, storyId: string): string => {
   const base = storybookUrl.replace(/\/$/, "");
-  // `serve` redirige /iframe.html → /iframe et supprime les query params (story id perdu).
-  const iframePath = getStorybookMode() === "static" ? "/iframe" : "/iframe.html";
-  return appendVrCaptureParam(`${base}${iframePath}?id=${encodeURIComponent(storyId)}&viewMode=story`);
+  // Toujours iframe.html (URL Storybook canonique). Le serveur static doit servir
+  // avec cleanUrls:false (voir startStaticStorybookServer) pour ne pas stripper ?id=.
+  return appendVrCaptureParam(`${base}/iframe.html?id=${encodeURIComponent(storyId)}&viewMode=story`);
 };
 
 export type CompareScreenshotOutcome = "match" | "new" | "diff" | "missing_temp";
@@ -404,7 +417,8 @@ export async function launchBrowser(): Promise<Browser> {
   // En conteneur de capture : toujours Chromium bundlé + args déterministes,
   // jamais Edge/Chrome système (garantit un rendu reproductible).
   if (process.env.VR_DOCKER === "1") {
-    return chromium.launch(DOCKER_LAUNCH_OPTIONS);
+    const browser = await chromium.launch(DOCKER_LAUNCH_OPTIONS);
+    return browser;
   }
   if (process.platform === "win32") {
     const channels: ("chrome" | "msedge")[] = ["msedge", "chrome"];
@@ -635,12 +649,11 @@ const writeStoryScreenshot = async ({
   useBurst: boolean;
 }): Promise<void> => {
   mkdirSync(path.dirname(tempScreenshotPath), { recursive: true });
-  const locator = page.locator("#storybook-root");
   if (useBurst) {
-    await captureWithBurst(page, locator, config, tempScreenshotPath);
+    await captureWithBurst(page, config, tempScreenshotPath);
     return;
   }
-  await locator.screenshot({ path: tempScreenshotPath });
+  writeFileSync(tempScreenshotPath, await captureStoryFrame(page));
 };
 
 const captureStoryScreenshot = async ({
@@ -700,9 +713,13 @@ const captureStoryScreenshot = async ({
 
     await writeStoryScreenshot({ page, tempScreenshotPath, config, useBurst });
     return true;
-  } catch {
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
     if (!captureTimedOut) {
-      addLogs({ log: `📸 Failed to capture screenshot for ${storyId} (${deviceName})`, logs });
+      addLogs({
+        log: `📸 Failed to capture screenshot for ${storyId} (${deviceName}): ${errMsg}`,
+        logs,
+      });
     }
     return false;
   } finally {
@@ -868,6 +885,7 @@ export const runCaptureBatch = async (
 ): Promise<CaptureBatchResult> => {
   const logs: LogsType = { errors: [], vrs: [], news: [] };
   const storiesWithDiff: string[] = [];
+  const storiesWithErrors: CaptureErrorItem[] = [];
   const stats: CaptureStats = {
     total: tasks.length,
     completed: 0,
@@ -878,7 +896,7 @@ export const runCaptureBatch = async (
   };
 
   if (tasks.length === 0) {
-    return { success: false, stats, logs, storiesWithDiff, error: "Aucune tâche de capture" };
+    return { success: false, stats, logs, storiesWithDiff, storiesWithErrors, error: "Aucune tâche de capture" };
   }
 
   const config = resolveVrConfig(PROJECT_ROOT);
@@ -901,6 +919,7 @@ export const runCaptureBatch = async (
   const startedAt = performance.now();
   let browser = await launchBrowser();
   let done = 0;
+  const succeededTasks: { storyId: string; deviceName: string }[] = [];
 
   if (!options.quietBatchLogs) {
     logCapturePoolStart(
@@ -914,6 +933,7 @@ export const runCaptureBatch = async (
     await Promise.all(
       tasks.map(task =>
         semaphore.run(async () => {
+          const errorsBefore = logs.errors.length;
           let attempt = 0;
           while (attempt < 2) {
             try {
@@ -951,6 +971,30 @@ export const runCaptureBatch = async (
           stats.errors = logs.errors.length;
           stats.vrs = logs.vrs.length;
           stats.news = logs.news.length;
+          const failed = logs.errors.length > errorsBefore;
+          const status = failed ? "🚫" : "✅";
+          if (failed) {
+            const message =
+              logs.errors[logs.errors.length - 1] ?? `Capture failed for ${task.storyId} (${task.deviceName})`;
+            storiesWithErrors.push({
+              storyId: task.storyId,
+              deviceName: task.deviceName,
+              componentDir: task.componentDir,
+              message,
+              at: Date.now(),
+            });
+          } else {
+            succeededTasks.push({ storyId: task.storyId, deviceName: task.deviceName });
+          }
+          // Progression live (fichier monté + stdout pour docker.showLogs).
+          writeCaptureProgress(PROJECT_ROOT, {
+            done,
+            total: tasks.length,
+            storyId: task.storyId,
+            deviceName: task.deviceName,
+            updatedAt: Date.now(),
+          });
+          process.stdout.write(`📸 ${done}/${tasks.length} ${status} ${task.deviceName}/${task.storyId}\n`);
           options.onProgress?.(done, tasks.length);
         }),
       ),
@@ -961,18 +1005,30 @@ export const runCaptureBatch = async (
       logCaptureTimerEnd(stats.durationMs, tasks.length);
     }
 
-    return { success: true, stats, logs, storiesWithDiff };
+    if (!process.env.VR_DOCKER) {
+      syncCaptureErrorsFromBatch(PROJECT_ROOT, tasks, storiesWithErrors);
+    }
+    return { success: true, stats, logs, storiesWithDiff, storiesWithErrors };
   } catch (err) {
     stats.durationMs = Math.round(performance.now() - startedAt);
     if (!options.quietBatchLogs) {
       console.log(`\n⏱️  Génération interrompue après ${formatDurationMs(stats.durationMs)}`);
+    }
+    const error = err instanceof Error ? err.message : String(err);
+    // Ne met à jour que les tâches déjà résolues (succès / échec) — le reste reste inchangé.
+    if (!process.env.VR_DOCKER) {
+      syncCaptureErrorsAfterBatch(PROJECT_ROOT, {
+        succeeded: succeededTasks,
+        failed: storiesWithErrors,
+      });
     }
     return {
       success: false,
       stats,
       logs,
       storiesWithDiff,
-      error: err instanceof Error ? err.message : String(err),
+      storiesWithErrors,
+      error,
     };
   } finally {
     await closeContextCache(contextCache);

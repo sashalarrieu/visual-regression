@@ -47,6 +47,10 @@ export const SCREENSHOT_NAME = ".screenshot" + SCREENSHOT_EXTENSION;
 export const DIFF_SCREENSHOT_NAME = "__diff__";
 export const TEMP_SCREENSHOT_NAME = "__temp__";
 export const NEW_SCREENSHOT_NAME = "__new__";
+/** Corbeille des refusés sous public/Screenshots/. */
+export const DELETED_DIR_NAME = "deleted";
+/** Historique des validés sous public/Screenshots/ (pour revert). */
+export const VALIDATED_DIR_NAME = "validated";
 
 // --- Arbre / chemins ---
 

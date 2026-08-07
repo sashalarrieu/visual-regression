@@ -2,6 +2,12 @@
 
 Ce projet suit le format [Keep a Changelog](https://keepachangelog.com/fr/1.1.2/) et respecte le versioning semantique.
 
+## [Unreleased]
+
+### Fixed
+
+- Capture VR : les modals / portals rendus hors de `#storybook-root` (backdrop visible, panneau hors crop) sont inclus via un clip élargi (union root ∪ overlays).
+
 ## [1.1.2] - 2026-07-15
 
 ### Changed
