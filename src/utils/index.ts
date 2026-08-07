@@ -9,6 +9,8 @@ import type { DeviceDisplayConfig, DeviceStyle, Node, StoryScreenshotsPath, VRDe
 
 export type { FilterTreeOptions, StatusFilterValue, TreePanelMode } from "./filter-tree";
 export { filterTree } from "./filter-tree";
+export type { SelectionState } from "./tree-selection";
+export { collectFilePaths, selectionState, togglePaths } from "./tree-selection";
 
 /**
  * Utilitaires partagés (app React + scripts). Code Node-only (import.meta, createRequire) dans ./node.ts.
@@ -196,6 +198,46 @@ export const createVisualRegressionActions = (
     }
   };
 
+  const handleValidSelected = async (items: StoryScreenshotsPath[]) => {
+    if (!items.length) return;
+    try {
+      const res = await fetch(`${serverUrl}/validate/selected`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.success) {
+        console.error("❌ Validation sélection échouée :", result.error ?? res.statusText);
+        return;
+      }
+      console.log(`✅ Validation sélection : ${result.validated}/${result.total}`);
+      onAfterBulk?.();
+    } catch (err) {
+      console.error("Erreur de communication avec le serveur VR:", err);
+    }
+  };
+
+  const handleDeleteSelected = async (items: StoryScreenshotsPath[]) => {
+    if (!items.length) return;
+    try {
+      const res = await fetch(`${serverUrl}/delete/selected`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.success) {
+        console.error("❌ Refus sélection échoué :", result.error ?? res.statusText);
+        return;
+      }
+      console.log(`🗃️  Refus sélection : ${result.deleted}/${result.total}`);
+      onAfterBulk?.();
+    } catch (err) {
+      console.error("❌ Delete selected error:", err);
+    }
+  };
+
   const handleRestore = async (path: string, isDiff: boolean) => {
     try {
       const res = await fetch(`${serverUrl}/restore`, {
@@ -303,6 +345,7 @@ export const createVisualRegressionActions = (
   return {
     handleValid,
     handleValidAll,
+    handleValidSelected,
     handleCompare,
     handleCompareStory,
     handleCompareSelected,
@@ -310,6 +353,7 @@ export const createVisualRegressionActions = (
     handleCompareAllStories,
     handleDelete,
     handleDeleteAll,
+    handleDeleteSelected,
     handleRestore,
     handleRevertValidated,
   };

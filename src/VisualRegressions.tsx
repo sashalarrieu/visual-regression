@@ -27,7 +27,13 @@ import type {
   StoriesTreeResponse,
   StoryScreenshotsPath,
 } from "./types/types";
-import { createVisualRegressionActions, filterTree, type StatusFilterValue, type TreePanelMode } from "./utils";
+import {
+  createVisualRegressionActions,
+  filterTree,
+  togglePaths,
+  type StatusFilterValue,
+  type TreePanelMode,
+} from "./utils";
 
 export type VisualRegressionsProps = {
   /** Config d'affichage des devices (label, icon, color). Optionnel : si absent, récupérée depuis le serveur VR (GET /regressions/config/devices, depuis vr.config.cjs). */
@@ -39,11 +45,15 @@ type TabLocalState = {
   selectedPath?: string;
   searchQuery: string;
   statusFilter: Set<StatusFilterValue>;
+  multiSelectMode: boolean;
+  selectedPaths: Set<string>;
 };
 
 const createEmptyTabState = (): TabLocalState => ({
   searchQuery: "",
   statusFilter: new Set(),
+  multiSelectMode: false,
+  selectedPaths: new Set(),
 });
 
 const createInitialTabStates = (): Record<TreePanelMode, TabLocalState> => ({
@@ -412,7 +422,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   /** Path à sélectionner après validate/refuse — figé AVANT l’API pour survivre au SSE. */
   const pendingSelectPathRef = useRef<string | null>(null);
 
-  const { searchQuery, statusFilter, selectedPath } = tabStates[leftTab];
+  const { searchQuery, statusFilter, selectedPath, multiSelectMode, selectedPaths } = tabStates[leftTab];
 
   const setSelectedPath = useCallback(
     (path: string | undefined) => {
@@ -443,6 +453,54 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     },
     [leftTab],
   );
+
+  const setMultiSelectMode = useCallback(
+    (enabled: boolean) => {
+      setTabStates(prev => ({
+        ...prev,
+        [leftTab]: {
+          ...prev[leftTab],
+          multiSelectMode: enabled,
+          // Sortie du mode → vide la sélection de l’onglet.
+          selectedPaths: enabled ? prev[leftTab].selectedPaths : new Set(),
+        },
+      }));
+    },
+    [leftTab],
+  );
+
+  const handleTogglePath = useCallback(
+    (path: string) => {
+      setTabStates(prev => ({
+        ...prev,
+        [leftTab]: {
+          ...prev[leftTab],
+          selectedPaths: togglePaths(prev[leftTab].selectedPaths, [path]),
+        },
+      }));
+    },
+    [leftTab],
+  );
+
+  const handleTogglePaths = useCallback(
+    (paths: readonly string[]) => {
+      setTabStates(prev => ({
+        ...prev,
+        [leftTab]: {
+          ...prev[leftTab],
+          selectedPaths: togglePaths(prev[leftTab].selectedPaths, paths),
+        },
+      }));
+    },
+    [leftTab],
+  );
+
+  const clearSelectedPaths = useCallback(() => {
+    setTabStates(prev => ({
+      ...prev,
+      [leftTab]: { ...prev[leftTab], selectedPaths: new Set() },
+    }));
+  }, [leftTab]);
 
   const { devices, loading: devicesLoading, error: devicesError } = useDevicesConfig(devicesProp);
   const {
@@ -559,6 +617,23 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   }, []);
 
   const allList = useMemo(() => flattenTree(filteredTree), [filteredTree, flattenTree]);
+
+  /** Élaguer les paths absents de l’arbre filtré (refresh SSE / filtre). */
+  useEffect(() => {
+    if (selectedPaths.size === 0) return;
+    const visible = new Set(allList.map(n => n.path));
+    let changed = false;
+    const next = new Set<string>();
+    for (const path of selectedPaths) {
+      if (visible.has(path)) next.add(path);
+      else changed = true;
+    }
+    if (!changed) return;
+    setTabStates(prev => ({
+      ...prev,
+      [leftTab]: { ...prev[leftTab], selectedPaths: next },
+    }));
+  }, [allList, leftTab, selectedPaths]);
 
   const currentStory = useMemo(
     () => (selectedPath ? allList.find(n => n.path === selectedPath) : undefined),
@@ -692,12 +767,14 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   const {
     handleValid,
     handleValidAll,
+    handleValidSelected,
     handleCompareStory,
     handleCompareSelected,
     handleCompareByType,
     handleCompareAllStories,
     handleDelete,
     handleDeleteAll,
+    handleDeleteSelected,
     handleRestore,
     handleRevertValidated,
   } = createVisualRegressionActions({
@@ -707,6 +784,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     onAfterBulk: () => {
       pendingSelectPathRef.current = null;
       setSelectedPath(undefined);
+      clearSelectedPaths();
     },
   });
 
@@ -720,6 +798,18 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   }, []);
 
   const [regeneratingPaths, setRegeneratingPaths] = useState<Set<string>>(new Set());
+
+  /** Fichiers de la sélection multi-select (arbre filtré courant). */
+  const getSelectedNodes = useCallback((): Node[] => {
+    if (selectedPaths.size === 0) return [];
+    return allList.filter(n => selectedPaths.has(n.path));
+  }, [allList, selectedPaths]);
+
+  const getSelectedImagePaths = useCallback((): StoryScreenshotsPath[] => {
+    return getSelectedNodes()
+      .map(n => n.imagePaths)
+      .filter((p): p is StoryScreenshotsPath => Boolean(p));
+  }, [getSelectedNodes]);
 
   // Toujours charger les métriques dès qu’il y a un diff (pas seulement en mode heatmap).
   const countPixelDiff = usePixelDiffMetrics(
@@ -751,6 +841,67 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     if (!currentStory || currentStory.ignored) return;
     void handleCompareStoryFromTree(currentStory);
   }, [currentStory, handleCompareStoryFromTree]);
+
+  /** TopBar Valider : sélection batch ou story courante. */
+  const handleTopBarValid = useCallback(() => {
+    if (multiSelectMode) {
+      const items = getSelectedImagePaths();
+      if (items.length === 0) return;
+      void runBulk(() => handleValidSelected(items));
+      return;
+    }
+    const path = storyScreenshotsPath;
+    void handleValid(path);
+  }, [multiSelectMode, getSelectedImagePaths, runBulk, handleValidSelected, storyScreenshotsPath, handleValid]);
+
+  /** TopBar Refuser / Supprimer : sélection batch ou story courante. */
+  const handleTopBarDelete = useCallback(() => {
+    if (multiSelectMode) {
+      const items = getSelectedImagePaths();
+      if (items.length === 0) return;
+      void runBulk(() => handleDeleteSelected(items));
+      return;
+    }
+    const path = storyScreenshotsPath;
+    void handleDelete(path);
+  }, [multiSelectMode, getSelectedImagePaths, runBulk, handleDeleteSelected, storyScreenshotsPath, handleDelete]);
+
+  /** TopBar Régénérer : compare/selected ou compare single sur currentStory. */
+  const handleTopBarRegenerate = useCallback(() => {
+    if (multiSelectMode) {
+      const nodes = getSelectedNodes().filter(n => n.storyId && n.deviceName);
+      if (nodes.length === 0) return;
+      const paths = nodes.map(n => n.path);
+      const stories = nodes.map(n => {
+        const lastSlash = n.path.lastIndexOf("/");
+        const componentDir = lastSlash > 0 ? n.path.slice(0, lastSlash) : undefined;
+        return {
+          storyId: n.storyId as string,
+          deviceName: n.deviceName as string,
+          componentDir,
+        };
+      });
+      void runBulk(async () => {
+        setRegeneratingPaths(prev => {
+          const next = new Set(prev);
+          paths.forEach(p => next.add(p));
+          return next;
+        });
+        try {
+          await handleCompareSelected(stories);
+        } finally {
+          setRegeneratingPaths(prev => {
+            const next = new Set(prev);
+            paths.forEach(p => next.delete(p));
+            return next;
+          });
+        }
+      });
+      return;
+    }
+    if (!currentStory) return;
+    void handleCompareStoryFromTree(currentStory);
+  }, [multiSelectMode, getSelectedNodes, runBulk, handleCompareSelected, currentStory, handleCompareStoryFromTree]);
 
   useEffect(() => {
     if (!showDeleted && !showCompareModal && !showCaptureErrorsModal) return;
@@ -859,6 +1010,11 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
               onSearchQuery={setSearchQuery}
               statusFilter={statusFilter}
               onStatusFilter={setStatusFilter}
+              multiSelectMode={multiSelectMode}
+              onMultiSelectModeChange={setMultiSelectMode}
+              selectedPaths={selectedPaths}
+              onTogglePath={handleTogglePath}
+              onTogglePaths={handleTogglePaths}
             />
           </Box>
           <Divider orientation="vertical" />
@@ -876,17 +1032,13 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
               storyScreenshotsPath={storyScreenshotsPath}
               hasItems={allList.length > 0}
               bulkLoading={bulkLoading}
+              multiSelectMode={multiSelectMode}
+              selectionCount={selectedPaths.size}
               onPrev={goPrev}
               onNext={goNext}
-              onValid={() => {
-                // Snapshot sync avant re-render (onBeforeRemove change la sélection).
-                const path = storyScreenshotsPath;
-                void handleValid(path);
-              }}
-              onDelete={() => {
-                const path = storyScreenshotsPath;
-                void handleDelete(path);
-              }}
+              onValid={handleTopBarValid}
+              onDelete={handleTopBarDelete}
+              onRegenerate={handleTopBarRegenerate}
               onValidAll={() => runBulk(handleValidAll)}
               onDeleteAll={() => runBulk(handleDeleteAll)}
               onShowDeleted={() => setShowDeleted(true)}

@@ -6,6 +6,7 @@ import { Accordion } from "../atoms/Accordion";
 import { Box } from "../atoms/Box";
 import { Bullet } from "../atoms/Bullet";
 import { Button } from "../atoms/Button";
+import { Icon } from "../atoms/Icon";
 import { SearchField } from "../atoms/SearchField";
 import { Touchable } from "../atoms/Touchable";
 import { Typo } from "../atoms/Typo";
@@ -14,10 +15,13 @@ import { colors, spacing, type ColorKey } from "../themes/theme";
 import type { MaterialIconName, Node } from "../types/types";
 import {
   calculateFolderDepth,
+  collectFilePaths,
   filterTree,
   findFirstFile,
   formatStoryName,
   getStoryNameFromId,
+  selectionState,
+  type SelectionState,
   type StatusFilterValue,
   type TreePanelMode,
 } from "../utils";
@@ -36,6 +40,12 @@ export type TreePanelProps = {
   onSearchQuery?: (query: string) => void;
   statusFilter?: ReadonlySet<StatusFilterValue>;
   onStatusFilter?: (statuses: Set<StatusFilterValue>) => void;
+  /** Mode multi-sélection (contrôlé par l’onglet parent). */
+  multiSelectMode?: boolean;
+  onMultiSelectModeChange?: (enabled: boolean) => void;
+  selectedPaths?: ReadonlySet<string>;
+  onTogglePath?: (path: string) => void;
+  onTogglePaths?: (paths: readonly string[]) => void;
 };
 
 type StatusChipDef = { value: StatusFilterValue; label: string };
@@ -51,6 +61,12 @@ const STATUS_CHIPS_BY_MODE: Record<TreePanelMode, StatusChipDef[]> = {
     { value: "missing", label: "missing" },
   ],
   orphans: [],
+};
+
+const checkboxIconName = (state: SelectionState): MaterialIconName => {
+  if (state === "all") return "check-box";
+  if (state === "partial") return "indeterminate-check-box";
+  return "check-box-outline-blank";
 };
 
 const getFileStatusIcon = (
@@ -133,6 +149,11 @@ export const TreePanel: React.FC<TreePanelProps> = ({
   onSearchQuery,
   statusFilter,
   onStatusFilter,
+  multiSelectMode = false,
+  onMultiSelectModeChange,
+  selectedPaths = new Set(),
+  onTogglePath,
+  onTogglePaths,
 }) => {
   const { getDeviceStyle, getDeviceDisplayName } = useDeviceConfig();
   const scrollViewRef = useRef<ScrollView>(null);
@@ -140,6 +161,7 @@ export const TreePanel: React.FC<TreePanelProps> = ({
   const nodeRefs = useRef<Map<string, View>>(new Map());
 
   const statusChips = STATUS_CHIPS_BY_MODE[mode];
+  const selectionCount = selectedPaths.size;
 
   const displayTree = useMemo(
     () =>
@@ -190,15 +212,21 @@ export const TreePanel: React.FC<TreePanelProps> = ({
     [statusFilter, onStatusFilter],
   );
 
-  const showSync = mode === "regressions" && !!onCompareStoryNode;
+  const handleToggleMultiSelect = useCallback(() => {
+    onMultiSelectModeChange?.(!multiSelectMode);
+  }, [multiSelectMode, onMultiSelectModeChange]);
+
+  const showSync = mode === "regressions" && !!onCompareStoryNode && !multiSelectMode;
 
   const renderFile = (fileNode: Node) => {
     if (regeneratingPaths.has(fileNode.path)) return null;
     const deviceName = fileNode.deviceName;
     const deviceStyle = getDeviceStyle(deviceName);
-    const isCurrentStory = currentStory?.path === fileNode.path;
+    const isCurrentStory = !multiSelectMode && currentStory?.path === fileNode.path;
+    const isSelected = multiSelectMode && selectedPaths.has(fileNode.path);
     const deviceDisplayName = deviceName ? getDeviceDisplayName(deviceName) : fileNode.name;
-    const statusIcon = getFileStatusIcon(fileNode, mode, isCurrentStory);
+    const statusIcon = getFileStatusIcon(fileNode, mode, isCurrentStory || isSelected);
+    const highlight = isCurrentStory || isSelected;
 
     return (
       <View ref={setNodeRef(fileNode.path)}>
@@ -208,13 +236,31 @@ export const TreePanel: React.FC<TreePanelProps> = ({
           alignItems="center"
           style={{ paddingRight: spacing.m - spacing.s + 1 }}
         >
+          {multiSelectMode && (
+            <Touchable
+              onPress={() => onTogglePath?.(fileNode.path)}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: isSelected }}
+            >
+              <Icon
+                name={checkboxIconName(isSelected ? "all" : "none")}
+                size="s"
+                fill={isSelected ? "newTheme_primary" : "newTheme_textOnSurface"}
+                style={{ marginRight: 4 }}
+              />
+            </Touchable>
+          )}
           <Button
             label={deviceDisplayName}
-            color={isCurrentStory ? "primary" : "base"}
-            onPress={() => onNodeClick(fileNode)}
+            color={highlight ? "primary" : "base"}
+            onPress={() => {
+              if (multiSelectMode) onTogglePath?.(fileNode.path);
+              else onNodeClick(fileNode);
+            }}
             leftIcon={{
               name: deviceStyle.icon,
-              fill: (isCurrentStory ? "newTheme_textOnPrimary" : deviceStyle.color) as keyof typeof colors,
+              fill: (highlight ? "newTheme_textOnPrimary" : deviceStyle.color) as keyof typeof colors,
             }}
             rightIcon={{
               name: statusIcon.name,
@@ -235,6 +281,64 @@ export const TreePanel: React.FC<TreePanelProps> = ({
     );
   };
 
+  const renderStoryHeader = (storyName: string, storyFiles: Node[]) => {
+    const paths = storyFiles.map(f => f.path);
+    const state = selectionState(paths, selectedPaths);
+
+    if (!multiSelectMode) {
+      return (
+        <Box
+          pb="xs"
+          px="xs"
+        >
+          <Typo
+            variant="paragraphe_semiBold"
+            color="newTheme_textOnSurface"
+          >
+            {storyName}
+          </Typo>
+        </Box>
+      );
+    }
+
+    return (
+      <Box
+        pb="xs"
+        px="xs"
+        flexDirection="row"
+        alignItems="center"
+        gap="xs"
+      >
+        <Touchable
+          onPress={() => onTogglePaths?.(paths)}
+          hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+          accessibilityRole="checkbox"
+          accessibilityState={{
+            checked: state === "partial" ? "mixed" : state === "all",
+          }}
+        >
+          <Icon
+            name={checkboxIconName(state)}
+            size="s"
+            fill={state === "none" ? "newTheme_textOnSurface" : "newTheme_primary"}
+            style={{ marginRight: 4 }}
+          />
+        </Touchable>
+        <Touchable
+          onPress={() => onTogglePaths?.(paths)}
+          style={{ flexShrink: 1 }}
+        >
+          <Typo
+            variant="paragraphe_semiBold"
+            color="newTheme_textOnSurface"
+          >
+            {storyName}
+          </Typo>
+        </Touchable>
+      </Box>
+    );
+  };
+
   const renderTree = (node: Node | null): React.ReactNode => {
     if (!node) return null;
     const entries = Object.values(node.children ?? {});
@@ -251,6 +355,9 @@ export const TreePanel: React.FC<TreePanelProps> = ({
       filesByStoryId.get(storyId)!.push(file);
     });
 
+    const folderPaths = multiSelectMode ? collectFilePaths(node).filter(p => !regeneratingPaths.has(p)) : [];
+    const folderSelection = multiSelectMode ? selectionState(folderPaths, selectedPaths) : "none";
+
     return (
       <Accordion
         key={node.name}
@@ -258,6 +365,9 @@ export const TreePanel: React.FC<TreePanelProps> = ({
         tags={folderTagsForMode(node, mode)}
         defaultOpened
         style={{ paddingBottom: 0 }}
+        selectionMode={multiSelectMode}
+        selectionState={folderSelection}
+        onToggleSelect={multiSelectMode ? () => onTogglePaths?.(folderPaths) : undefined}
       >
         {folders.map((child, index) => (
           <Box
@@ -279,17 +389,7 @@ export const TreePanel: React.FC<TreePanelProps> = ({
               pb={isLastStory ? "s" : "m"}
               style={{ right: -spacing.xs - 1, bottom: -1 }}
             >
-              <Box
-                pb="xs"
-                px="xs"
-              >
-                <Typo
-                  variant="paragraphe_semiBold"
-                  color="newTheme_textOnSurface"
-                >
-                  {storyName}
-                </Typo>
-              </Box>
+              {renderStoryHeader(storyName, storyFiles)}
               {storyFiles.map((file, fileIndex) => (
                 <Box
                   key={file.path}
@@ -323,7 +423,15 @@ export const TreePanel: React.FC<TreePanelProps> = ({
         >
           Régressions visuelles
         </Typo>
-        <Box>
+        <Box
+          flexDirection="row"
+          gap="xs"
+        >
+          <Button
+            icon={{ name: "checklist" }}
+            color={multiSelectMode ? "primary" : "base"}
+            onPress={handleToggleMultiSelect}
+          />
           <Button
             icon={{ name: "replay" }}
             color="primary"
@@ -332,6 +440,17 @@ export const TreePanel: React.FC<TreePanelProps> = ({
           />
         </Box>
       </Box>
+
+      {multiSelectMode && (
+        <Box pb="s">
+          <Typo
+            variant="legend_regular"
+            textAlign="center"
+          >
+            {selectionCount} sélectionné{selectionCount > 1 ? "s" : ""}
+          </Typo>
+        </Box>
+      )}
 
       {onSearchQuery && (
         <Box pb="s">

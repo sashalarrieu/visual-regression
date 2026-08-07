@@ -25,10 +25,15 @@ export type VisualRegressionTopBarProps = {
   storyScreenshotsPath?: StoryScreenshotsPath;
   hasItems?: boolean;
   bulkLoading?: boolean;
+  /** Mode multi-sélection (arbre) — adapte la matrice d’actions. */
+  multiSelectMode?: boolean;
+  /** Nombre de fichiers sélectionnés (paths). */
+  selectionCount?: number;
   onPrev: () => void;
   onNext: () => void;
   onValid: () => void;
   onDelete: () => void;
+  onRegenerate: () => void;
   onValidAll: () => void;
   onDeleteAll: () => void;
   onShowDeleted: () => void;
@@ -49,10 +54,13 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
   storyScreenshotsPath,
   hasItems = false,
   bulkLoading = false,
+  multiSelectMode = false,
+  selectionCount = 0,
   onPrev,
   onNext,
   onValid,
   onDelete,
+  onRegenerate,
   onValidAll,
   onDeleteAll,
   onShowDeleted,
@@ -66,6 +74,9 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
   const isCatalog = mode === "all-stories";
   const isOrphans = mode === "orphans";
   const isRegressions = mode === "regressions";
+
+  const hasActionTarget = multiSelectMode ? selectionCount > 0 : Boolean(currentStory);
+  const actionDisabled = !hasActionTarget || bulkLoading;
 
   const copyStoryPathToClipboard = () => {
     const path = currentStory
@@ -177,42 +188,72 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
                 color="primary"
                 width={80}
                 onPress={onValid}
-                disabled={!currentStory || bulkLoading}
+                disabled={actionDisabled}
               />
               <Button
                 label="Refuser"
                 color="danger"
                 width={80}
                 onPress={onDelete}
-                disabled={!currentStory || bulkLoading}
+                disabled={actionDisabled}
+              />
+              {multiSelectMode ? (
+                <Button
+                  label="Régénérer"
+                  color="primary"
+                  width={110}
+                  onPress={onRegenerate}
+                  disabled={actionDisabled}
+                />
+              ) : (
+                <>
+                  <Button
+                    label="Tout valider"
+                    color="primary"
+                    width={110}
+                    onPress={onValidAll}
+                    loading={bulkLoading}
+                    disabled={!hasItems || bulkLoading}
+                  />
+                  <Button
+                    label="Tout refuser"
+                    color="danger"
+                    width={110}
+                    onPress={onDeleteAll}
+                    loading={bulkLoading}
+                    disabled={!hasItems || bulkLoading}
+                  />
+                </>
+              )}
+            </>
+          )}
+
+          {isCatalog && (
+            <>
+              <Button
+                label="Supprimer"
+                color="danger"
+                width={100}
+                onPress={onDelete}
+                disabled={actionDisabled}
               />
               <Button
-                label="Tout valider"
+                label="Régénérer"
                 color="primary"
                 width={110}
-                onPress={onValidAll}
-                loading={bulkLoading}
-                disabled={!hasItems || bulkLoading}
-              />
-              <Button
-                label="Tout refuser"
-                color="danger"
-                width={110}
-                onPress={onDeleteAll}
-                loading={bulkLoading}
-                disabled={!hasItems || bulkLoading}
+                onPress={onRegenerate}
+                disabled={actionDisabled}
               />
             </>
           )}
 
-          {/* Orphelins : Delete only (pas Valid / Heatmap / Générer). */}
           {isOrphans && (
             <Button
-              label="Supprimer"
-              color="danger"
-              width={100}
-              onPress={onDelete}
-              disabled={!currentStory || bulkLoading}
+              label="Régénérer"
+              color="primary"
+              width={110}
+              onPress={onRegenerate}
+              disabled={actionDisabled}
             />
           )}
 
@@ -226,7 +267,7 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
             color="primary"
             onPress={copyStoryPathToClipboard}
           />
-          {/* Catalogue : CompareModal optionnel ; orphelins : pas de régénération (pas de story rattachée). */}
+          {/* Sync = CompareModal (by-type / all-stories) ; Régénérer = current / sélection. */}
           {(isRegressions || isCatalog) && (
             <Button
               icon={{ name: "sync" }}

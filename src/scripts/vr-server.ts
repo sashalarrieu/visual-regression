@@ -765,6 +765,41 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
     return;
   }
 
+  // ✅ POST /validate/selected - Valider une sélection de régressions
+  if (req.method === "POST" && url.pathname === "/validate/selected") {
+    try {
+      const body = JSON.parse(await readBody(req)) as { items: StoryScreenshotsPath[] };
+      const { items } = body || {};
+      if (!Array.isArray(items) || items.length === 0) {
+        sendJson(
+          res,
+          { success: false, error: "Missing or empty items array (expected { items: StoryScreenshotsPath[] })" },
+          400,
+        );
+        return;
+      }
+
+      let validated = 0;
+      let failed = 0;
+      for (const item of items) {
+        try {
+          validateRegression(item);
+          validated++;
+        } catch (err) {
+          failed++;
+          console.warn(`⚠️  Validate selected skip:`, err);
+        }
+      }
+      refreshIndex(true);
+      console.log(`✅ Validate selected: ${validated} ok, ${failed} failed (${items.length} total)`);
+      sendJson(res, { success: true, validated, failed, total: items.length });
+    } catch (err) {
+      console.error("❌ Validate selected error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
   // 🔍 POST /compare - Lancer la comparaison
   if (req.method === "POST" && url.pathname === "/compare") {
     try {
@@ -928,6 +963,40 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
       sendJson(res, { success: true, deleted, failed, total: entries.length });
     } catch (err) {
       console.error("❌ Delete all error:", err);
+      sendJson(res, { error: String(err) }, 500);
+    }
+    return;
+  }
+
+  // 🗃️ POST /delete/selected - Refuser / supprimer une sélection de régressions
+  if (req.method === "POST" && url.pathname === "/delete/selected") {
+    try {
+      const body = JSON.parse(await readBody(req)) as { items: StoryScreenshotsPath[] };
+      const { items } = body || {};
+      if (!Array.isArray(items) || items.length === 0) {
+        sendJson(
+          res,
+          { success: false, error: "Missing or empty items array (expected { items: StoryScreenshotsPath[] })" },
+          400,
+        );
+        return;
+      }
+
+      let deleted = 0;
+      let failed = 0;
+      for (const item of items) {
+        try {
+          if (deleteRegression(item)) deleted++;
+        } catch (err) {
+          failed++;
+          console.warn(`⚠️  Delete selected skip:`, err);
+        }
+      }
+      refreshIndex(true);
+      console.log(`🗃️  Delete selected: ${deleted} ok, ${failed} failed (${items.length} total)`);
+      sendJson(res, { success: true, deleted, failed, total: items.length });
+    } catch (err) {
+      console.error("❌ Delete selected error:", err);
       sendJson(res, { error: String(err) }, 500);
     }
     return;
