@@ -19,16 +19,43 @@ detect_lockfile() {
 
 LOCKFILE=$(detect_lockfile)
 
+# Auth registry privé : ~/.npmrc hôte monté sur /root/.npmrc, ou NPM_TOKEN / NODE_AUTH_TOKEN.
+ensure_npm_auth() {
+  if [ -f /root/.npmrc ]; then
+    return 0
+  fi
+  TOKEN="${NPM_TOKEN:-${NODE_AUTH_TOKEN:-}}"
+  if [ -z "$TOKEN" ]; then
+    return 0
+  fi
+  {
+    echo "//registry.npmjs.org/:_authToken=${TOKEN}"
+    echo "always-auth=true"
+  } > /root/.npmrc
+  echo "🔐 [vr-docker] Auth npm via NPM_TOKEN / NODE_AUTH_TOKEN"
+}
+
 install_deps() {
   # Sidecar VR : pas de hooks git.
   # Garder les deps optionnelles, certaines fournissent des bindings natifs requis en CI (ex. oxc-parser).
   export HUSKY=0
+  ensure_npm_auth
+  set +e
   case "$LOCKFILE" in
     yarn.lock) yarn install --frozen-lockfile ;;
     pnpm-lock.yaml) corepack pnpm install --frozen-lockfile ;;
     package-lock.json) npm ci ;;
     *) npm install ;;
   esac
+  install_status=$?
+  set -e
+  if [ "$install_status" -ne 0 ]; then
+    echo "❌ [vr-docker] Installation des dépendances échouée (code $install_status)."
+    echo "   Si le projet utilise des packages npm privés (@scope/…), montez l'auth hôte :"
+    echo "   - fichier ~/.npmrc (monté automatiquement par yarn vr), ou"
+    echo "   - export NPM_TOKEN=… / NODE_AUTH_TOKEN=… avant yarn vr"
+    exit "$install_status"
+  fi
 }
 
 NEW_HASH=""
@@ -36,13 +63,10 @@ if [ -n "$LOCKFILE" ]; then
   NEW_HASH=$(sha1sum "$LOCKFILE" | awk '{print $1}')
 fi
 
-# Invalider le cache si une dépendance file: locale change (ex. visual-regression monté dans Docker).
+# Invalider l'install seulement si le manifeste file: change (nouvelles deps).
+# Les sources sont resynchronisées plus bas (sync_linked_vr_sources) sans yarn install.
 if [ -f /visual-regression/package.json ]; then
   LINKED_HASH=$(sha1sum /visual-regression/package.json | awk '{print $1}')
-  if [ -d /visual-regression/src ]; then
-    SRC_HASH=$(find /visual-regression/src /visual-regression/bin -type f 2>/dev/null | sort | xargs sha1sum 2>/dev/null | sha1sum | awk '{print $1}')
-    LINKED_HASH="${LINKED_HASH}${SRC_HASH}"
-  fi
   NEW_HASH="${NEW_HASH}${LINKED_HASH}"
 fi
 

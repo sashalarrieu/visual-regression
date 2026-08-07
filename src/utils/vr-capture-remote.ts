@@ -14,6 +14,12 @@ import type { VrConfig } from "../types/types";
 
 import { getProjectRoot } from "./node";
 import { getCaptureDaemonUrl } from "./vr-capture-backend";
+import {
+  captureErrorKey,
+  syncCaptureErrorsAllFailed,
+  syncCaptureErrorsFromBatch,
+  type CaptureErrorItem,
+} from "./vr-capture-errors";
 import { formatCaptureProgressLine, readCaptureProgress, writeCaptureProgress } from "./vr-capture-progress";
 /** Réponse de GET /health du sidecar. */
 export type CaptureDaemonHealth = {
@@ -196,7 +202,9 @@ export const runCaptureBatchRemote = async (
     stats: { total: tasks.length, completed: 0, errors: 0, vrs: 0, news: 0, durationMs: 0 },
     logs: { errors: [], vrs: [], news: [] },
     storiesWithDiff: [],
+    storiesWithErrors: [],
   };
+  const projectRoot = getProjectRoot();
 
   const daemonReady = await waitForCaptureDaemon(5, config);
   if (!daemonReady) {
@@ -204,6 +212,14 @@ export const runCaptureBatchRemote = async (
     aggregate.success = false;
     aggregate.error = message;
     aggregate.logs.errors.push(`🚫 ${message}`);
+    syncCaptureErrorsAllFailed(projectRoot, tasks, message);
+    aggregate.storiesWithErrors = tasks.map(task => ({
+      storyId: task.storyId,
+      deviceName: task.deviceName,
+      componentDir: task.componentDir,
+      message,
+      at: Date.now(),
+    }));
     return aggregate;
   }
 
@@ -217,18 +233,19 @@ export const runCaptureBatchRemote = async (
   console.log(`\n🐳 Capture via daemon Docker (${tasks.length} tâche(s), ${chunks.length} lot(s) de ${chunkSize})…`);
 
   const showDockerLogs = config.docker.showLogs === true;
-  const projectRoot = getProjectRoot();
+  const resolvedTasks: CaptureTask[] = [];
 
   for (let i = 0; i < chunks.length; i++) {
+    const chunkTasks = chunks[i];
     const chunkOptions: SerializableOptions = {
       ...serializable,
       wipePublicDir: i === 0 ? serializable.wipePublicDir : false,
     };
 
-    console.log(`🐳 Lot ${i + 1}/${chunks.length} (${chunks[i].length} tâche(s))…`);
+    console.log(`🐳 Lot ${i + 1}/${chunks.length} (${chunkTasks.length} tâche(s))…`);
     writeCaptureProgress(projectRoot, {
       done: 0,
-      total: chunks[i].length,
+      total: chunkTasks.length,
       chunk: i + 1,
       chunks: chunks.length,
       updatedAt: Date.now(),
@@ -239,18 +256,33 @@ export const runCaptureBatchRemote = async (
       : watchCaptureProgress(projectRoot, {
           chunk: i + 1,
           chunks: chunks.length,
-          chunkTotal: chunks[i].length,
+          chunkTotal: chunkTasks.length,
         });
 
     let result: CaptureBatchResult;
     try {
-      result = await postBatch(chunks[i], chunkOptions, config);
+      result = await postBatch(chunkTasks, chunkOptions, config);
     } catch (err) {
       progressWatch?.stop();
       const message = err instanceof Error ? err.message : String(err);
       aggregate.success = false;
       aggregate.error = message;
       aggregate.logs.errors.push(`🚫 Capture daemon: ${message}`);
+      const at = Date.now();
+      const abortedErrors: CaptureErrorItem[] = [];
+      for (let j = i; j < chunks.length; j++) {
+        for (const task of chunks[j]) {
+          abortedErrors.push({
+            storyId: task.storyId,
+            deviceName: task.deviceName,
+            componentDir: task.componentDir,
+            message,
+            at,
+          });
+          resolvedTasks.push(task);
+        }
+      }
+      aggregate.storiesWithErrors.push(...abortedErrors);
       break;
     }
     progressWatch?.stop();
@@ -269,10 +301,29 @@ export const runCaptureBatchRemote = async (
     aggregate.stats.vrs += result.stats?.vrs ?? 0;
     aggregate.stats.news += result.stats?.news ?? 0;
     aggregate.stats.durationMs += result.stats?.durationMs ?? 0;
-    aggregate.logs.errors.push(...result.logs.errors);
-    aggregate.logs.vrs.push(...result.logs.vrs);
-    aggregate.logs.news.push(...result.logs.news);
-    aggregate.storiesWithDiff.push(...result.storiesWithDiff);
+    aggregate.logs.errors.push(...(result.logs?.errors ?? []));
+    aggregate.logs.vrs.push(...(result.logs?.vrs ?? []));
+    aggregate.logs.news.push(...(result.logs?.news ?? []));
+    aggregate.storiesWithDiff.push(...(result.storiesWithDiff ?? []));
+
+    const chunkErrors = result.storiesWithErrors;
+    if (Array.isArray(chunkErrors)) {
+      aggregate.storiesWithErrors.push(...chunkErrors);
+    } else if ((result.stats?.errors ?? 0) > 0 || (result.logs?.errors?.length ?? 0) > 0) {
+      // Daemon ancien sans storiesWithErrors : fallback — marque le lot entier si erreurs.
+      const at = Date.now();
+      const message = result.logs?.errors?.[result.logs.errors.length - 1] ?? result.error ?? "Capture failed";
+      for (const task of chunkTasks) {
+        aggregate.storiesWithErrors.push({
+          storyId: task.storyId,
+          deviceName: task.deviceName,
+          componentDir: task.componentDir,
+          message,
+          at,
+        });
+      }
+    }
+    resolvedTasks.push(...chunkTasks);
 
     onProgress?.(aggregate.stats.completed, tasks.length);
   }
@@ -280,6 +331,24 @@ export const runCaptureBatchRemote = async (
     aggregate.success = false;
     aggregate.error = "Aucune capture exécutée par le daemon (durée ~0 ms)";
     aggregate.logs.errors.push(`🚫 ${aggregate.error}`);
+    syncCaptureErrorsAllFailed(projectRoot, tasks, aggregate.error);
+    aggregate.storiesWithErrors = tasks.map(task => ({
+      storyId: task.storyId,
+      deviceName: task.deviceName,
+      componentDir: task.componentDir,
+      message: aggregate.error!,
+      at: Date.now(),
+    }));
+    return aggregate;
+  }
+
+  // Déduplique les erreurs (clé device::story) puis sync le store hôte.
+  const byKey = new Map(
+    aggregate.storiesWithErrors.map(item => [captureErrorKey(item.storyId, item.deviceName), item]),
+  );
+  aggregate.storiesWithErrors = Array.from(byKey.values());
+  if (resolvedTasks.length > 0) {
+    syncCaptureErrorsFromBatch(projectRoot, resolvedTasks, aggregate.storiesWithErrors);
   }
 
   return aggregate;

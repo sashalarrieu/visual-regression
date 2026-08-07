@@ -62,7 +62,7 @@ module.exports = {
     manifestPath: ".vr-cache/manifest.json",
   },
   launcher: {
-    runInitialCompare: true,
+    runInitialCompare: false,
   },
   docker: {
     showLogs: true,

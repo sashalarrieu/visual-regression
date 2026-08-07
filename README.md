@@ -384,6 +384,20 @@ L'UI expose les actions **régénération volontaire** en mode full via le serve
 | `GET /regressions/config`         | Config publique résolue (`compareMode`, `storybookUrl`, `captureConcurrency`, …) |
 | `GET /regressions/config/devices` | Devices pour l'UI                                                                |
 
+### Arbres UI (onglets, search / filtres)
+
+L’UI gauche expose jusqu’à **trois onglets**, chacun alimenté par un endpoint d’arbre dédié :
+
+| Onglet                 | Route                           | Contenu                                                                   | Visible                        |
+| ---------------------- | ------------------------------- | ------------------------------------------------------------------------- | ------------------------------ |
+| **Régressions**        | `GET /regressions/tree`         | stories `new` / `diff`                                                    | toujours                       |
+| **Toutes les stories** | `GET /regressions/stories-tree` | catalogue Storybook × devices (`baseline` / `missing`, `ignored` = block) | toujours                       |
+| **Orphelins**          | `GET /regressions/orphans-tree` | screenshots disque dont le `storyId` n’est plus dans `index.json`         | uniquement si `countTotal > 0` |
+
+- **Search** (barre au-dessus de l’arbre) et **filtres de statut** (chips multi-sélection ; aucune chip = tout afficher) s’appliquent côté client via `filterTree` sur l’onglet actif (AND entre query et statuts). Orphelins : search seule.
+- **Pas de poll** : le catalogue et les orphelins se rechargent au switch d’onglet, sur SSE `index-updated` / `connected`, ou via le bouton refresh du TreePanel. Anti-rebuild via `fingerprint` structurel (pas `Date.now()`).
+- **Capture errors** : `GET /regressions/capture-errors` lit `.vr-cache/capture-errors.json` (mis à jour après chaque batch). Modal dédiée (icône erreur dans la top bar) pour régénérer cas par cas, sélection, ou toutes les erreurs (filtrable par device). Succès de capture (new / diff / match) → retrait de la liste.
+
 ---
 
 ## Installation

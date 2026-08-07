@@ -11,6 +11,7 @@ import {
   SCREENSHOTS_DIR,
   TEMP_SCREENSHOT_NAME,
   TREE_BASE_FOLDER,
+  VALIDATED_DIR_NAME,
   VR_SERVER_URL,
 } from "../constants/constants";
 import type { DeletedItem, Node, ParsedPath, RegressionIndex, StoryScreenshotsPath } from "../types/types";
@@ -26,14 +27,20 @@ const join = path.join;
 // ============================================
 
 /**
- * Scan optimisé qui parcourt une seule fois PUBLIC_SCREENSHOTS_DIR (incluant deleted/) et catégorise les fichiers
+ * Scan optimisé qui parcourt une seule fois PUBLIC_SCREENSHOTS_DIR
+ * (incluant deleted/ et validated/) et catégorise les fichiers.
  */
-const scanAllScreenshots = (): { diffPaths: string[]; newPaths: string[]; deletedPaths: string[] } => {
+const scanAllScreenshots = (): {
+  diffPaths: string[];
+  newPaths: string[];
+  deletedPaths: string[];
+  validatedPaths: string[];
+} => {
   const diffPaths: string[] = [];
   const newPaths: string[] = [];
   const deletedPaths: string[] = [];
+  const validatedPaths: string[] = [];
 
-  // Scanner PUBLIC_SCREENSHOTS_DIR une seule fois (incluant le dossier deleted/)
   if (existsSync(PUBLIC_SCREENSHOTS_DIR)) {
     const scanScreenshots = (currentDir: string) => {
       try {
@@ -44,14 +51,18 @@ const scanAllScreenshots = (): { diffPaths: string[]; newPaths: string[]; delete
           const stat = statSync(fullPath);
 
           if (stat.isDirectory()) {
-            // Inclure le dossier "deleted" dans le scan récursif
             scanScreenshots(fullPath);
           } else if (file.endsWith(SCREENSHOT_EXTENSION)) {
             const rawRelative = fullPath.replace(PUBLIC_DIR, "");
             const relativePath = rawRelative.replace(/\\/g, "/").replace(/^\/+/, "");
             const isInDeleted = relativePath.includes("/deleted/");
+            const isInValidated = relativePath.includes(`/${VALIDATED_DIR_NAME}/`);
 
-            if (isInDeleted) {
+            if (isInValidated) {
+              if (file.includes(DIFF_SCREENSHOT_NAME) || file.includes(NEW_SCREENSHOT_NAME)) {
+                validatedPaths.push(relativePath);
+              }
+            } else if (isInDeleted) {
               if (file.includes(DIFF_SCREENSHOT_NAME) || file.includes(NEW_SCREENSHOT_NAME)) {
                 deletedPaths.push(relativePath);
               }
@@ -72,7 +83,7 @@ const scanAllScreenshots = (): { diffPaths: string[]; newPaths: string[]; delete
     scanScreenshots(PUBLIC_SCREENSHOTS_DIR);
   }
 
-  return { diffPaths, newPaths, deletedPaths };
+  return { diffPaths, newPaths, deletedPaths, validatedPaths };
 };
 
 // ============================================
@@ -471,24 +482,23 @@ const sortTree = (node: Node): Node => {
   };
 };
 
-const parseDeleted = (filePath: string): DeletedItem | null => {
+const parseHistoryItem = (
+  filePath: string,
+  historyDirName: "deleted" | typeof VALIDATED_DIR_NAME,
+): DeletedItem | null => {
   const parsed = parsePath(filePath);
   if (!parsed) return null;
 
   const isDiff = parsed.fileName.includes(DIFF_SCREENSHOT_NAME);
+  const historyPrefix = `Screenshots/${historyDirName}/`;
 
-  // filePath vient du scan : "Screenshots/deleted/src/atoms/Alert/__diff__desktop-fhd-..."
-  // On veut juste : "src/atoms/Alert/__diff__desktop-fhd-..."
-  // Nettoyer agressivement pour retirer tous les préfixes possibles (y compris "public/")
   const cleanPath = filePath
-    .replace(/^public\//, "") // Retire "public/" en premier
-    .replace(/^Screenshots\/deleted\/public\/Screenshots\/deleted\//, "") // Retire le pattern dupliqué complet
-    .replace(/^Screenshots\/deleted\/public\//, "") // Retire "Screenshots/deleted/public/"
-    .replace(/^Screenshots\/deleted\//, "") // Retire "Screenshots/deleted/"
-    .replace(/^Screenshots\//, ""); // Retire "Screenshots/" au cas où
+    .replace(/^public\//, "")
+    .replace(new RegExp(`^Screenshots/${historyDirName}/public/Screenshots/${historyDirName}/`), "")
+    .replace(new RegExp(`^Screenshots/${historyDirName}/public/`), "")
+    .replace(new RegExp(`^Screenshots/${historyDirName}/`), "")
+    .replace(/^Screenshots\//, "");
 
-  // Pour les diff, on affiche l'image __temp__, pour les new on affiche __new__
-  // Le préfixe est sur le nom de fichier (pas en tête du chemin complet).
   const imagePath = isDiff
     ? cleanPath.replace(
         new RegExp(`(^|/)${DIFF_SCREENSHOT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
@@ -496,13 +506,9 @@ const parseDeleted = (filePath: string): DeletedItem | null => {
       )
     : cleanPath;
 
-  // Construire l'URL complète pour l'image (imagePath commence déjà par "src/")
-  const imageUrl = getImageUrl(`Screenshots/deleted/${imagePath}`);
-
-  // Extraire le storyId
+  const imageUrl = getImageUrl(`${historyPrefix}${imagePath}`);
   const storyId = parsed.label.includes(" - ") ? parsed.label.split(" - ")[1] : parsed.label;
 
-  // Compter les pixels rouges sur le fichier __diff__ encore présent dans deleted/
   const normalizedScanPath = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
   const absDiffPath = isDiff ? join(PUBLIC_DIR, ...normalizedScanPath.split("/")) : null;
   const countPixelDiff = absDiffPath ? countRedPixelsInDiffImage(absDiffPath) : undefined;
@@ -518,14 +524,24 @@ const parseDeleted = (filePath: string): DeletedItem | null => {
   };
 };
 
+const parseDeleted = (filePath: string): DeletedItem | null => parseHistoryItem(filePath, "deleted");
+
+const parseValidated = (filePath: string): DeletedItem | null => parseHistoryItem(filePath, VALIDATED_DIR_NAME);
+
 const buildDeletedItems = (deletedPaths: string[]): DeletedItem[] =>
   deletedPaths
     .filter(p => p.includes(DIFF_SCREENSHOT_NAME) || p.includes(NEW_SCREENSHOT_NAME))
     .map(parseDeleted)
     .filter(Boolean) as DeletedItem[];
 
+const buildValidatedItems = (validatedPaths: string[]): DeletedItem[] =>
+  validatedPaths
+    .filter(p => p.includes(DIFF_SCREENSHOT_NAME) || p.includes(NEW_SCREENSHOT_NAME))
+    .map(parseValidated)
+    .filter(Boolean) as DeletedItem[];
+
 export const buildIndexFromScan = (): RegressionIndex => {
-  const { diffPaths, newPaths, deletedPaths } = scanAllScreenshots();
+  const { diffPaths, newPaths, deletedPaths, validatedPaths } = scanAllScreenshots();
   const lastUpdate = Date.now();
   const allPaths = [...diffPaths, ...newPaths];
   const rawTree = allPaths.length ? buildTree(allPaths, TREE_BASE_FOLDER, lastUpdate) : null;
@@ -534,8 +550,10 @@ export const buildIndexFromScan = (): RegressionIndex => {
     diffPaths,
     newPaths,
     deletedPaths,
+    validatedPaths,
     tree: rawTree ? sortTree(rawTree) : null,
     deletedItems: buildDeletedItems(deletedPaths),
+    validatedItems: buildValidatedItems(validatedPaths),
     lastUpdate,
   };
 };

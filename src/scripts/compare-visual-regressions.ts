@@ -9,6 +9,7 @@ import {
   NEW_SCREENSHOT_NAME,
   SCREENSHOT_EXTENSION,
   SCREENSHOT_NAME,
+  VALIDATED_DIR_NAME,
 } from "../constants/constants";
 import type { StoryDevicePair } from "../types/types";
 import {
@@ -22,7 +23,7 @@ import { getCaptureBackend, isDockerCaptureBackend } from "../utils/vr-capture-b
 import { filterCaptureTasks, getChangedFiles, shouldWipePublicDir, updateManifest } from "../utils/vr-incremental";
 import { filterTasksByShard, parseShardConfig } from "../utils/vr-sharding";
 
-import type { CaptureTask, CaptureBatchResult } from "./vr-capture-engine";
+import type { CaptureBatchResult, CaptureTask } from "./vr-capture-engine";
 import {
   deleteAllVisualRegressionsFiles,
   deleteVisualRegressionsFilesForDevice,
@@ -205,25 +206,29 @@ const extractDeviceAndStoryIdFromDeletedFile = (
   return { deviceName: null, storyId: null, prefix: null };
 };
 
-const buildTasksFromDeletedByType = async (
-  type: "new" | "diff" | "rejected",
+export type CompareHistorySource = "deleted" | typeof VALIDATED_DIR_NAME;
+export type CompareByTypeKind = "new" | "diff" | "rejected" | "validated";
+
+const buildTasksFromHistoryByType = async (
+  type: "new" | "diff" | "all",
+  historyDirName: CompareHistorySource,
   deviceName?: string,
 ): Promise<CaptureTask[]> => {
   const stories = await getAllStories();
   const allDevices = Object.keys(getDevices());
-  const deletedDir = path.join(PUBLIC_SCREENSHOTS_DIR, "deleted");
+  const historyDir = path.join(PUBLIC_SCREENSHOTS_DIR, historyDirName);
   const tasks: CaptureTask[] = [];
 
-  if (!existsSync(deletedDir)) return tasks;
+  if (!existsSync(historyDir)) return tasks;
 
-  const scanDeletedDir = (dir: string) => {
+  const scanHistoryDir = (dir: string) => {
     try {
       for (const file of readdirSync(dir)) {
         const fullPath = path.join(dir, file);
         const stat = statSync(fullPath);
 
         if (stat.isDirectory()) {
-          scanDeletedDir(fullPath);
+          scanHistoryDir(fullPath);
           continue;
         }
 
@@ -237,7 +242,7 @@ const buildTasksFromDeletedByType = async (
         let shouldInclude = false;
         if (type === "new" && isNewFile) shouldInclude = true;
         else if (type === "diff" && isDiffFile) shouldInclude = true;
-        else if (type === "rejected" && (isNewFile || isDiffFile)) shouldInclude = true;
+        else if (type === "all" && (isNewFile || isDiffFile)) shouldInclude = true;
         if (!shouldInclude) continue;
         if (deviceName && foundDevice !== deviceName) continue;
 
@@ -252,12 +257,12 @@ const buildTasksFromDeletedByType = async (
       }
     } catch (err) {
       console.log(
-        `🚫 Erreur lors de la lecture du dossier deleted : ${err instanceof Error ? err.message : String(err)}`,
+        `🚫 Erreur lors de la lecture du dossier ${historyDirName} : ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   };
 
-  scanDeletedDir(deletedDir);
+  scanHistoryDir(historyDir);
   return tasks;
 };
 
@@ -385,15 +390,19 @@ export const compareAllStories = async (
 };
 
 export const compareByType = async (
-  type: "new" | "diff" | "rejected",
+  type: CompareByTypeKind,
   deviceName?: string,
+  history?: CompareHistorySource,
 ): Promise<{ success: boolean; error?: string }> => {
-  const tasks = await buildTasksFromDeletedByType(type, deviceName);
-  logCaptureTasks(`Type: "${type}" | Device: ${deviceName || "all"}`, tasks);
+  const historyDirName: CompareHistorySource = history ?? (type === "validated" ? VALIDATED_DIR_NAME : "deleted");
+  const fileType: "new" | "diff" | "all" = type === "rejected" || type === "validated" ? "all" : type;
+
+  const tasks = await buildTasksFromHistoryByType(fileType, historyDirName, deviceName);
+  logCaptureTasks(`Type: "${type}" | History: ${historyDirName} | Device: ${deviceName || "all"}`, tasks);
 
   if (tasks.length === 0) {
     console.log(
-      `\n🚫 Aucun fichier à régénérer pour le type "${type}"${deviceName ? ` sur le device "${deviceName}"` : ""}`,
+      `\n🚫 Aucun fichier à régénérer pour le type "${type}" (${historyDirName})${deviceName ? ` sur le device "${deviceName}"` : ""}`,
     );
     return { success: true };
   }

@@ -47,12 +47,21 @@ export type StoryScreenshotsPath = {
   new?: string;
 };
 
+/**
+ * Statut d'un nœud fichier :
+ * - régressions / orphelins : `new` | `diff` (+ `baseline` pour orphelins sans préfixe)
+ * - catalogue : `baseline` | `missing`
+ */
+export type StoryType = "new" | "diff" | "baseline" | "missing";
+
 export type Node = {
   type: "folder" | "file";
   name: string;
   path: string;
   children?: Record<string, Node>;
-  storyType?: "new" | "diff";
+  storyType?: StoryType;
+  /** Tag `ignore-vr` sans `force-vr` — filtre UI « block ». */
+  ignored?: boolean;
   deviceName?: DeviceId;
   storyId?: string;
   displayName?: string;
@@ -62,6 +71,24 @@ export type Node = {
   countDiff?: number;
   countNew?: number;
   countTotal?: number;
+  /** Compteurs catalogue (onglet Toutes les stories). */
+  countBaseline?: number;
+  countMissing?: number;
+  countIgnored?: number;
+};
+
+/** Réponse de GET /regressions/stories-tree. */
+export type StoriesTreeResponse = {
+  tree: Node | null;
+  fingerprint: string;
+  storyCount: number;
+};
+
+/** Réponse de GET /regressions/orphans-tree. */
+export type OrphansTreeResponse = {
+  tree: Node | null;
+  fingerprint: string;
+  countTotal: number;
 };
 
 /** Paire story + device pour les appels de comparaison. */
@@ -86,6 +113,22 @@ export type DeletedItem = {
   countPixelDiff?: number | null;
 };
 
+/** Erreur de capture persistée (story × device) — GET /regressions/capture-errors. */
+export type CaptureErrorItem = {
+  storyId: string;
+  deviceName: string;
+  componentDir: string;
+  message: string;
+  at: number;
+};
+
+/** Réponse de GET /regressions/capture-errors. */
+export type CaptureErrorsResponse = {
+  errors: CaptureErrorItem[];
+  count: number;
+  lastUpdate: number;
+};
+
 // --- Scripts (serveur VR, comparaison) ---
 
 /** Chemin parsé d'un fichier screenshot (serveur VR). */
@@ -101,8 +144,10 @@ export type RegressionIndex = {
   diffPaths: string[];
   newPaths: string[];
   deletedPaths: string[];
+  validatedPaths: string[];
   tree: Node | null;
   deletedItems: DeletedItem[];
+  validatedItems: DeletedItem[];
   lastUpdate: number;
 };
 

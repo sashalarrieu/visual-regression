@@ -1,16 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useRef } from "react";
-import { View } from "react-native";
+import { Text, View } from "react-native";
 import { ScrollView } from "react-native-gesture-handler";
 
 import { Accordion } from "../atoms/Accordion";
 import { Box } from "../atoms/Box";
 import { Bullet } from "../atoms/Bullet";
 import { Button } from "../atoms/Button";
+import { SearchField } from "../atoms/SearchField";
+import { Touchable } from "../atoms/Touchable";
 import { Typo } from "../atoms/Typo";
 import { useDeviceConfig } from "../providers/DeviceConfigProvider";
-import { colors, spacing } from "../themes/theme";
-import type { Node } from "../types/types";
-import { calculateFolderDepth, findFirstFile, formatStoryName, getStoryNameFromId } from "../utils";
+import { colors, spacing, type ColorKey } from "../themes/theme";
+import type { MaterialIconName, Node } from "../types/types";
+import {
+  calculateFolderDepth,
+  filterTree,
+  findFirstFile,
+  formatStoryName,
+  getStoryNameFromId,
+  type StatusFilterValue,
+  type TreePanelMode,
+} from "../utils";
 
 export type TreePanelProps = {
   tree: Node | null;
@@ -20,6 +30,94 @@ export type TreePanelProps = {
   currentStory?: Node;
   onCompareStoryNode?: (node: Node) => void;
   regeneratingPaths?: Set<string>;
+  /** Onglet actif — search / chips / icônes. */
+  mode?: TreePanelMode;
+  searchQuery?: string;
+  onSearchQuery?: (query: string) => void;
+  statusFilter?: ReadonlySet<StatusFilterValue>;
+  onStatusFilter?: (statuses: Set<StatusFilterValue>) => void;
+};
+
+type StatusChipDef = { value: StatusFilterValue; label: string };
+
+const STATUS_CHIPS_BY_MODE: Record<TreePanelMode, StatusChipDef[]> = {
+  regressions: [
+    { value: "new", label: "new" },
+    { value: "diff", label: "diff" },
+  ],
+  "all-stories": [
+    { value: "baseline", label: "baseline" },
+    { value: "block", label: "block" },
+    { value: "missing", label: "missing" },
+  ],
+  orphans: [],
+};
+
+const getFileStatusIcon = (
+  fileNode: Node,
+  mode: TreePanelMode,
+  isCurrentStory: boolean,
+): { name: MaterialIconName; fill: ColorKey } => {
+  const onPrimary: ColorKey = "newTheme_textOnPrimary";
+
+  if (mode === "all-stories") {
+    if (fileNode.ignored) {
+      return { name: "block", fill: isCurrentStory ? onPrimary : "newTheme_base10" };
+    }
+    if (fileNode.storyType === "missing") {
+      return { name: "add", fill: isCurrentStory ? onPrimary : "newTheme_primary" };
+    }
+    return { name: "check", fill: isCurrentStory ? onPrimary : "newTheme_info" };
+  }
+
+  // regressions + orphans
+  if (fileNode.storyType === "new") {
+    return { name: "add", fill: isCurrentStory ? onPrimary : "newTheme_primary" };
+  }
+  if (fileNode.storyType === "baseline") {
+    return { name: "check", fill: isCurrentStory ? onPrimary : "newTheme_base10" };
+  }
+  return { name: "warning", fill: isCurrentStory ? onPrimary : "newTheme_danger" };
+};
+
+const folderTagsForMode = (node: Node, mode: TreePanelMode): React.ReactNode[] => {
+  if (mode === "all-stories") {
+    return [
+      <Bullet
+        key="baseline"
+        value={node.countBaseline || 0}
+        color="newTheme_info"
+      />,
+      <Bullet
+        key="missing"
+        value={node.countMissing || 0}
+        color="newTheme_primary80"
+      />,
+      <Bullet
+        key="ignored"
+        value={node.countIgnored || 0}
+        color="newTheme_base10"
+      />,
+    ];
+  }
+
+  return [
+    <Bullet
+      key="new"
+      value={node.countNew || 0}
+      color="newTheme_primary80"
+    />,
+    <Bullet
+      key="diff"
+      value={node.countDiff || 0}
+      color="newTheme_danger"
+    />,
+    <Bullet
+      key="total"
+      value={node.countTotal || 0}
+      color="newTheme_base10"
+    />,
+  ];
 };
 
 export const TreePanel: React.FC<TreePanelProps> = ({
@@ -30,17 +128,34 @@ export const TreePanel: React.FC<TreePanelProps> = ({
   currentStory,
   onCompareStoryNode,
   regeneratingPaths = new Set(),
+  mode = "regressions",
+  searchQuery = "",
+  onSearchQuery,
+  statusFilter,
+  onStatusFilter,
 }) => {
   const { getDeviceStyle, getDeviceDisplayName } = useDeviceConfig();
   const scrollViewRef = useRef<ScrollView>(null);
   const scrollContentRef = useRef<View>(null);
   const nodeRefs = useRef<Map<string, View>>(new Map());
 
+  const statusChips = STATUS_CHIPS_BY_MODE[mode];
+
+  const displayTree = useMemo(
+    () =>
+      filterTree(tree, {
+        query: searchQuery,
+        statuses: statusFilter,
+        mode,
+      }),
+    [tree, searchQuery, statusFilter, mode],
+  );
+
   const firstElementOffset = useMemo(() => {
-    const firstFile = findFirstFile(tree);
+    const firstFile = findFirstFile(displayTree);
     if (!firstFile?.path) return 0;
     return calculateFolderDepth(firstFile.path) * (48 + spacing.m);
-  }, [tree]);
+  }, [displayTree]);
 
   useEffect(() => {
     if (currentStory?.path && scrollViewRef.current && scrollContentRef.current) {
@@ -64,13 +179,26 @@ export const TreePanel: React.FC<TreePanelProps> = ({
     };
   }, []);
 
+  const toggleStatus = useCallback(
+    (status: StatusFilterValue) => {
+      if (!onStatusFilter) return;
+      const next = new Set(statusFilter ?? []);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      onStatusFilter(next);
+    },
+    [statusFilter, onStatusFilter],
+  );
+
+  const showSync = mode === "regressions" && !!onCompareStoryNode;
+
   const renderFile = (fileNode: Node) => {
     if (regeneratingPaths.has(fileNode.path)) return null;
-    const isNew = fileNode.storyType === "new";
     const deviceName = fileNode.deviceName;
     const deviceStyle = getDeviceStyle(deviceName);
     const isCurrentStory = currentStory?.path === fileNode.path;
     const deviceDisplayName = deviceName ? getDeviceDisplayName(deviceName) : fileNode.name;
+    const statusIcon = getFileStatusIcon(fileNode, mode, isCurrentStory);
 
     return (
       <View ref={setNodeRef(fileNode.path)}>
@@ -89,21 +217,17 @@ export const TreePanel: React.FC<TreePanelProps> = ({
               fill: (isCurrentStory ? "newTheme_textOnPrimary" : deviceStyle.color) as keyof typeof colors,
             }}
             rightIcon={{
-              name: isNew ? "add" : "warning",
-              fill: (isCurrentStory
-                ? "newTheme_textOnPrimary"
-                : isNew
-                  ? "newTheme_primary"
-                  : "newTheme_danger") as keyof typeof colors,
+              name: statusIcon.name,
+              fill: statusIcon.fill,
             }}
             flex={1}
             justifyContent="space-between"
           />
-          {onCompareStoryNode && fileNode.storyId && fileNode.deviceName && (
+          {showSync && fileNode.storyId && fileNode.deviceName && (
             <Button
               icon={{ name: "sync" }}
               color={isCurrentStory ? "primary" : "base"}
-              onPress={() => onCompareStoryNode(fileNode)}
+              onPress={() => onCompareStoryNode?.(fileNode)}
             />
           )}
         </Box>
@@ -127,31 +251,11 @@ export const TreePanel: React.FC<TreePanelProps> = ({
       filesByStoryId.get(storyId)!.push(file);
     });
 
-    const diffCount = node.countDiff || 0;
-    const newCount = node.countNew || 0;
-    const totalCount = node.countTotal || 0;
-
     return (
       <Accordion
         key={node.name}
         label={{ text: node.name }}
-        tags={[
-          <Bullet
-            key="new"
-            value={newCount}
-            color="newTheme_primary80"
-          />,
-          <Bullet
-            key="diff"
-            value={diffCount}
-            color="newTheme_danger"
-          />,
-          <Bullet
-            key="total"
-            value={totalCount}
-            color="newTheme_base10"
-          />,
-        ]}
+        tags={folderTagsForMode(node, mode)}
         defaultOpened
         style={{ paddingBottom: 0 }}
       >
@@ -204,7 +308,7 @@ export const TreePanel: React.FC<TreePanelProps> = ({
 
   return (
     <Box
-      width={300}
+      flex={1}
       p="m"
     >
       <Box
@@ -228,12 +332,60 @@ export const TreePanel: React.FC<TreePanelProps> = ({
           />
         </Box>
       </Box>
+
+      {onSearchQuery && (
+        <Box pb="s">
+          <SearchField
+            value={searchQuery}
+            onChangeText={onSearchQuery}
+            placeholder="Rechercher une story…"
+          />
+        </Box>
+      )}
+
+      {onStatusFilter && statusChips.length > 0 && (
+        <Box
+          flexDirection="row"
+          gap="xs"
+          pb="s"
+          style={{ flexWrap: "wrap" }}
+        >
+          {statusChips.map(chip => {
+            const active = statusFilter?.has(chip.value) ?? false;
+            return (
+              <Touchable
+                key={chip.value}
+                onPress={() => toggleStatus(chip.value)}
+                style={{
+                  paddingHorizontal: spacing.s,
+                  paddingVertical: spacing.xs,
+                  borderRadius: 4,
+                  borderWidth: 1,
+                  borderColor: active ? colors.newTheme_primary : colors.newTheme_border,
+                  backgroundColor: active ? colors.newTheme_primary10 : colors.newTheme_surface,
+                }}
+              >
+                <Text
+                  style={{
+                    fontSize: 12,
+                    fontWeight: "600",
+                    color: active ? colors.newTheme_primary : colors.newTheme_textLegend,
+                  }}
+                >
+                  {chip.label}
+                </Text>
+              </Touchable>
+            );
+          })}
+        </Box>
+      )}
+
       <ScrollView
         ref={scrollViewRef}
         style={{ marginHorizontal: -spacing.m }}
       >
         <View ref={scrollContentRef}>
-          <Box px="m">{renderTree(tree)}</Box>
+          <Box px="m">{renderTree(displayTree)}</Box>
         </View>
       </ScrollView>
     </Box>

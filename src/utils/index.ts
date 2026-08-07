@@ -7,6 +7,9 @@ import {
 } from "../constants/constants";
 import type { DeviceDisplayConfig, DeviceStyle, Node, StoryScreenshotsPath, VRDeviceConfig } from "../types/types";
 
+export type { FilterTreeOptions, StatusFilterValue, TreePanelMode } from "./filter-tree";
+export { filterTree } from "./filter-tree";
+
 /**
  * Utilitaires partagés (app React + scripts). Code Node-only (import.meta, createRequire) dans ./node.ts.
  */
@@ -74,7 +77,7 @@ export type VisualRegressionActionHandlers = {
   onBeforeRemove?: () => void;
   /** Appelé après un refus/validate réussi : applique le path préparé. */
   onAfterDelete: () => void;
-  /** Appelé après une restauration depuis l'historique des refusés. */
+  /** Appelé après une restauration depuis l'historique (refusés ou validés). */
   onAfterRestore?: (fullPath: string) => void;
   /** Appelé après une action globale (tout valider / tout refuser). */
   onAfterBulk?: () => void;
@@ -212,6 +215,25 @@ export const createVisualRegressionActions = (
     }
   };
 
+  const handleRevertValidated = async (path: string, isDiff: boolean) => {
+    try {
+      const res = await fetch(`${serverUrl}/revert-validated`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path, isDiff }),
+      });
+      const result = await res.json();
+      if (!res.ok || result.success === false) {
+        console.error("❌ Revert validation échoué :", result.error ?? res.statusText);
+        return;
+      }
+      console.log("✅ Validation annulée");
+      onAfterRestore?.(path);
+    } catch (err) {
+      console.error("❌ Revert validated error:", err);
+    }
+  };
+
   const handleCompareSelected = async (stories: { storyId: string; deviceName: string }[]) => {
     if (!stories.length) return;
     try {
@@ -231,10 +253,19 @@ export const createVisualRegressionActions = (
     }
   };
 
-  const handleCompareByType = async (type: "new" | "diff" | "rejected", deviceName?: string) => {
+  const handleCompareByType = async (
+    type: "new" | "diff" | "rejected" | "validated",
+    deviceName?: string,
+    history?: "deleted" | "validated",
+  ) => {
     try {
-      const body: { type: "new" | "diff" | "rejected"; deviceName?: string } = { type };
+      const body: {
+        type: "new" | "diff" | "rejected" | "validated";
+        deviceName?: string;
+        history?: "deleted" | "validated";
+      } = { type };
       if (deviceName) body.deviceName = deviceName;
+      if (history) body.history = history;
       const res = await fetch(`${serverUrl}/compare/by-type`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -280,6 +311,7 @@ export const createVisualRegressionActions = (
     handleDelete,
     handleDeleteAll,
     handleRestore,
+    handleRevertValidated,
   };
 };
 

@@ -7,7 +7,13 @@ import { createRequire } from "module";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { FORCE_VR_TAG, IGNORE_VR_TAG, SCREENSHOTS_DIR } from "../constants/constants";
+import {
+  DELETED_DIR_NAME,
+  FORCE_VR_TAG,
+  IGNORE_VR_TAG,
+  SCREENSHOTS_DIR,
+  VALIDATED_DIR_NAME,
+} from "../constants/constants";
 import type { DeviceConfig, DeviceDisplayConfig, VRDeviceConfigItem, VrPublicConfig } from "../types/types";
 
 import { resolveVrConfig } from "./vr-config";
@@ -145,10 +151,12 @@ export const getScriptDir = (meta: { dirname?: string; url: string }): string =>
 
 export const getProjectPaths = (root: string) => {
   const publicDir = path.join(root, "public", path.sep);
+  const publicScreenshotsDir = path.join(publicDir, SCREENSHOTS_DIR);
   return {
     publicDir,
-    publicScreenshotsDir: path.join(publicDir, SCREENSHOTS_DIR),
-    deletedDir: path.join(publicDir, SCREENSHOTS_DIR, "deleted"),
+    publicScreenshotsDir,
+    deletedDir: path.join(publicScreenshotsDir, DELETED_DIR_NAME),
+    validatedDir: path.join(publicScreenshotsDir, VALIDATED_DIR_NAME),
     storybookConfigDir: path.join(root, ".storybook"),
   };
 };
