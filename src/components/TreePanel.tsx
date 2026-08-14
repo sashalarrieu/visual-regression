@@ -15,11 +15,12 @@ import { colors, spacing, type ColorKey } from "../themes/theme";
 import type { MaterialIconName, Node } from "../types/types";
 import {
   calculateFolderDepth,
-  collectFilePaths,
+  collectSelectableFilePaths,
   filterTree,
   findFirstFile,
   formatStoryName,
   getStoryNameFromId,
+  isSelectableTreeFile,
   selectionState,
   type SelectionState,
   type StatusFilterValue,
@@ -223,7 +224,8 @@ export const TreePanel: React.FC<TreePanelProps> = ({
     const deviceName = fileNode.deviceName;
     const deviceStyle = getDeviceStyle(deviceName);
     const isCurrentStory = !multiSelectMode && currentStory?.path === fileNode.path;
-    const isSelected = multiSelectMode && selectedPaths.has(fileNode.path);
+    const selectable = isSelectableTreeFile(fileNode);
+    const isSelected = multiSelectMode && selectable && selectedPaths.has(fileNode.path);
     const deviceDisplayName = deviceName ? getDeviceDisplayName(deviceName) : fileNode.name;
     const statusIcon = getFileStatusIcon(fileNode, mode, isCurrentStory || isSelected);
     const highlight = isCurrentStory || isSelected;
@@ -236,7 +238,7 @@ export const TreePanel: React.FC<TreePanelProps> = ({
           alignItems="center"
           style={{ paddingRight: spacing.m - spacing.s + 1 }}
         >
-          {multiSelectMode && (
+          {multiSelectMode && selectable && (
             <Touchable
               onPress={() => onTogglePath?.(fileNode.path)}
               hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
@@ -251,13 +253,26 @@ export const TreePanel: React.FC<TreePanelProps> = ({
               />
             </Touchable>
           )}
+          {multiSelectMode && !selectable && (
+            <Icon
+              name="block"
+              size="s"
+              fill="newTheme_base10"
+              style={{ marginRight: 4, opacity: 0.5 }}
+            />
+          )}
           <Button
             label={deviceDisplayName}
             color={highlight ? "primary" : "base"}
             onPress={() => {
-              if (multiSelectMode) onTogglePath?.(fileNode.path);
-              else onNodeClick(fileNode);
+              if (multiSelectMode) {
+                if (selectable) onTogglePath?.(fileNode.path);
+                else onNodeClick(fileNode);
+                return;
+              }
+              onNodeClick(fileNode);
             }}
+            disabled={multiSelectMode && !selectable}
             leftIcon={{
               name: deviceStyle.icon,
               fill: (highlight ? "newTheme_textOnPrimary" : deviceStyle.color) as keyof typeof colors,
@@ -282,7 +297,8 @@ export const TreePanel: React.FC<TreePanelProps> = ({
   };
 
   const renderStoryHeader = (storyName: string, storyFiles: Node[]) => {
-    const paths = storyFiles.map(f => f.path);
+    const selectableFiles = storyFiles.filter(isSelectableTreeFile);
+    const paths = selectableFiles.map(f => f.path);
     const state = selectionState(paths, selectedPaths);
 
     if (!multiSelectMode) {
@@ -309,24 +325,34 @@ export const TreePanel: React.FC<TreePanelProps> = ({
         alignItems="center"
         gap="xs"
       >
-        <Touchable
-          onPress={() => onTogglePaths?.(paths)}
-          hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-          accessibilityRole="checkbox"
-          accessibilityState={{
-            checked: state === "partial" ? "mixed" : state === "all",
-          }}
-        >
+        {paths.length > 0 ? (
+          <Touchable
+            onPress={() => onTogglePaths?.(paths)}
+            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+            accessibilityRole="checkbox"
+            accessibilityState={{
+              checked: state === "partial" ? "mixed" : state === "all",
+            }}
+          >
+            <Icon
+              name={checkboxIconName(state)}
+              size="s"
+              fill={state === "none" ? "newTheme_textOnSurface" : "newTheme_primary"}
+              style={{ marginRight: 4 }}
+            />
+          </Touchable>
+        ) : (
           <Icon
-            name={checkboxIconName(state)}
+            name="block"
             size="s"
-            fill={state === "none" ? "newTheme_textOnSurface" : "newTheme_primary"}
-            style={{ marginRight: 4 }}
+            fill="newTheme_base10"
+            style={{ marginRight: 4, opacity: 0.5 }}
           />
-        </Touchable>
+        )}
         <Touchable
-          onPress={() => onTogglePaths?.(paths)}
+          onPress={() => paths.length > 0 && onTogglePaths?.(paths)}
           style={{ flexShrink: 1 }}
+          notPressable={paths.length === 0}
         >
           <Typo
             variant="paragraphe_semiBold"
@@ -355,7 +381,7 @@ export const TreePanel: React.FC<TreePanelProps> = ({
       filesByStoryId.get(storyId)!.push(file);
     });
 
-    const folderPaths = multiSelectMode ? collectFilePaths(node).filter(p => !regeneratingPaths.has(p)) : [];
+    const folderPaths = multiSelectMode ? collectSelectableFilePaths(node).filter(p => !regeneratingPaths.has(p)) : [];
     const folderSelection = multiSelectMode ? selectionState(folderPaths, selectedPaths) : "none";
 
     return (

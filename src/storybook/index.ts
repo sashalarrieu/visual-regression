@@ -2,6 +2,8 @@ export { vrPreviewDecorators, withVrReanimatedFreeze, withVrStoryPlay } from "./
 
 export { patchStorybookFocusForDocs } from "./patch-storybook-focus";
 
+export { isVrCaptureStorybook, vrStorybookAddons, VR_CAPTURE_INCOMPATIBLE_ADDONS } from "./vr-storybook-addons";
+
 export {
   BURST_VR_TAG,
   FORCE_VR_TAG,

@@ -1,16 +1,23 @@
-import {
-  FORCE_VR_TAG,
-  IGNORE_VR_TAG,
-  STORYBOOK_URL,
-  UNKNOWN_DEVICE_STYLE,
-  VR_SERVER_URL,
-} from "../constants/constants";
+import { STORYBOOK_URL, UNKNOWN_DEVICE_STYLE, VR_SERVER_URL } from "../constants/constants";
 import type { DeviceDisplayConfig, DeviceStyle, Node, StoryScreenshotsPath, VRDeviceConfig } from "../types/types";
 
-export type { FilterTreeOptions, StatusFilterValue, TreePanelMode } from "./filter-tree";
+import { shouldIncludeStoryForVisualRegression } from "./vr-story-eligibility";
+
 export { filterTree } from "./filter-tree";
+export type { FilterTreeOptions, StatusFilterValue, TreePanelMode } from "./filter-tree";
+export {
+  collectFilePaths,
+  collectSelectableFilePaths,
+  isSelectableTreeFile,
+  selectionState,
+  togglePaths,
+} from "./tree-selection";
 export type { SelectionState } from "./tree-selection";
-export { collectFilePaths, selectionState, togglePaths } from "./tree-selection";
+export {
+  formatIgnoreVrFallbackLog,
+  isIgnoredVrStory,
+  shouldIncludeStoryForVisualRegression,
+} from "./vr-story-eligibility";
 
 /**
  * Utilitaires partagés (app React + scripts). Code Node-only (import.meta, createRequire) dans ./node.ts.
@@ -27,11 +34,8 @@ export const fetchStorybookStoryCount = async (serverUrl: string = VR_SERVER_URL
         const res = await fetch(`${cfg.storybookUrl.replace(/\/$/, "")}/index.json`);
         if (res.ok) {
           const data = (await res.json()) as { entries?: Record<string, { type?: string; tags?: string[] }> };
-          return Object.entries(data.entries ?? {}).filter(([id, entry]) => {
-            if (entry.type !== "story" || id.endsWith("--docs")) return false;
-            const tags = entry.tags ?? [];
-            return tags.includes(FORCE_VR_TAG) || !tags.includes(IGNORE_VR_TAG);
-          }).length;
+          return Object.entries(data.entries ?? {}).filter(([, entry]) => shouldIncludeStoryForVisualRegression(entry))
+            .length;
         }
       }
     }
@@ -42,11 +46,8 @@ export const fetchStorybookStoryCount = async (serverUrl: string = VR_SERVER_URL
     const res = await fetch(`${STORYBOOK_URL}/index.json`);
     if (!res.ok) return 0;
     const data = (await res.json()) as { entries?: Record<string, { type?: string; tags?: string[] }> };
-    return Object.entries(data.entries ?? {}).filter(([id, entry]) => {
-      if (entry.type !== "story" || id.endsWith("--docs")) return false;
-      const tags = entry.tags ?? [];
-      return tags.includes(FORCE_VR_TAG) || !tags.includes(IGNORE_VR_TAG);
-    }).length;
+    return Object.entries(data.entries ?? {}).filter(([, entry]) => shouldIncludeStoryForVisualRegression(entry))
+      .length;
   } catch {
     return 0;
   }

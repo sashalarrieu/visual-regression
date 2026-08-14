@@ -56,6 +56,8 @@ Quand la même option existe à plusieurs endroits, l’ordre est :
 
 **variable d’environnement** `VR_`* **→** `vr.config.cjs` **→ défaut du package**
 
+Le sidecar Docker **respecte le même ordre** : le launcher résout le mode puis exporte `VR_STORYBOOK_MODE` dans Compose. L’entrypoint ne force plus le HMR.
+
 Exemple : si `vr.config.cjs` met `capture.concurrency: 8` mais que la CI exporte `VR_CONCURRENCY=4`, c’est **4** qui sera utilisé.
 
 > **Concurrency ≠ un seul chiffre partout**
@@ -229,11 +231,11 @@ Le log au démarrage du pool l’indique explicitement, ex. :
 
 #### `launcher` — comportement de `yarn vr`
 
-| Paramètre            | Défaut   | En bref                                                                                                                                                                                       |
-| -------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `runInitialCompare`  | `true`   | Lance une comparaison automatique au démarrage de `yarn vr`. Mettez `false` si vous voulez seulement ouvrir l’UI sans capturer.                                                               |
-| `storybookMode`      | _(auto)_ | `"dev"` = Storybook avec rechargement à chaud. `"static"` = build `storybook-static` puis serve (comme en CI). **Omis** = auto : statique en Docker avec `@storybook/nextjs-vite`, sinon dev. |
-| `forceStaticRebuild` | `false`  | Si `true`, rebuild `storybook-static` avant chaque capture (utile si vos stories changent souvent en mode statique).                                                                          |
+| Paramètre            | Défaut   | En bref                                                                                                                                                                                                |
+| -------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `runInitialCompare`  | `true`   | Lance une comparaison automatique au démarrage de `yarn vr`. Mettez `false` si vous voulez seulement ouvrir l’UI sans capturer.                                                                        |
+| `storybookMode`      | _(auto)_ | `"dev"` = Storybook HMR (défaut local). `"static"` = build `storybook-static`. **Omis** = `dev`, sauf `@storybook/nextjs-vite` → `static`. Priorité : `VR_STORYBOOK_MODE` **>** ce champ **>** défaut. |
+| `forceStaticRebuild` | `false`  | Si `true`, rebuild `storybook-static` avant chaque capture (mode static uniquement). Le rebuild se déclenche aussi dès qu’une story/source change (empreinte de contenu).                              |
 
 **Variable d’env équivalente** : `VR_RUN_INITIAL_COMPARE`, `VR_STORYBOOK_MODE` (`dev` `static`), `VR_STORYBOOK_STATIC` (alias → `static`), `VR_STORYBOOK_STATIC_REBUILD`.
 
@@ -270,11 +272,11 @@ Vous pouvez surcharger par story via `parameters.vr.stabilize` dans vos fichiers
 
 #### `docker` — sidecar de capture _(avancé)_
 
-| Paramètre         | Défaut                                       | En bref                                                                                                                               |
-| ----------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `image`           | `vr-capture:1.61.1`                          | Image du conteneur qui exécute Storybook + Playwright.                                                                                |
-| `playwrightImage` | `mcr.microsoft.com/playwright:v1.61.1-jammy` | Image de base pour **builder** le sidecar localement.                                                                                 |
-| `showLogs`        | `false`                                      | Si `true`, affiche les logs du sidecar (`docker compose logs -f`) dans le terminal hôte — pratique en dev sans ouvrir Docker Desktop. |
+| Paramètre         | Défaut                                      | En bref                                                                                                                               |
+| ----------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `image`           | `vr-capture:<playwright>`                   | Image du conteneur (tag = version Playwright de **capture**, auto-détectée).                                                          |
+| `playwrightImage` | `mcr.microsoft.com/playwright:v<ver>-jammy` | Image de base pour **builder** le sidecar. Alignée automatiquement ; override `VR_PLAYWRIGHT_IMAGE`.                                  |
+| `showLogs`        | `false`                                     | Si `true`, affiche les logs du sidecar (`docker compose logs -f`) dans le terminal hôte — pratique en dev sans ouvrir Docker Desktop. |
 
 **Variable d’env équivalente** : `VR_DOCKER_IMAGE`, `VR_PLAYWRIGHT_IMAGE`, `VR_DOCKER_SHOW_LOGS` (`1` / `true` / `0` / `false`).
 
@@ -319,7 +321,7 @@ Stabilisation des captures inspirée de [Chromatic SteadySnap](https://www.chrom
 
 **Modals / portals :** la capture cible `#storybook-root` (crop serré). Si un overlay est rendu **hors** du root (React portal, `Modal` RN Web, `[role="dialog"]`, `position: fixed|absolute` sibling), le clip est élargi à l’union root ∪ overlays — sinon on ne voit que le backdrop grisé sans le panneau modal.
 
-**Stories** `play()` **:** exécutées automatiquement avant chaque screenshot VR. Playwright attend `data-vr-ready="true"` sur les stories taguées `play-fn`.
+**Stories** `play()` **:** Storybook les exécute avant le screenshot. Le decorator VR attend `data-vr-ready="true"` (stories taguées `play-fn`) et ne rejoue `play()` que s'il n'a pas réellement tourné — un second play casse l'état (spies, DOM déjà muté).
 
 **Vérification diff :** si une capture diffère de la baseline, le moteur relance jusqu'à match ou `compare.diffVerificationMaxAttempts` (défaut 3). Override global : `VR_DIFF_VERIFY_MAX_ATTEMPTS`.
 
@@ -526,7 +528,7 @@ Un exemple complet GitHub Actions (cache `node_modules` + `storybook-static`, sh
 | `VR_CAPTURE_BACKEND`      | `capture.backend` → `docker`     | `docker` = capture déléguée au daemon ; `local` = capture directe (tests internes / dans le conteneur) |
 | `VR_CAPTURE_DAEMON_URL`   | `capture.daemonUrl`              | URL du daemon de capture                                                                               |
 | `VR_CAPTURE_REMOTE_CHUNK` | `capture.remoteChunkSize` → `20` | Taille des lots envoyés au daemon (évite les timeouts fetch)                                           |
-| `VR_STORYBOOK_MODE`       | `launcher.storybookMode` → auto  | `dev` (HMR) ou `static` (build + serve, CI)                                                            |
+| `VR_STORYBOOK_MODE`       | `launcher.storybookMode` → `dev` | `dev` (HMR, défaut local) ou `static` (build + serve, CI)                                              |
 | `VR_STORYBOOK_STATIC`     | alias → `static`                 | Rétrocompat : équivalent à `VR_STORYBOOK_MODE=static`                                                  |
 | `VR_DOCKER_IMAGE`         | `docker.image`                   | Image du sidecar (tag aligné sur la version Playwright)                                                |
 | `VR_PLAYWRIGHT_IMAGE`     | `docker.playwrightImage`         | Image de base Playwright pour builder le sidecar                                                       |
@@ -556,12 +558,12 @@ L’UI VisualRegressions est entièrement embarquée dans le package.
 
 Le package expose les decorators, types et helpers utilisés par les stories VR :
 
-| Import                                 | Rôle                                                                                                            |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `@setshao/visual-regression`           | Tags VR (`LIVE_ANIMATION_VR_TAG`, `SKIP_PLAY_VR_TAG`, …), type `VrStoryParameters`, helper `defineVrParameters` |
-| `@setshao/visual-regression/types`     | Types seuls (`VrStoryParameters`, …) — idéal pour les `.d.ts` d’augmentation                                    |
-| `@setshao/visual-regression/storybook` | Decorators `vrPreviewDecorators` (freeze Reanimated + exécution `play()`)                                       |
-| `@setshao/visual-regression/play`      | Helpers `play()` DOM pour React Native Web (`clickByLabel`, `expectText`, …)                                    |
+| Import                                 | Rôle                                                                                                                                    |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `@setshao/visual-regression`           | Tags VR (`LIVE_ANIMATION_VR_TAG`, `SKIP_PLAY_VR_TAG`, …), type `VrStoryParameters`, helper `defineVrParameters`                         |
+| `@setshao/visual-regression/types`     | Types seuls (`VrStoryParameters`, …) — idéal pour les `.d.ts` d’augmentation                                                            |
+| `@setshao/visual-regression/storybook` | Decorators `vrPreviewDecorators` (freeze Reanimated + exécution `play()`) + `vrStorybookAddons` (retire `addon-vitest` dans le sidecar) |
+| `@setshao/visual-regression/play`      | Helpers `play()` DOM pour React Native Web (`clickByLabel`, `expectText`, …)                                                            |
 
 `.storybook/preview.tsx` :
 
@@ -576,6 +578,18 @@ const preview: Preview = {
 
 export default preview;
 ```
+
+`.storybook/main.ts` (si `@storybook/addon-vitest` est listé) :
+
+```ts
+import { vrStorybookAddons } from "@setshao/visual-regression/storybook";
+
+const config = {
+  addons: vrStorybookAddons(["@storybook/addon-docs", "@storybook/addon-vitest", "@storybook/addon-a11y"]),
+};
+```
+
+Le sidecar `yarn vr` n’a pas de runner Vitest : sans ce filtre, le manager log `UniversalStoreFollowerTimeoutError` (`storybook/test`).
 
 `.storybook/vr-parameters.d.ts` (typage `parameters.vr` — adapter le module au framework) :
 

@@ -5,6 +5,7 @@ import type { Node } from "../types/types";
 import {
   buildStoriesTreeFromEntries,
   resolvePublicBaselinePath,
+  resolveSourceBaselinePath,
   type StorybookIndexEntry,
 } from "./vr-server-stories-tree";
 
@@ -90,6 +91,37 @@ describe("buildStoriesTreeFromEntries", () => {
     expect(files.find(f => f.storyId === "forced--story")?.ignored).toBe(false);
     expect(result.tree?.countIgnored).toBe(1);
     expect(result.tree?.countMissing).toBe(2);
+  });
+
+  it("détecte une baseline source validée (hors public/Screenshots)", () => {
+    const sourceBaseline = resolveSourceBaselinePath(
+      "/tmp/project",
+      "src/atoms/Button",
+      "desktop-fhd",
+      "atoms-button--color",
+    );
+
+    const result = buildStoriesTreeFromEntries({
+      entries: entries([
+        {
+          id: "atoms-button--color",
+          type: "story",
+          importPath: "src/atoms/Button/Button.stories.tsx",
+          tags: [],
+        },
+      ]),
+      deviceNames: ["desktop-fhd"],
+      publicScreenshotsDir: publicDir,
+      projectRoot: "/tmp/project",
+      baselineExists: abs => abs === sourceBaseline,
+      vrServerUrl: "http://localhost:2805",
+    });
+
+    const file = collectFiles(result.tree)[0];
+    expect(file?.storyType).toBe("baseline");
+    expect(file?.imageUrls?.original).toBe(
+      "http://localhost:2805/project-file/src/atoms/Button/Screenshots/desktop-fhd-atoms-button--color.screenshot.png",
+    );
   });
 
   it("fingerprint stable si structure inchangée, change si baseline apparaît", () => {

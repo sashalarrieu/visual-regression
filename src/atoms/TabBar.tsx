@@ -12,6 +12,7 @@ export type TabBarTab<T = string> = {
   alertTextInfo?: number;
   /** Slot à côté du titre (typiquement un `<Bullet value={…} color={…} />`). */
   badge?: ReactNode;
+  disabled?: boolean;
 };
 
 export type TabBarProps<T = string> = {
@@ -36,11 +37,13 @@ export const TabBar = <T = string,>({ tabs, selectedTabKey, onSelectedTabKey }: 
             key={String(tab.key)}
             onPress={() => onSelectedTabKey(tab.key)}
             style={{
+              opacity: tab.disabled ? 0.3 : 1,
               paddingVertical: spacing.s,
               paddingHorizontal: spacing.m,
               borderRadius: 8,
               backgroundColor: selected ? colors.newTheme_primary : colors.newTheme_surface,
             }}
+            disabled={tab.disabled}
           >
             <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
               <Text

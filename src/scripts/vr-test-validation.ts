@@ -380,7 +380,7 @@ const runDockerChecks = (): CheckResult[] => {
   if (existsSync(dockerfile)) {
     const pkgVersion = getPackagePlaywrightVersion(dockerDir);
     const dockerfileContent = readFileSync(dockerfile, "utf8");
-    const match = dockerfileContent.match(/mcr\.microsoft\.com\/playwright:v([\d.]+)/);
+    const match = dockerfileContent.match(/ARG PLAYWRIGHT_VERSION=([\d.]+)/);
     const imageVersion = match ? match[1] : null;
     const image = getDockerImage();
     results.push(

@@ -2,6 +2,9 @@ import type { Node } from "../types/types";
 
 export type SelectionState = "none" | "partial" | "all";
 
+/** Fichier sélectionnable en multi-select (hors stories ignore-vr). */
+export const isSelectableTreeFile = (node: Node): boolean => node.type === "file" && !node.ignored;
+
 /** Collecte récursivement les paths des nœuds fichier sous `node` (fichier inclus). */
 export const collectFilePaths = (node: Node): string[] => {
   if (node.type === "file") return [node.path];
@@ -9,6 +12,17 @@ export const collectFilePaths = (node: Node): string[] => {
   const paths: string[] = [];
   for (const child of Object.values(node.children ?? {})) {
     paths.push(...collectFilePaths(child));
+  }
+  return paths;
+};
+
+/** Comme collectFilePaths, sans les fichiers tagués ignore-vr (catalogue). */
+export const collectSelectableFilePaths = (node: Node): string[] => {
+  if (node.type === "file") return isSelectableTreeFile(node) ? [node.path] : [];
+
+  const paths: string[] = [];
+  for (const child of Object.values(node.children ?? {})) {
+    paths.push(...collectSelectableFilePaths(child));
   }
   return paths;
 };

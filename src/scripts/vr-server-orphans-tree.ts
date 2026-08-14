@@ -15,6 +15,7 @@ import {
 } from "../constants/constants";
 import type { Node, OrphansTreeResponse, StoryScreenshotsPath } from "../types/types";
 import { getDevicesNames, getProjectPaths, getProjectRoot, getStorybookUrl, resolveVrConfig } from "../utils/node";
+import { fetchStorybookIndexEntries } from "../utils/vr-storybook-index";
 
 import type { StorybookIndexEntry } from "./vr-server-stories-tree";
 
@@ -488,26 +489,14 @@ export const scanSourceBaselineRelativePaths = (projectRoot: string): string[] =
 };
 
 /**
- * Lit index.json + scan disque (public + source) à chaque appel (pas de cache durable).
+ * Lit index.json (cache de repli) + scan disque (public + source) à chaque appel.
  */
 export const buildOrphansTree = async (projectRoot = getProjectRoot()): Promise<OrphansTreeResponse> => {
   const config = resolveVrConfig(projectRoot);
   const { publicScreenshotsDir } = getProjectPaths(projectRoot);
   const deviceNames = getDevicesNames(config.devices);
-  const storybookUrl = getStorybookUrl(projectRoot).replace(/\/$/, "");
-
-  let entries: Record<string, StorybookIndexEntry> = {};
-  try {
-    const res = await fetch(`${storybookUrl}/index.json`);
-    if (res.ok) {
-      const data = (await res.json()) as { entries?: Record<string, StorybookIndexEntry> };
-      entries = data.entries ?? {};
-    } else {
-      console.warn(`⚠️  orphans-tree: index.json HTTP ${res.status} (${storybookUrl})`);
-    }
-  } catch (err) {
-    console.warn(`⚠️  orphans-tree: impossible de lire index.json (${storybookUrl}):`, err);
-  }
+  const storybookUrl = getStorybookUrl(projectRoot);
+  const entries = await fetchStorybookIndexEntries(storybookUrl);
 
   const publicEntries: OrphanScanEntry[] = scanScreenshotRelativePaths(publicScreenshotsDir).map(relativePath => ({
     relativePath,

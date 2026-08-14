@@ -158,7 +158,10 @@ export const waitForStoryStable = async (
       if (!root) return false;
       const state = root.getAttribute("data-vr-ready");
       // Échec du play() → on interrompt tout de suite (pas de screenshot d'un état faux).
-      if (state === "error") throw new Error("VR play() a échoué (data-vr-ready=error)");
+      if (state === "error") {
+        const detail = root.getAttribute("data-vr-error");
+        throw new Error(detail ? `VR play() a échoué: ${detail}` : "VR play() a échoué (data-vr-ready=error)");
+      }
       if (expectsPlay) return state === "true";
       if (state === null) return true;
       return state === "true";

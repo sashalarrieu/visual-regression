@@ -18,9 +18,12 @@ import {
   captureErrorKey,
   syncCaptureErrorsAllFailed,
   syncCaptureErrorsFromBatch,
+  withoutIgnoredCaptureErrors,
   type CaptureErrorItem,
 } from "./vr-capture-errors";
 import { formatCaptureProgressLine, readCaptureProgress, writeCaptureProgress } from "./vr-capture-progress";
+import { collectIgnoredVrStoryIds } from "./vr-story-eligibility";
+import { peekStorybookIndexEntries } from "./vr-storybook-index";
 /** Réponse de GET /health du sidecar. */
 export type CaptureDaemonHealth = {
   ready?: boolean;
@@ -44,14 +47,21 @@ export const fetchCaptureDaemonHealth = async (config?: VrConfig): Promise<Captu
 };
 
 /**
- * true si le sidecar actif correspond au projet courant.
+ * true si le sidecar actif correspond au projet courant **et** au mode Storybook attendu.
  * Sans hostProjectRoot (vieux daemon) → false pour forcer une recréation sûre.
+ * Un sidecar static ne doit jamais être réutilisé quand on veut du HMR (stories figées).
  */
-export const isCaptureDaemonReusableForProject = (health: CaptureDaemonHealth | null, projectRoot: string): boolean => {
+export const isCaptureDaemonReusableForProject = (
+  health: CaptureDaemonHealth | null,
+  projectRoot: string,
+  expectedMode?: string,
+): boolean => {
   if (!health?.ready) return false;
   const remote = health.hostProjectRoot?.trim();
   if (!remote) return false;
-  return path.resolve(remote) === path.resolve(projectRoot);
+  if (path.resolve(remote) !== path.resolve(projectRoot)) return false;
+  if (expectedMode && health.mode && health.mode !== expectedMode) return false;
+  return true;
 };
 
 /** Options envoyées au daemon (onProgress n'est pas sérialisable). */
@@ -205,6 +215,10 @@ export const runCaptureBatchRemote = async (
     storiesWithErrors: [],
   };
   const projectRoot = getProjectRoot();
+  const ignoredStoryIds = (() => {
+    const cached = peekStorybookIndexEntries(config.storybook.url);
+    return cached ? collectIgnoredVrStoryIds(cached) : new Set<string>();
+  })();
 
   const daemonReady = await waitForCaptureDaemon(5, config);
   if (!daemonReady) {
@@ -212,14 +226,17 @@ export const runCaptureBatchRemote = async (
     aggregate.success = false;
     aggregate.error = message;
     aggregate.logs.errors.push(`🚫 ${message}`);
-    syncCaptureErrorsAllFailed(projectRoot, tasks, message);
-    aggregate.storiesWithErrors = tasks.map(task => ({
-      storyId: task.storyId,
-      deviceName: task.deviceName,
-      componentDir: task.componentDir,
-      message,
-      at: Date.now(),
-    }));
+    syncCaptureErrorsAllFailed(projectRoot, tasks, message, ignoredStoryIds);
+    aggregate.storiesWithErrors = withoutIgnoredCaptureErrors(
+      tasks.map(task => ({
+        storyId: task.storyId,
+        deviceName: task.deviceName,
+        componentDir: task.componentDir,
+        message,
+        at: Date.now(),
+      })),
+      ignoredStoryIds,
+    );
     return aggregate;
   }
 
@@ -331,24 +348,28 @@ export const runCaptureBatchRemote = async (
     aggregate.success = false;
     aggregate.error = "Aucune capture exécutée par le daemon (durée ~0 ms)";
     aggregate.logs.errors.push(`🚫 ${aggregate.error}`);
-    syncCaptureErrorsAllFailed(projectRoot, tasks, aggregate.error);
-    aggregate.storiesWithErrors = tasks.map(task => ({
-      storyId: task.storyId,
-      deviceName: task.deviceName,
-      componentDir: task.componentDir,
-      message: aggregate.error!,
-      at: Date.now(),
-    }));
+    syncCaptureErrorsAllFailed(projectRoot, tasks, aggregate.error, ignoredStoryIds);
+    aggregate.storiesWithErrors = withoutIgnoredCaptureErrors(
+      tasks.map(task => ({
+        storyId: task.storyId,
+        deviceName: task.deviceName,
+        componentDir: task.componentDir,
+        message: aggregate.error!,
+        at: Date.now(),
+      })),
+      ignoredStoryIds,
+    );
     return aggregate;
   }
 
   // Déduplique les erreurs (clé device::story) puis sync le store hôte.
+  aggregate.storiesWithErrors = withoutIgnoredCaptureErrors(aggregate.storiesWithErrors, ignoredStoryIds);
   const byKey = new Map(
     aggregate.storiesWithErrors.map(item => [captureErrorKey(item.storyId, item.deviceName), item]),
   );
   aggregate.storiesWithErrors = Array.from(byKey.values());
   if (resolvedTasks.length > 0) {
-    syncCaptureErrorsFromBatch(projectRoot, resolvedTasks, aggregate.storiesWithErrors);
+    syncCaptureErrorsFromBatch(projectRoot, resolvedTasks, aggregate.storiesWithErrors, ignoredStoryIds);
   }
 
   return aggregate;

@@ -59,10 +59,17 @@ import {
   resolveEffectiveVrConfig,
   shouldUseBurstCapture,
 } from "../utils/vr-story-config";
+import { formatIgnoreVrFallbackLog, collectIgnoredVrStoryIds, isIgnoredVrStory } from "../utils/vr-story-eligibility";
+import { peekStorybookIndexEntries } from "../utils/vr-storybook-index";
 import { getStorybookMode } from "../utils/vr-storybook-runtime";
 
 const PROJECT_ROOT = getProjectRoot();
 const { publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR } = getProjectPaths(PROJECT_ROOT);
+
+const ignoredStoryIdsFromCache = (storybookUrl: string): Set<string> => {
+  const cached = peekStorybookIndexEntries(storybookUrl);
+  return cached ? collectIgnoredVrStoryIds(cached) : new Set();
+};
 
 const ABSOLUTE_MAX_CONCURRENCY = 16;
 
@@ -342,7 +349,9 @@ export const getCaptureTimeBudget = (config: VrConfig): number => {
   if (getStorybookMode() !== "dev") return config.capture.maxTestTime;
   const envMs = Number(process.env.VR_CAPTURE_DEV_TIMEOUT_MS);
   if (Number.isFinite(envMs) && envMs > 0) return envMs;
-  return Math.max(config.capture.maxTestTime, 60_000);
+  // Sidecar Docker : 1er transform Vite d'une story RN peut dépasser 60s.
+  const floor = process.env.VR_DOCKER === "1" ? 180_000 : 60_000;
+  return Math.max(config.capture.maxTestTime, floor);
 };
 
 /** Timeout Playwright pour page.goto (dev Storybook + Vite peut dépasser maxTestTime). */
@@ -411,6 +420,24 @@ export type CompareScreenshotOutcome = "match" | "new" | "diff" | "missing_temp"
 export type CompareScreenshotResult = {
   outcome: CompareScreenshotOutcome;
   diffPixels: number;
+};
+
+/** Statut d’une tâche de capture — sert à l’emoji de progression (📸 n/t emoji story). */
+export type TaskCaptureStatus = "match" | "new" | "diff" | "error" | "ignored";
+
+export const captureProgressEmoji = (status: TaskCaptureStatus): string => {
+  if (status === "diff") return "⚠️";
+  if (status === "new") return "❇️";
+  if (status === "error") return "🚫";
+  if (status === "ignored") return "🏳️";
+  return "✅";
+};
+
+const compareOutcomeToTaskStatus = (outcome: CompareScreenshotOutcome): TaskCaptureStatus => {
+  if (outcome === "diff") return "diff";
+  if (outcome === "new") return "new";
+  if (outcome === "match") return "match";
+  return "error";
 };
 
 export async function launchBrowser(): Promise<Browser> {
@@ -772,12 +799,12 @@ const runSingleTask = async ({
   logs: LogsType;
   storiesWithDiff: string[];
   clearScreenshotsBeforeCapture: boolean;
-}): Promise<void> => {
+}): Promise<TaskCaptureStatus> => {
   const captureConfig = withCaptureTimeBudget(config);
   const deviceConfig = devices[task.deviceName];
   if (!deviceConfig) {
     addLogs({ log: `⚠️  Device ${task.deviceName} not found, skipping ${task.storyId}`, logs });
-    return;
+    return "error";
   }
 
   if (clearScreenshotsBeforeCapture) {
@@ -796,6 +823,10 @@ const runSingleTask = async ({
   const page = await context.newPage();
   const networkTracker = new NetworkQuietTracker();
   const storyTags = await getStoryTags(task.storyId, captureConfig.storybook.url);
+  if (isIgnoredVrStory(storyTags)) {
+    console.warn(formatIgnoreVrFallbackLog(task.storyId, task.deviceName));
+    return "ignored";
+  }
   const screenshotKey = `${task.deviceName}-${task.storyId}`;
 
   try {
@@ -828,7 +859,7 @@ const runSingleTask = async ({
         skipGoto: attempt === 1,
       });
 
-      if (!captured) return;
+      if (!captured) return "error";
 
       compareResult = compareScreenshots({
         storyId: screenshotKey,
@@ -857,6 +888,8 @@ const runSingleTask = async ({
     if (compareResult.outcome === "match" && attempt > 1) {
       console.log(formatFlakeSuppressedLog(attempt, screenshotKey));
     }
+
+    return compareOutcomeToTaskStatus(compareResult.outcome);
   } finally {
     await page.close().catch(() => undefined);
   }
@@ -933,11 +966,11 @@ export const runCaptureBatch = async (
     await Promise.all(
       tasks.map(task =>
         semaphore.run(async () => {
-          const errorsBefore = logs.errors.length;
+          let taskStatus: TaskCaptureStatus = "error";
           let attempt = 0;
           while (attempt < 2) {
             try {
-              await runSingleTask({
+              taskStatus = await runSingleTask({
                 browser,
                 contextCache,
                 devices,
@@ -962,6 +995,7 @@ export const runCaptureBatch = async (
               }
               const errMsg = error instanceof Error ? error.message : String(error);
               addLogs({ log: `🚫 Error testing ${task.storyId} (${task.deviceName}): ${errMsg}`, logs });
+              taskStatus = "error";
               break;
             }
           }
@@ -971,8 +1005,8 @@ export const runCaptureBatch = async (
           stats.errors = logs.errors.length;
           stats.vrs = logs.vrs.length;
           stats.news = logs.news.length;
-          const failed = logs.errors.length > errorsBefore;
-          const status = failed ? "🚫" : "✅";
+          const failed = taskStatus === "error";
+          const status = captureProgressEmoji(taskStatus);
           if (failed) {
             const message =
               logs.errors[logs.errors.length - 1] ?? `Capture failed for ${task.storyId} (${task.deviceName})`;
@@ -1006,7 +1040,12 @@ export const runCaptureBatch = async (
     }
 
     if (!process.env.VR_DOCKER) {
-      syncCaptureErrorsFromBatch(PROJECT_ROOT, tasks, storiesWithErrors);
+      syncCaptureErrorsFromBatch(
+        PROJECT_ROOT,
+        tasks,
+        storiesWithErrors,
+        ignoredStoryIdsFromCache(config.storybook.url),
+      );
     }
     return { success: true, stats, logs, storiesWithDiff, storiesWithErrors };
   } catch (err) {
@@ -1017,10 +1056,14 @@ export const runCaptureBatch = async (
     const error = err instanceof Error ? err.message : String(err);
     // Ne met à jour que les tâches déjà résolues (succès / échec) — le reste reste inchangé.
     if (!process.env.VR_DOCKER) {
-      syncCaptureErrorsAfterBatch(PROJECT_ROOT, {
-        succeeded: succeededTasks,
-        failed: storiesWithErrors,
-      });
+      syncCaptureErrorsAfterBatch(
+        PROJECT_ROOT,
+        {
+          succeeded: succeededTasks,
+          failed: storiesWithErrors,
+        },
+        ignoredStoryIdsFromCache(config.storybook.url),
+      );
     }
     return {
       success: false,

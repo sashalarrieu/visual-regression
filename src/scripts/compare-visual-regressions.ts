@@ -4,8 +4,6 @@ import path from "path";
 
 import {
   DIFF_SCREENSHOT_NAME,
-  FORCE_VR_TAG,
-  IGNORE_VR_TAG,
   NEW_SCREENSHOT_NAME,
   SCREENSHOT_EXTENSION,
   SCREENSHOT_NAME,
@@ -22,6 +20,7 @@ import {
 import { getCaptureBackend, isDockerCaptureBackend } from "../utils/vr-capture-backend";
 import { filterCaptureTasks, getChangedFiles, shouldWipePublicDir, updateManifest } from "../utils/vr-incremental";
 import { filterTasksByShard, parseShardConfig } from "../utils/vr-sharding";
+import { formatIgnoreVrFallbackLog, shouldIncludeStoryForVisualRegression } from "../utils/vr-story-eligibility";
 
 import type { CaptureBatchResult, CaptureTask } from "./vr-capture-engine";
 import {
@@ -51,13 +50,8 @@ type StoryIndexEntry = {
   tags?: string[];
 };
 
-const shouldIncludeStoryForVisualRegression = (entry: StoryIndexEntry): boolean => {
-  if (entry.type !== "story") return false;
-  if (entry.id?.endsWith("--docs")) return false;
-
-  const tags = entry.tags ?? [];
-  return tags.includes(FORCE_VR_TAG) || !tags.includes(IGNORE_VR_TAG);
-};
+const shouldIncludeStoryEntry = (entry: StoryIndexEntry): boolean =>
+  shouldIncludeStoryForVisualRegression(entry) && Boolean(entry.importPath);
 
 type StorybookIndexEntries = Record<string, StoryIndexEntry>;
 
@@ -84,9 +78,7 @@ const fetchStorybookIndexEntries = async (): Promise<StorybookIndexEntries> => {
 
 const fetchStoriesFromStorybookIndex = async (): Promise<StoryIndexEntry[]> => {
   const entries = await fetchStorybookIndexEntries();
-  return Object.values(entries).filter(
-    entry => shouldIncludeStoryForVisualRegression(entry) && Boolean(entry.importPath),
-  );
+  return Object.values(entries).filter(entry => shouldIncludeStoryEntry(entry));
 };
 
 const findComponentDirInScreenshots = (storyId: string, deviceName: string): string | null => {
@@ -156,8 +148,15 @@ const buildTasksForAllStories = async (deviceFilter?: string): Promise<CaptureTa
 const buildTasksFromSelection = async (storiesToCompare: StoryDevicePair[]): Promise<CaptureTask[]> => {
   const tasks: CaptureTask[] = [];
   const devices = getDevices();
+  const entries = await fetchStorybookIndexEntries();
 
   for (const { storyId, deviceName, componentDir: componentDirHint } of storiesToCompare) {
+    const storyEntry = entries[storyId];
+    if (storyEntry && !shouldIncludeStoryForVisualRegression(storyEntry)) {
+      console.warn(formatIgnoreVrFallbackLog(storyId, deviceName));
+      continue;
+    }
+
     if (!devices[deviceName]) {
       console.warn(`⚠️  Device ${deviceName} not found, skipping ${storyId}`);
       continue;

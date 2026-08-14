@@ -59,6 +59,7 @@ const fileMatchesQuery = (node: Node, query: string): boolean => {
  * Un fichier matche le filtre de statut s’il satisfait au moins une chip.
  * - regressions : `new` | `diff` via `storyType`
  * - all-stories : `baseline` | `missing` via `storyType`, `block` via `ignored === true`
+ * - `missing` exclut les stories `ignore-vr` (réservées au chip `block`)
  */
 const fileMatchesStatuses = (node: Node, statuses: ReadonlySet<StatusFilterValue>, mode: TreePanelMode): boolean => {
   if (mode === "orphans" || statuses.size === 0) return true;
@@ -66,6 +67,10 @@ const fileMatchesStatuses = (node: Node, statuses: ReadonlySet<StatusFilterValue
   for (const status of statuses) {
     if (status === "block") {
       if (node.ignored === true) return true;
+      continue;
+    }
+    if (status === "missing" && mode === "all-stories") {
+      if (node.storyType === "missing" && node.ignored !== true) return true;
       continue;
     }
     if (node.storyType === status) return true;

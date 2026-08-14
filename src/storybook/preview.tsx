@@ -1,10 +1,16 @@
 import type { Decorator } from "@storybook/react-webpack5";
-import { useEffect, type JSX } from "react";
-import { ReduceMotion, ReducedMotionConfig } from "react-native-reanimated";
+import { useEffect, type JSX, type ReactNode } from "react";
 import { addons } from "storybook/preview-api";
 
 import { LIVE_ANIMATION_VR_TAG, PLAY_FN_TAG, SKIP_PLAY_VR_TAG } from "../constants/constants";
-import { resolveStoryPlayFunction, runVrStoryPlay, type VrStoryPlayFunction } from "../utils/vr-story-play";
+import {
+  formatVrPlayError,
+  resolveStoryPlayFunction,
+  runVrStoryPlay,
+  shouldReplayVrStoryPlay,
+  type VrStoryPlayFunction,
+  type VrStoryPlayRunnerStatus,
+} from "../utils/vr-story-play";
 
 import { patchStorybookFocusForDocs } from "./patch-storybook-focus";
 
@@ -23,22 +29,48 @@ if (typeof window !== "undefined") {
   window.__VR_CAPTURE__ = params.get("vr-capture") === "1" || process.env.VR_CAPTURE === "1";
 }
 
-/** Fige Reanimated en capture VR sauf stories taguées `live-animation-vr`. */
+const VR_CAPTURE_FREEZE_STYLE_ID = "vr-capture-animation-freeze";
+
+/** Fige les animations CSS pendant la capture VR (sans import Reanimated dans ce entry). */
+const VrCaptureAnimationFreeze = ({ active, children }: { active: boolean; children: ReactNode }) => {
+  useEffect(() => {
+    if (!active || typeof document === "undefined") return;
+
+    const style = document.createElement("style");
+    style.id = VR_CAPTURE_FREEZE_STYLE_ID;
+    style.textContent = [
+      "*, *::before, *::after {",
+      "  animation-duration: 0.001ms !important;",
+      "  animation-delay: 0ms !important;",
+      "  transition-duration: 0.001ms !important;",
+      "  transition-delay: 0ms !important;",
+      "}",
+    ].join("\n");
+    document.head.appendChild(style);
+
+    return () => {
+      style.remove();
+    };
+  }, [active]);
+
+  return <>{children}</>;
+};
+
+/** Fige les animations en capture VR sauf stories taguées `live-animation-vr`. */
 export const withVrReanimatedFreeze: Decorator = (Story, context) => {
   const inCapture = typeof window !== "undefined" && window.__VR_CAPTURE__ === true;
   const keepLiveAnimation = context.tags?.includes(LIVE_ANIMATION_VR_TAG) ?? false;
   const shouldFreeze = inCapture && !keepLiveAnimation;
 
-  if (shouldFreeze) {
-    return (
-      <>
-        <ReducedMotionConfig mode={ReduceMotion.Always} />
-        <Story />
-      </>
-    );
+  if (!shouldFreeze) {
+    return <Story />;
   }
 
-  return <Story />;
+  return (
+    <VrCaptureAnimationFreeze active>
+      <Story />
+    </VrCaptureAnimationFreeze>
+  );
 };
 
 type VrStoryPlayRunnerProps = {
@@ -56,8 +88,9 @@ const hasPortalDialogOutsideRoot = (): boolean => {
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /**
- * En capture VR : attend un portal ouvert par le play Storybook, sinon rejoue `play()`
- * avec timeout (évite hang `findByText` → data-vr-ready bloqué à false).
+ * En capture VR : attend le play Storybook (et un portal s'il y en a).
+ * Ne rejoue `play()` que s'il n'a pas réellement tourné (static no-op) —
+ * un second play casse l'état (spies, éléments déjà retirés).
  */
 const VrStoryPlayRunner = ({ Story, context }: VrStoryPlayRunnerProps) => {
   useEffect(() => {
@@ -66,10 +99,15 @@ const VrStoryPlayRunner = ({ Story, context }: VrStoryPlayRunnerProps) => {
 
     let cancelled = false;
     root.setAttribute("data-vr-ready", "false");
+    root.removeAttribute("data-vr-error");
 
     const channel = addons.getChannel();
     // Objet mutable : TS ne voit pas les écritures async des handlers channel.
-    const sb = { status: "pending" as "pending" | "success" | "error" };
+    const sb = {
+      status: "pending" as VrStoryPlayRunnerStatus,
+      playStarted: false,
+      error: undefined as unknown,
+    };
 
     const onStoryFinished = (payload: { storyId?: string; status?: string }) => {
       if (payload?.storyId !== context.id) return;
@@ -79,14 +117,31 @@ const VrStoryPlayRunner = ({ Story, context }: VrStoryPlayRunnerProps) => {
     const onPlayException = (payload: { storyId?: string; error?: unknown }) => {
       if (payload?.storyId !== context.id) return;
       console.error("[VR] play() failed:", payload.error);
+      sb.playStarted = true;
       sb.status = "error";
+      sb.error = payload.error;
+    };
+
+    const onRenderPhase = (payload: { storyId?: string; newPhase?: string }) => {
+      if (payload?.storyId !== context.id) return;
+      if (payload.newPhase === "playing" || payload.newPhase === "played") {
+        sb.playStarted = true;
+      }
     };
 
     channel.on("storyFinished", onStoryFinished);
     channel.on("playFunctionThrewException", onPlayException);
+    channel.on("storyRenderPhaseChanged", onRenderPhase);
 
-    const mark = (state: "true" | "error") => {
-      if (!cancelled) root.setAttribute("data-vr-ready", state);
+    const mark = (state: "true" | "error", error?: unknown) => {
+      if (cancelled) return;
+      root.setAttribute("data-vr-ready", state);
+      if (state === "error") {
+        const message = formatVrPlayError(error);
+        if (message) root.setAttribute("data-vr-error", message.slice(0, 500));
+      } else {
+        root.removeAttribute("data-vr-error");
+      }
     };
 
     void (async () => {
@@ -98,17 +153,38 @@ const VrStoryPlayRunner = ({ Story, context }: VrStoryPlayRunnerProps) => {
             mark("true");
             return;
           }
-          if (sb.status === "error") {
-            mark("error");
-            return;
-          }
-          // SB a fini sans portal → on rejouera play ci-dessous
-          if (sb.status === "success") break;
+          if (sb.status !== "pending") break;
           await sleep(50);
         }
 
         if (cancelled) return;
         if (hasPortalDialogOutsideRoot()) {
+          mark("true");
+          return;
+        }
+
+        // Play terminé : laisser un tick au portal RNW pour se monter.
+        if (sb.status === "success") {
+          for (let i = 0; i < 6; i++) {
+            if (cancelled) return;
+            if (hasPortalDialogOutsideRoot()) {
+              mark("true");
+              return;
+            }
+            await sleep(50);
+          }
+        }
+
+        if (
+          !shouldReplayVrStoryPlay({
+            hasPortal: hasPortalDialogOutsideRoot(),
+            playStarted: sb.playStarted,
+          })
+        ) {
+          if (sb.status === "error") {
+            mark("error", sb.error);
+            return;
+          }
           mark("true");
           return;
         }
@@ -123,16 +199,15 @@ const VrStoryPlayRunner = ({ Story, context }: VrStoryPlayRunnerProps) => {
           ]);
         } catch (error) {
           console.error("[VR] play() fallback failed:", error);
-          mark("error");
+          mark("error", error);
           return;
         }
 
         if (cancelled) return;
-        // Stories play sans modal : ready quand même (pas de portal attendu).
         mark("true");
       } catch (error) {
         console.error("[VR] play() runner failed:", error);
-        mark("error");
+        mark("error", error);
       }
     })();
 
@@ -140,6 +215,7 @@ const VrStoryPlayRunner = ({ Story, context }: VrStoryPlayRunnerProps) => {
       cancelled = true;
       channel.off("storyFinished", onStoryFinished);
       channel.off("playFunctionThrewException", onPlayException);
+      channel.off("storyRenderPhaseChanged", onRenderPhase);
     };
   }, [context.id, context.playFunction]);
 

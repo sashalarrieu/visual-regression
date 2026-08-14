@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type { Node } from "../types/types";
 
-import { collectFilePaths, selectionState, togglePaths } from "./tree-selection";
+import {
+  collectFilePaths,
+  collectSelectableFilePaths,
+  isSelectableTreeFile,
+  selectionState,
+  togglePaths,
+} from "./tree-selection";
 
 const file = (partial: Partial<Node> & Pick<Node, "name" | "path">): Node => ({
   type: "file",
@@ -57,6 +63,33 @@ describe("collectFilePaths", () => {
   it("collecte sous un sous-arbre (story / dossier)", () => {
     const button = sampleTree().children!.Button;
     expect(collectFilePaths(button)).toEqual(["Button/primary-desktop.png", "Button/primary-mobile.png"]);
+  });
+});
+
+describe("collectSelectableFilePaths", () => {
+  it("exclut les fichiers ignore-vr", () => {
+    const tree = folder("root", "", {
+      Button: folder("Button", "Button", {
+        ignored: file({
+          name: "ignored-desktop",
+          path: "Button/ignored-desktop.png",
+          ignored: true,
+        }),
+        ok: file({
+          name: "ok-desktop",
+          path: "Button/ok-desktop.png",
+        }),
+      }),
+    });
+
+    expect(collectSelectableFilePaths(tree)).toEqual(["Button/ok-desktop.png"]);
+  });
+});
+
+describe("isSelectableTreeFile", () => {
+  it("retourne false pour ignored", () => {
+    expect(isSelectableTreeFile(file({ name: "a", path: "a.png", ignored: true }))).toBe(false);
+    expect(isSelectableTreeFile(file({ name: "a", path: "a.png" }))).toBe(true);
   });
 });
 

@@ -27,7 +27,7 @@
  *   VR_STORYBOOK_STATIC_REBUILD=1 → force rebuild storybook-static au lancement
  */
 import { spawn } from "child_process";
-import { existsSync, realpathSync } from "fs";
+import { existsSync, readFileSync, realpathSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -36,10 +36,48 @@ import { getTsxCliPath, spawnTsxScript } from "./spawn-tsx.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, "..");
-/** Racine réelle du package (sans symlink) pour que Expo ne soit pas sous node_modules → Babel s'applique. */
-const packageRootReal = realpathSync(packageRoot);
-const packageTsconfigPath = path.join(packageRootReal, "tsconfig.cli.json");
 const hostRoot = process.cwd();
+
+/**
+ * Yarn classic copie `file:` dans node_modules (pas un symlink).
+ * Sur l'hôte, on exécute le src live. Dans Docker, /visual-regression a un
+ * node_modules vide (volume anonyme) — les deps Linux sont dans
+ * /work/node_modules/@setshao/visual-regression après sync_linked_vr_sources.
+ */
+const resolveLivePackageRoot = (cwd, fallback) => {
+  if (process.env.VR_DOCKER === "1") {
+    try {
+      return realpathSync(fallback);
+    } catch {
+      return fallback;
+    }
+  }
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(cwd, "package.json"), "utf8"));
+    const spec =
+      pkg.dependencies?.["@setshao/visual-regression"] ?? pkg.devDependencies?.["@setshao/visual-regression"];
+    if (typeof spec === "string" && spec.startsWith("file:")) {
+      const live = path.resolve(cwd, spec.slice("file:".length));
+      if (existsSync(path.join(live, "src", "scripts", "vr-launcher.ts"))) {
+        return realpathSync(live);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    return realpathSync(fallback);
+  } catch {
+    return fallback;
+  }
+};
+
+/** Racine réelle du package (file: live > copie node_modules). */
+const packageRootReal = resolveLivePackageRoot(hostRoot, packageRoot);
+if (packageRootReal !== packageRoot) {
+  console.log(`📦 [vr] CLI live (file:) → ${packageRootReal}`);
+}
+const packageTsconfigPath = path.join(packageRootReal, "tsconfig.cli.json");
 const configPath = path.join(hostRoot, "vr.config.cjs");
 const legacyConfigPath = path.join(hostRoot, "vr-devices.config.cjs");
 

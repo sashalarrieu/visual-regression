@@ -267,13 +267,14 @@ describe("filterTree", () => {
       expect(result!.countMissing).toBe(0);
     });
 
-    it("filters missing", () => {
+    it("filters missing (exclut les stories block / ignore-vr)", () => {
       const result = filterTree(sampleCatalogTree(), {
         mode: "all-stories",
         statuses: new Set(["missing"]),
       });
-      expect(result!.countTotal).toBe(2);
-      expect(result!.countMissing).toBe(2);
+      expect(result!.countTotal).toBe(1);
+      expect(result!.countMissing).toBe(1);
+      expect(Object.keys(result!.children!.Button.children ?? {})).toEqual(["missing"]);
     });
 
     it("filters block via ignored === true", () => {

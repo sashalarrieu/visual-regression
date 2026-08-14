@@ -29,6 +29,8 @@ export type VisualRegressionTopBarProps = {
   multiSelectMode?: boolean;
   /** Nombre de fichiers sélectionnés (paths). */
   selectionCount?: number;
+  /** Story courante taguée ignore-vr — désactive les actions de capture. */
+  currentStoryIgnored?: boolean;
   onPrev: () => void;
   onNext: () => void;
   onValid: () => void;
@@ -56,6 +58,7 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
   bulkLoading = false,
   multiSelectMode = false,
   selectionCount = 0,
+  currentStoryIgnored = false,
   onPrev,
   onNext,
   onValid,
@@ -76,7 +79,8 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
   const isRegressions = mode === "regressions";
 
   const hasActionTarget = multiSelectMode ? selectionCount > 0 : Boolean(currentStory);
-  const actionDisabled = !hasActionTarget || bulkLoading;
+  const actionDisabled = !hasActionTarget || bulkLoading || (!multiSelectMode && currentStoryIgnored);
+  const regenerateDisabled = actionDisabled || (multiSelectMode && selectionCount === 0);
 
   const copyStoryPathToClipboard = () => {
     const path = currentStory
@@ -186,14 +190,12 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
               <Button
                 label="Valider"
                 color="primary"
-                width={80}
                 onPress={onValid}
                 disabled={actionDisabled}
               />
               <Button
                 label="Refuser"
                 color="danger"
-                width={80}
                 onPress={onDelete}
                 disabled={actionDisabled}
               />
@@ -201,16 +203,14 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
                 <Button
                   label="Régénérer"
                   color="primary"
-                  width={110}
                   onPress={onRegenerate}
-                  disabled={actionDisabled}
+                  disabled={regenerateDisabled}
                 />
               ) : (
                 <>
                   <Button
                     label="Tout valider"
                     color="primary"
-                    width={110}
                     onPress={onValidAll}
                     loading={bulkLoading}
                     disabled={!hasItems || bulkLoading}
@@ -218,7 +218,6 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
                   <Button
                     label="Tout refuser"
                     color="danger"
-                    width={110}
                     onPress={onDeleteAll}
                     loading={bulkLoading}
                     disabled={!hasItems || bulkLoading}
@@ -233,26 +232,23 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
               <Button
                 label="Supprimer"
                 color="danger"
-                width={100}
                 onPress={onDelete}
                 disabled={actionDisabled}
               />
               <Button
                 label="Régénérer"
                 color="primary"
-                width={110}
                 onPress={onRegenerate}
-                disabled={actionDisabled}
+                disabled={regenerateDisabled}
               />
             </>
           )}
 
           {isOrphans && (
             <Button
-              label="Régénérer"
-              color="primary"
-              width={110}
-              onPress={onRegenerate}
+              label="Supprimer"
+              color="danger"
+              onPress={onDelete}
               disabled={actionDisabled}
             />
           )}

@@ -1,7 +1,9 @@
 # Image de capture VR reproductible.
-# Base officielle Playwright (navigateurs préinstallés, version alignée sur le package).
+# Base officielle Playwright (navigateurs préinstallés).
+# PLAYWRIGHT_VERSION est injecté au build (aligné sur le playwright de capture).
 # Image publiée multi-arch (linux/amd64 + linux/arm64) pour Mac Apple Silicon natif.
-FROM mcr.microsoft.com/playwright:v1.61.1-jammy
+ARG PLAYWRIGHT_VERSION=1.61.1
+FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-jammy
 
 # Environnement de capture déterministe. Le code du projet hôte est monté sur /work
 # (bind mount) ; node_modules Linux vit dans un volume nommé (voir docker-compose.yml).
