@@ -47,10 +47,12 @@ import {
 } from "../utils/vr-diff-verify";
 import {
   appendVrCaptureParam,
+  applyCaptureMotionPreference,
   captureStoryFrame,
   captureWithBurst,
   getStoryTags,
   NetworkQuietTracker,
+  shouldFreezeMotion,
   waitForStoryStable,
 } from "../utils/vr-steadysnap";
 import {
@@ -547,6 +549,7 @@ const getOrCreateContext = async (
   deviceConfig: DeviceConfig,
   cache: Map<string, BrowserContext>,
   storybookUrl: string,
+  freezeAnimations: boolean,
 ): Promise<BrowserContext> => {
   const cached = cache.get(deviceName);
   if (cached) return cached;
@@ -555,6 +558,8 @@ const getOrCreateContext = async (
     viewport: { width: deviceConfig.width, height: deviceConfig.height },
     deviceScaleFactor: deviceConfig.deviceScaleFactor,
     isMobile: deviceConfig.mobile ?? false,
+    // Reanimated web lit cette MQ au chargement du module — trop tard au screenshot.
+    reducedMotion: freezeAnimations ? "reduce" : "no-preference",
   });
   await setupNetworkBlock(context, storybookUrl);
   cache.set(deviceName, context);
@@ -721,6 +726,7 @@ const captureStoryScreenshot = async ({
   try {
     if (!skipGoto) {
       networkTracker.attach(page);
+      await applyCaptureMotionPreference(page, shouldFreezeMotion(config, storyTags));
       await page.goto(getStoryIframeUrl(storybookUrl, storyId), {
         waitUntil: getStoryGotoWaitUntil(),
         timeout: getStoryGotoTimeout(config),
@@ -819,6 +825,7 @@ const runSingleTask = async ({
     deviceConfig,
     contextCache,
     captureConfig.storybook.url,
+    captureConfig.stabilize.freezeAnimations,
   );
   const page = await context.newPage();
   const networkTracker = new NetworkQuietTracker();
@@ -831,6 +838,7 @@ const runSingleTask = async ({
 
   try {
     networkTracker.attach(page);
+    await applyCaptureMotionPreference(page, shouldFreezeMotion(captureConfig, storyTags));
     await page.goto(iframeUrl, {
       waitUntil: getStoryGotoWaitUntil(),
       timeout: getStoryGotoTimeout(captureConfig),

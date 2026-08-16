@@ -27,7 +27,15 @@ const packResult = runPackJson();
 const files = Array.isArray(packResult.files) ? packResult.files.map(entry => entry.path) : [];
 const fileSet = new Set(files);
 
-const requiredFiles = ["src/index.ts", "src/storybook/index.ts", "tsconfig.json", "babel.config.cjs", "LICENSE"];
+const requiredFiles = [
+  "src/index.ts",
+  "src/storybook/index.ts",
+  "tsconfig.json",
+  "babel.config.cjs",
+  "LICENSE",
+  "assets/favicon.ico",
+  "assets/index.html",
+];
 
 for (const required of requiredFiles) {
   if (!fileSet.has(required)) {

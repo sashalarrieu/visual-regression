@@ -15,6 +15,7 @@ import {
 } from "../constants/constants";
 import type { Node, OrphansTreeResponse, StoryScreenshotsPath } from "../types/types";
 import { getDevicesNames, getProjectPaths, getProjectRoot, getStorybookUrl, resolveVrConfig } from "../utils/node";
+import { compareNodeTypeForDisplay } from "../utils/tree-order";
 import { fetchStorybookIndexEntries } from "../utils/vr-storybook-index";
 
 import type { StorybookIndexEntry } from "./vr-server-stories-tree";
@@ -160,6 +161,8 @@ const sortTree = (node: Node): Node => {
 
   const sortedChildren: Record<string, Node> = {};
   const entries = Object.entries(node.children ?? {}).sort(([, a], [, b]) => {
+    const typeCompare = compareNodeTypeForDisplay(a, b);
+    if (typeCompare !== 0) return typeCompare;
     const storyCompare = getStoryIdForSort(a).localeCompare(getStoryIdForSort(b));
     if (storyCompare !== 0) return storyCompare;
     const deviceCompare = getDeviceNameForSort(a).localeCompare(getDeviceNameForSort(b));

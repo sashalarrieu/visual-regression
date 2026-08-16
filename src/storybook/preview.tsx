@@ -2,7 +2,12 @@ import type { Decorator } from "@storybook/react-webpack5";
 import { useEffect, type JSX, type ReactNode } from "react";
 import { addons } from "storybook/preview-api";
 
-import { LIVE_ANIMATION_VR_TAG, PLAY_FN_TAG, SKIP_PLAY_VR_TAG } from "../constants/constants";
+import {
+  LIVE_ANIMATION_VR_TAG,
+  PLAY_FN_TAG,
+  SKIP_PLAY_VR_TAG,
+  VR_CAPTURE_ANIMATION_FREEZE_CSS,
+} from "../constants/constants";
 import {
   formatVrPlayError,
   resolveStoryPlayFunction,
@@ -38,14 +43,7 @@ const VrCaptureAnimationFreeze = ({ active, children }: { active: boolean; child
 
     const style = document.createElement("style");
     style.id = VR_CAPTURE_FREEZE_STYLE_ID;
-    style.textContent = [
-      "*, *::before, *::after {",
-      "  animation-duration: 0.001ms !important;",
-      "  animation-delay: 0ms !important;",
-      "  transition-duration: 0.001ms !important;",
-      "  transition-delay: 0ms !important;",
-      "}",
-    ].join("\n");
+    style.textContent = VR_CAPTURE_ANIMATION_FREEZE_CSS;
     document.head.appendChild(style);
 
     return () => {
@@ -89,8 +87,10 @@ const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 
 /**
  * En capture VR : attend le play Storybook (et un portal s'il y en a).
- * Ne rejoue `play()` que s'il n'a pas réellement tourné (static no-op) —
- * un second play casse l'état (spies, éléments déjà retirés).
+ * L'URL de capture pose `embed=true` pour couper l'autoplay Storybook —
+ * sinon `play()` s'exécute avant les `useEffect` (sync props→state) et l'UI
+ * revient à l'état initial. On ne rejoue `play()` que s'il n'a pas tourné
+ * (autoplay off / static no-op) : un second play casse spies et DOM déjà muté.
  */
 const VrStoryPlayRunner = ({ Story, context }: VrStoryPlayRunnerProps) => {
   useEffect(() => {

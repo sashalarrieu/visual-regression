@@ -4,12 +4,20 @@ Ce projet suit le format [Keep a Changelog](https://keepachangelog.com/fr/1.1.2/
 
 ## [Unreleased]
 
+### Added
+
+- Arbre UI : Maj+clic pour sélectionner une plage de stories, Option+clic (Alt) pour ouvrir/fermer récursivement un accordéon, bouton tout déplier / tout replier.
+
 ### Fixed
 
+- Arbre UI : Option+clic (macOS, équivalent Alt) ouvre/ferme récursivement un accordéon — React Native Web ignorait `onPress` si `altKey`.
+- Arbre UI : les stories d’un dossier s’affichent avant les sous-dossiers.
 - Sidecar Docker : `launcher.storybookMode` / `VR_STORYBOOK_MODE` sont respectés (env → `vr.config.cjs` → défaut). L’entrypoint n’écrase plus le mode en HMR.
 - `yarn vr` lance Storybook **dev (HMR)** par défaut, comme `yarn storybook` : plus de snapshot statique figé. Un sidecar déjà en mode static est recréé. En mode static (CI), le rebuild se base sur une empreinte du **contenu** des stories, pas le mtime Docker.
 - Sidecar Docker : l’image Playwright suit la version **résolue dans le lockfile du projet hôte** pour `@setshao/visual-regression` (pas le Playwright Vitest hoisté). Rebuild auto si le tag `vr-capture:<version>` change.
 - Storybook du sidecar : `@storybook/addon-vitest` est retiré (`VR_DOCKER=1`) — plus d’erreur `UniversalStoreFollowerTimeoutError` (`storybook/test`).
+- Capture : Reanimated web est figé via `prefers-reduced-motion: reduce` (contexte Playwright + `emulateMedia` avant navigation). Le decorator Storybook ne réimporte plus Reanimated (Vite / FlatList). Opt-out inchangé : tag `live-animation-vr`.
+- Capture : l'iframe pose `embed=true` pour couper l'autoplay Storybook. `play()` s'exécute alors dans le decorator (après les `useEffect` de sync props→state) — plus d'onglet / sélection réinitialisés au screenshot.
 
 ## [1.2.0] - 2026-08-07
 

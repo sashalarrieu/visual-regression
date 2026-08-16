@@ -60,9 +60,15 @@ describe("collectFilePaths", () => {
     expect(collectFilePaths(folder("Empty", "Empty", {}))).toEqual([]);
   });
 
-  it("collecte sous un sous-arbre (story / dossier)", () => {
-    const button = sampleTree().children!.Button;
-    expect(collectFilePaths(button)).toEqual(["Button/primary-desktop.png", "Button/primary-mobile.png"]);
+  it("collecte les fichiers d'un dossier avant ceux des sous-dossiers", () => {
+    const tree = folder("A", "A", {
+      SousA: folder("SousA", "A/SousA", {
+        nested: file({ name: "nested", path: "A/SousA/nested.png" }),
+      }),
+      story: file({ name: "story", path: "A/story.png" }),
+    });
+
+    expect(collectFilePaths(tree)).toEqual(["A/story.png", "A/SousA/nested.png"]);
   });
 });
 

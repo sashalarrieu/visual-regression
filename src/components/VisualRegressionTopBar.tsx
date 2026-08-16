@@ -201,7 +201,7 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
               />
               {multiSelectMode ? (
                 <Button
-                  label="Régénérer"
+                  label="Générer"
                   color="primary"
                   onPress={onRegenerate}
                   disabled={regenerateDisabled}
@@ -236,7 +236,7 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
                 disabled={actionDisabled}
               />
               <Button
-                label="Régénérer"
+                label="Générer"
                 color="primary"
                 onPress={onRegenerate}
                 disabled={regenerateDisabled}
@@ -263,7 +263,7 @@ export const VisualRegressionTopBar: React.FC<VisualRegressionTopBarProps> = ({
             color="primary"
             onPress={copyStoryPathToClipboard}
           />
-          {/* Sync = CompareModal (by-type / all-stories) ; Régénérer = current / sélection. */}
+          {/* Sync = CompareModal (by-type / all-stories) ; Générer = current / sélection. */}
           {(isRegressions || isCatalog) && (
             <Button
               icon={{ name: "sync" }}

@@ -258,7 +258,7 @@ Réglages pour attendre que la story soit visuellement stable avant la capture. 
 
 | Paramètre            | Défaut  | En bref                                                                            |
 | -------------------- | ------- | ---------------------------------------------------------------------------------- |
-| `freezeAnimations`   | `true`  | Fige les animations CSS pendant la capture.                                        |
+| `freezeAnimations`   | `true`  | Fige CSS **et** Reanimated web (`prefers-reduced-motion`) pendant la capture.      |
 | `waitFonts`          | `true`  | Attend le chargement des polices.                                                  |
 | `waitNetworkQuietMs` | `0`     | Attend X ms sans requête réseau (ex. `300` pour des stories qui chargent des API). |
 | `maxStabilizeTime`   | `5000`  | Délai max total d’attente (ms).                                                    |
@@ -300,28 +300,28 @@ Les scripts (serveur VR, comparaison Playwright) utilisent `name`, `viewport`, `
 
 Stabilisation des captures inspirée de [Chromatic SteadySnap](https://www.chromatic.com/blog/steadysnap/) — équivalent self-hosted, burst **opt-in** par défaut.
 
-| Clé                            | Défaut  | Rôle                                           |
-| ------------------------------ | ------- | ---------------------------------------------- |
-| `stabilize.freezeAnimations`   | `true`  | Freeze CSS animations/transitions              |
-| `stabilize.waitFonts`          | `true`  | Attend `document.fonts.ready`                  |
-| `stabilize.waitNetworkQuietMs` | `0`     | Fenêtre sans requête réseau (ms) avant capture |
-| `stabilize.maxStabilizeTime`   | `5000`  | Plafond attente stabilisation                  |
-| `stabilize.burstCapture`       | `false` | Burst N frames pour toutes les stories         |
-| `stabilize.burstFrames`        | `3`     | Nombre de frames burst                         |
-| `stabilize.burstIntervalMs`    | `100`   | Intervalle entre frames burst                  |
+| Clé                            | Défaut  | Rôle                                                              |
+| ------------------------------ | ------- | ----------------------------------------------------------------- |
+| `stabilize.freezeAnimations`   | `true`  | Freeze CSS + Reanimated web (`prefers-reduced-motion` Playwright) |
+| `stabilize.waitFonts`          | `true`  | Attend `document.fonts.ready`                                     |
+| `stabilize.waitNetworkQuietMs` | `0`     | Fenêtre sans requête réseau (ms) avant capture                    |
+| `stabilize.maxStabilizeTime`   | `5000`  | Plafond attente stabilisation                                     |
+| `stabilize.burstCapture`       | `false` | Burst N frames pour toutes les stories                            |
+| `stabilize.burstFrames`        | `3`     | Nombre de frames burst                                            |
+| `stabilize.burstIntervalMs`    | `100`   | Intervalle entre frames burst                                     |
 
 **Tags Storybook :**
 
-- `live-animation-vr` — **opt-out** : conserve Reanimated en capture (défaut = figé via preview)
+- `live-animation-vr` — **opt-out** : conserve Reanimated en capture (défaut = figé via `prefers-reduced-motion`)
 - `burst-vr` — burst SteadySnap côté Playwright (stories animées non figées)
 - `skip-play-vr` — n'exécute pas `play()` en capture (opt-out du decorator preview)
 - `ignore-vr` / `force-vr` — exclusion / inclusion forcée au compare
 
-**Storybook preview :** en capture (`vr-capture=1`), le decorator applique `ReducedMotionConfig` (Reanimated figé à l'état initial). Un second decorator exécute `play()` puis pose `data-vr-ready="true"` sur `#storybook-root`.
+**Storybook preview :** en capture (`vr-capture=1`), le decorator fige les animations CSS. Playwright emule `prefers-reduced-motion: reduce` **avant** le `goto` iframe — Reanimated web lit cette MQ au chargement du module, donc `withTiming` / `withRepeat` sautent à l'état final (sans importer Reanimated dans l'entry Storybook, incompatible Vite). Un second decorator exécute `play()` puis pose `data-vr-ready="true"` sur `#storybook-root`.
 
 **Modals / portals :** la capture cible `#storybook-root` (crop serré). Si un overlay est rendu **hors** du root (React portal, `Modal` RN Web, `[role="dialog"]`, `position: fixed|absolute` sibling), le clip est élargi à l’union root ∪ overlays — sinon on ne voit que le backdrop grisé sans le panneau modal.
 
-**Stories** `play()` **:** Storybook les exécute avant le screenshot. Le decorator VR attend `data-vr-ready="true"` (stories taguées `play-fn`) et ne rejoue `play()` que s'il n'a pas réellement tourné — un second play casse l'état (spies, DOM déjà muté).
+**Stories** `play()` **:** l'iframe de capture ajoute `embed=true` (autoplay Storybook off) pour que `play()` tourne dans le decorator, **après** les `useEffect` des demos (sync props → state). Sans ça, le clic Storybook est écrasé et le screenshot fige l'état initial. Le decorator attend `data-vr-ready="true"` (stories taguées `play-fn`) et ne rejoue `play()` que s'il n'a pas déjà tourné — un second play casse l'état (spies, DOM déjà muté).
 
 **Vérification diff :** si une capture diffère de la baseline, le moteur relance jusqu'à match ou `compare.diffVerificationMaxAttempts` (défaut 3). Override global : `VR_DIFF_VERIFY_MAX_ATTEMPTS`.
 
@@ -397,6 +397,8 @@ L’UI gauche expose jusqu’à **trois onglets**, chacun alimenté par un endpo
 | **Orphelins**          | `GET /regressions/orphans-tree` | screenshots disque dont le `storyId` n’est plus dans `index.json`         | uniquement si `countTotal > 0` |
 
 - **Search** (barre au-dessus de l’arbre) et **filtres de statut** (chips multi-sélection ; aucune chip = tout afficher) s’appliquent côté client via `filterTree` sur l’onglet actif (AND entre query et statuts). Orphelins : search seule.
+- **Ordre d’affichage** : dans un dossier, les stories apparaissent avant les sous-dossiers.
+- **Raccourcis arbre** : Maj+clic entre deux stories pour sélectionner la plage ; Option+clic (Alt) sur un accordéon pour ouvrir/fermer tous les sous-dossiers ; bouton tout déplier / tout replier.
 - **Pas de poll** : le catalogue et les orphelins se rechargent au switch d’onglet, sur SSE `index-updated` / `connected`, ou via le bouton refresh du TreePanel. Anti-rebuild via `fingerprint` structurel (pas `Date.now()`).
 - **Capture errors** : `GET /regressions/capture-errors` lit `.vr-cache/capture-errors.json` (mis à jour après chaque batch). Modal dédiée (icône erreur dans la top bar) pour régénérer cas par cas, sélection, ou toutes les erreurs (filtrable par device). Succès de capture (new / diff / match) → retrait de la liste.
 

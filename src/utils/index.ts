@@ -1,10 +1,12 @@
 import { STORYBOOK_URL, UNKNOWN_DEVICE_STYLE, VR_SERVER_URL } from "../constants/constants";
 import type { DeviceDisplayConfig, DeviceStyle, Node, StoryScreenshotsPath, VRDeviceConfig } from "../types/types";
 
+import { flattenTreeVisual } from "./tree-order";
 import { shouldIncludeStoryForVisualRegression } from "./vr-story-eligibility";
 
 export { filterTree } from "./filter-tree";
 export type { FilterTreeOptions, StatusFilterValue, TreePanelMode } from "./filter-tree";
+export { collectFolderPaths, flattenTreeVisual, getVisualChildGroups, pathsInVisualRange } from "./tree-order";
 export {
   collectFilePaths,
   collectSelectableFilePaths,
@@ -381,16 +383,7 @@ export const getDeviceDisplayName = (deviceName: string, deviceConfigs?: DeviceD
   return capitalizeAll(deviceName.replace(/-/g, " "));
 };
 
-export const findFirstFile = (node: Node | null): Node | null => {
-  if (!node) return null;
-  if (node.type === "file") return node;
-  const entries = Object.values(node.children ?? {});
-  for (const child of entries) {
-    const firstFile = findFirstFile(child);
-    if (firstFile) return firstFile;
-  }
-  return null;
-};
+export const findFirstFile = (node: Node | null): Node | null => flattenTreeVisual(node)[0] ?? null;
 
 export const calculateFolderDepth = (path: string): number => {
   const pathParts = path.split("/").filter(part => part.length > 0);

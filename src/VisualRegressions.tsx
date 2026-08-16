@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList } from "react-native";
 
 import { Box } from "./atoms/Box";
-import { Bullet } from "./atoms/Bullet";
 import { Divider } from "./atoms/Divider";
 import { EndOfList } from "./atoms/EndOfList";
 import { Modal } from "./atoms/Modal";
+import { STORYBOOK_BRAND_COLOR, StorybookIcon } from "./atoms/StorybookIcon";
 import { TabBar, type TabBarTab } from "./atoms/TabBar";
 import { Typo } from "./atoms/Typo";
 import { CaptureErrorsModal } from "./components/CaptureErrorsModal";
@@ -27,11 +27,12 @@ import {
   useValidatedRegressions,
 } from "./hooks/useVisualRegressionData";
 import { DeviceConfigProvider } from "./providers/DeviceConfigProvider";
-import { spacing, type ColorKey } from "./themes/theme";
+import { colors, spacing } from "./themes/theme";
 import type { DeviceDisplayConfig, Node, StoryScreenshotsPath } from "./types/types";
 import {
   createVisualRegressionActions,
   filterTree,
+  flattenTreeVisual,
   isSelectableTreeFile,
   togglePaths,
   type StatusFilterValue,
@@ -188,43 +189,37 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   const regressionsCount = regressionsTree?.countTotal ?? 0;
   const catalogCount = allStoriesTree?.countTotal ?? storyCount;
 
-  const leftTabs = useMemo<TabBarTab<TreePanelMode>[]>(() => {
-    const tabBullet = (value: number, color: ColorKey) => (
-      <Bullet
-        value={value}
-        color={color}
-      />
-    );
-
-    const tabs: TabBarTab<TreePanelMode>[] = [
+  const leftTabs = useMemo<TabBarTab<TreePanelMode>[]>(
+    () => [
       {
         key: "regressions",
         title: "Régressions",
-        badge: tabBullet(regressionsCount, regressionsCount > 0 ? "newTheme_danger" : "newTheme_primary"),
+        shortTitle: "VR",
+        bullet: { value: regressionsCount, color: regressionsCount > 0 ? "newTheme_danger" : "newTheme_primary" },
       },
       {
         key: "all-stories",
-        title: "Toutes les stories",
-        badge: tabBullet(catalogCount, "newTheme_base10"),
+        title: "Stories",
+        renderIcon: ({ selected }) => (
+          <StorybookIcon
+            color={selected ? colors.newTheme_textOnPrimary : STORYBOOK_BRAND_COLOR}
+            markColor={selected ? colors.newTheme_primary : "#FFFFFF"}
+          />
+        ),
+        bullet: { value: catalogCount, color: "newTheme_storybook" },
       },
       {
         key: "orphans",
         title: "Orphelins",
-        badge: tabBullet(orphansCountTotal, "newTheme_warning"),
+        icon: { name: "link-off" },
+        bullet: { value: orphansCountTotal, color: "newTheme_warning" },
         disabled: orphansCountTotal === 0,
       },
-    ];
+    ],
+    [regressionsCount, catalogCount, orphansCountTotal],
+  );
 
-    return tabs;
-  }, [regressionsCount, catalogCount, orphansCountTotal]);
-
-  const flattenTree = useCallback((node: Node | null): Node[] => {
-    if (!node) return [];
-    if (node.type === "file") return [node];
-    return Object.values(node.children ?? {}).flatMap(flattenTree);
-  }, []);
-
-  const allList = useMemo(() => flattenTree(filteredTree), [filteredTree, flattenTree]);
+  const allList = useMemo(() => flattenTreeVisual(filteredTree), [filteredTree]);
 
   const handleTogglePath = useCallback(
     (path: string) => {
@@ -255,6 +250,29 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
           selectedPaths: togglePaths(prev[leftTab].selectedPaths, selectablePaths),
         },
       }));
+    },
+    [leftTab, allList],
+  );
+
+  const handleSelectPaths = useCallback(
+    (paths: readonly string[]) => {
+      const selectablePaths = paths.filter(path => {
+        const node = allList.find(n => n.path === path);
+        return node ? isSelectableTreeFile(node) : false;
+      });
+      if (selectablePaths.length === 0) return;
+      setTabStates(prev => {
+        const next = new Set(prev[leftTab].selectedPaths);
+        for (const path of selectablePaths) next.add(path);
+        return {
+          ...prev,
+          [leftTab]: {
+            ...prev[leftTab],
+            multiSelectMode: true,
+            selectedPaths: next,
+          },
+        };
+      });
     },
     [leftTab, allList],
   );
@@ -578,22 +596,12 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
       {
         key: "rejected",
         title: "Refusés",
-        badge: (
-          <Bullet
-            value={deletedList.length}
-            color="newTheme_danger"
-          />
-        ),
+        bullet: { value: deletedList.length, color: "newTheme_danger" },
       },
       {
         key: "validated",
         title: "Validés",
-        badge: (
-          <Bullet
-            value={validatedList.length}
-            color="newTheme_primary"
-          />
-        ),
+        bullet: { value: validatedList.length, color: "newTheme_primary" },
       },
     ],
     [deletedList.length, validatedList.length],
@@ -643,6 +651,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
                 tabs={leftTabs}
                 selectedTabKey={leftTab}
                 onSelectedTabKey={setLeftTab}
+                compressed
               />
             </Box>
             <TreePanel
@@ -663,6 +672,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
               selectedPaths={selectedPaths}
               onTogglePath={handleTogglePath}
               onTogglePaths={handleTogglePaths}
+              onSelectPaths={handleSelectPaths}
             />
           </Box>
           <Divider orientation="vertical" />

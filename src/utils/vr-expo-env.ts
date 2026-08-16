@@ -13,4 +13,6 @@ export const getExpoSpawnEnv = (base: NodeJS.ProcessEnv, projectRoot: string): N
   EXPO_NO_DEPENDENCY_VALIDATION: "1",
   /** Le launcher ouvre l'UI lui-même (évite un double onglet Expo). */
   BROWSER: "none",
+  /** Favicons / PWA : `assets/` est servi à la racine web (`/favicon.ico`, etc.). */
+  EXPO_PUBLIC_FOLDER: "assets",
 });

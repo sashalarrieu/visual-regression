@@ -6,6 +6,7 @@ import path from "path";
 import { SCREENSHOT_NAME, SCREENSHOTS_DIR, VR_SERVER_URL } from "../constants/constants";
 import type { Node, StoriesTreeResponse } from "../types/types";
 import { getDevicesNames, getProjectPaths, getProjectRoot, getStorybookUrl, resolveVrConfig } from "../utils/node";
+import { compareNodeTypeForDisplay } from "../utils/tree-order";
 import { isIgnoredVrStory } from "../utils/vr-story-eligibility";
 import { fetchStorybookIndexEntries, type StorybookIndexEntry } from "../utils/vr-storybook-index";
 
@@ -227,6 +228,8 @@ const sortTree = (node: Node): Node => {
 
   const sortedChildren: Record<string, Node> = {};
   const entries = Object.values(node.children ?? {}).sort((a, b) => {
+    const typeCompare = compareNodeTypeForDisplay(a, b);
+    if (typeCompare !== 0) return typeCompare;
     const storyCompare = getStoryIdForSort(a).localeCompare(getStoryIdForSort(b));
     if (storyCompare !== 0) return storyCompare;
     return getDeviceNameForSort(a).localeCompare(getDeviceNameForSort(b));
