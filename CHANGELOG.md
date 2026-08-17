@@ -4,9 +4,14 @@ Ce projet suit le format [Keep a Changelog](https://keepachangelog.com/fr/1.1.2/
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-17
+
 ### Added
 
 - Arbre UI : Maj+clic pour sélectionner une plage de stories, Option+clic (Alt) pour ouvrir/fermer récursivement un accordéon, bouton tout déplier / tout replier.
+- UI : panneau arbre redimensionnable (`DraggableSplitView`, double-clic pour reset).
+- Favicons / PWA Expo web servis depuis `assets/` (`EXPO_PUBLIC_FOLDER`).
+- Helper `vrStorybookAddons` pour retirer `@storybook/addon-vitest` dans le sidecar.
 
 ### Fixed
 
