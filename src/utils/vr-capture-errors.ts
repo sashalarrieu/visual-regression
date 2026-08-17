@@ -1,11 +1,16 @@
 /**
  * Persistance des erreurs de capture (story × device) dans `.vr-cache/capture-errors.json`.
  * Mis à jour après chaque batch : succès → retrait ; échec → upsert.
+ * Les stories ignore-vr n’y entrent jamais (non capturables).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 
 import type { CaptureErrorItem } from "../types/types";
+
+import { getStorybookUrl } from "./node";
+import { collectIgnoredVrStoryIds } from "./vr-story-eligibility";
+import { fetchStorybookIndexEntries } from "./vr-storybook-index";
 
 export type { CaptureErrorItem };
 
@@ -17,6 +22,13 @@ export const captureErrorKey = (storyId: string, deviceName: string): string => 
 
 export const getCaptureErrorsPath = (projectRoot: string): string =>
   path.join(projectRoot, ".vr-cache", "capture-errors.json");
+
+/** Retire les erreurs dont la story est taguée ignore-vr. */
+export const withoutIgnoredCaptureErrors = (
+  items: CaptureErrorItem[],
+  ignoredStoryIds: ReadonlySet<string>,
+): CaptureErrorItem[] =>
+  ignoredStoryIds.size === 0 ? items : items.filter(item => !ignoredStoryIds.has(item.storyId));
 
 export const readCaptureErrors = (projectRoot: string): CaptureErrorItem[] => {
   try {
@@ -68,16 +80,20 @@ export const syncCaptureErrorsAfterBatch = (
     succeeded: { storyId: string; deviceName: string }[];
     failed: CaptureErrorItem[];
   },
+  ignoredStoryIds: ReadonlySet<string> = new Set(),
 ): CaptureErrorItem[] => {
   const byKey = new Map(
-    readCaptureErrors(projectRoot).map(item => [captureErrorKey(item.storyId, item.deviceName), item]),
+    withoutIgnoredCaptureErrors(readCaptureErrors(projectRoot), ignoredStoryIds).map(item => [
+      captureErrorKey(item.storyId, item.deviceName),
+      item,
+    ]),
   );
 
   for (const item of update.succeeded) {
     byKey.delete(captureErrorKey(item.storyId, item.deviceName));
   }
 
-  for (const item of update.failed) {
+  for (const item of withoutIgnoredCaptureErrors(update.failed, ignoredStoryIds)) {
     byKey.set(captureErrorKey(item.storyId, item.deviceName), {
       storyId: item.storyId,
       deviceName: item.deviceName,
@@ -87,7 +103,7 @@ export const syncCaptureErrorsAfterBatch = (
     });
   }
 
-  const next = sortCaptureErrors(Array.from(byKey.values()));
+  const next = sortCaptureErrors(withoutIgnoredCaptureErrors(Array.from(byKey.values()), ignoredStoryIds));
   writeCaptureErrors(projectRoot, next);
   return next;
 };
@@ -97,10 +113,12 @@ export const syncCaptureErrorsFromBatch = (
   projectRoot: string,
   attempted: { storyId: string; deviceName: string; componentDir: string }[],
   failed: CaptureErrorItem[],
+  ignoredStoryIds: ReadonlySet<string> = new Set(),
 ): CaptureErrorItem[] => {
-  const failedKeys = new Set(failed.map(item => captureErrorKey(item.storyId, item.deviceName)));
+  const failedFiltered = withoutIgnoredCaptureErrors(failed, ignoredStoryIds);
+  const failedKeys = new Set(failedFiltered.map(item => captureErrorKey(item.storyId, item.deviceName)));
   const succeeded = attempted.filter(task => !failedKeys.has(captureErrorKey(task.storyId, task.deviceName)));
-  return syncCaptureErrorsAfterBatch(projectRoot, { succeeded, failed });
+  return syncCaptureErrorsAfterBatch(projectRoot, { succeeded, failed: failedFiltered }, ignoredStoryIds);
 };
 
 /** Marque toutes les tâches tentées en erreur (daemon down, échec global). */
@@ -108,6 +126,7 @@ export const syncCaptureErrorsAllFailed = (
   projectRoot: string,
   attempted: { storyId: string; deviceName: string; componentDir: string }[],
   message: string,
+  ignoredStoryIds: ReadonlySet<string> = new Set(),
 ): CaptureErrorItem[] => {
   const at = Date.now();
   const failed: CaptureErrorItem[] = attempted.map(task => ({
@@ -117,5 +136,20 @@ export const syncCaptureErrorsAllFailed = (
     message,
     at,
   }));
-  return syncCaptureErrorsFromBatch(projectRoot, attempted, failed);
+  return syncCaptureErrorsFromBatch(projectRoot, attempted, failed, ignoredStoryIds);
+};
+
+/**
+ * Purge les entrées ignore-vr du fichier (stale) via index Storybook.
+ * Réécrit le fichier si des lignes sont retirées.
+ */
+export const purgeIgnoredCaptureErrors = async (projectRoot: string): Promise<CaptureErrorItem[]> => {
+  const entries = await fetchStorybookIndexEntries(getStorybookUrl(projectRoot));
+  const ignoredStoryIds = collectIgnoredVrStoryIds(entries);
+  const current = readCaptureErrors(projectRoot);
+  const next = withoutIgnoredCaptureErrors(current, ignoredStoryIds);
+  if (next.length !== current.length) {
+    writeCaptureErrors(projectRoot, next);
+  }
+  return next;
 };

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Image, PanResponder, type LayoutChangeEvent, type ViewStyle } from "react-native";
 
 import { Box } from "../atoms/Box";
@@ -40,19 +40,30 @@ export const DraggableImageCompare = ({ leftImage, rightImage, separatorWidth = 
     } else setRightDims(null);
   }, [rightImage]);
 
-  const panResponder = PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onPanResponderMove: (_, gestureState) => {
-      const newX = Math.max(
-        -SEPARATOR_CONTAINER_OFFSET,
-        Math.min(
-          containerWidth + SEPARATOR_CONTAINER_OFFSET - separatorWidth,
-          gestureState.moveX - 318 + SEPARATOR_CONTAINER_OFFSET,
-        ),
-      );
-      setSeparatorX(newX);
-    },
-  });
+  const separatorXRef = useRef(separatorX);
+  const containerWidthRef = useRef(containerWidth);
+  const dragStartXRef = useRef(separatorX);
+  separatorXRef.current = separatorX;
+  containerWidthRef.current = containerWidth;
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          dragStartXRef.current = separatorXRef.current;
+        },
+        onPanResponderMove: (_, gestureState) => {
+          const width = containerWidthRef.current;
+          const newX = Math.max(
+            -SEPARATOR_CONTAINER_OFFSET,
+            Math.min(width + SEPARATOR_CONTAINER_OFFSET - separatorWidth, dragStartXRef.current + gestureState.dx),
+          );
+          setSeparatorX(newX);
+        },
+      }),
+    [separatorWidth],
+  );
 
   const onLayout = (e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;

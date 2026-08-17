@@ -71,6 +71,21 @@ export const FORCE_VR_TAG = "force-vr";
 export const BURST_VR_TAG = "burst-vr";
 /** En capture VR : conserve les animations Reanimated (opt-out du freeze global preview). */
 export const LIVE_ANIMATION_VR_TAG = "live-animation-vr";
+/**
+ * Freeze CSS en capture : durée quasi-nulle + une seule itération.
+ * `0s` fige souvent la frame de départ ; `0.001ms` laisse l'animation se terminer.
+ * `iteration-count: 1` arrête les spinners CSS infinis.
+ */
+export const VR_CAPTURE_ANIMATION_FREEZE_CSS = [
+  "*, *::before, *::after {",
+  "  animation-duration: 0.001ms !important;",
+  "  animation-delay: 0ms !important;",
+  "  animation-iteration-count: 1 !important;",
+  "  transition-duration: 0.001ms !important;",
+  "  transition-delay: 0ms !important;",
+  "}",
+].join("\n");
+
 /** En capture VR : n'exécute pas `play()` (opt-out du decorator preview). */
 export const SKIP_PLAY_VR_TAG = "skip-play-vr";
 /** Tag Storybook auto-appliqué aux stories avec `play()`. */

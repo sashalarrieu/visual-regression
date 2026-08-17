@@ -7,16 +7,11 @@ import { createRequire } from "module";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import {
-  DELETED_DIR_NAME,
-  FORCE_VR_TAG,
-  IGNORE_VR_TAG,
-  SCREENSHOTS_DIR,
-  VALIDATED_DIR_NAME,
-} from "../constants/constants";
+import { DELETED_DIR_NAME, SCREENSHOTS_DIR, VALIDATED_DIR_NAME } from "../constants/constants";
 import type { DeviceConfig, DeviceDisplayConfig, VRDeviceConfigItem, VrPublicConfig } from "../types/types";
 
 import { resolveVrConfig } from "./vr-config";
+import { shouldIncludeStoryForVisualRegression } from "./vr-story-eligibility";
 
 export { assertVrConfig, loadVrConfig, resolveVrConfig, VR_CONFIG_FILENAME } from "./vr-config";
 
@@ -268,11 +263,8 @@ export const countEligibleStorybookStories = async (storybookUrl: string): Promi
     const res = await fetch(`${storybookUrl.replace(/\/$/, "")}/index.json`);
     if (!res.ok) return 0;
     const data = (await res.json()) as { entries?: Record<string, { type?: string; tags?: string[] }> };
-    return Object.entries(data.entries ?? {}).filter(([id, entry]) => {
-      if (entry.type !== "story" || id.endsWith("--docs")) return false;
-      const tags = entry.tags ?? [];
-      return tags.includes(FORCE_VR_TAG) || !tags.includes(IGNORE_VR_TAG);
-    }).length;
+    return Object.entries(data.entries ?? {}).filter(([, entry]) => shouldIncludeStoryForVisualRegression(entry))
+      .length;
   } catch {
     return 0;
   }

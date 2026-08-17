@@ -34,11 +34,13 @@ import {
   getProjectPaths,
   getProjectRoot,
   getScriptDir,
+  getStorybookUrl,
   getVrPublicConfig,
   resolveVrConfig,
   spawnShellOption,
 } from "../utils/node";
-import { readCaptureErrors } from "../utils/vr-capture-errors";
+import { purgeIgnoredCaptureErrors } from "../utils/vr-capture-errors";
+import { warmStorybookIndexCache } from "../utils/vr-storybook-index";
 
 import {
   buildIndexFromScan,
@@ -347,6 +349,7 @@ restoreAllDeletedFiles();
 console.log("🔄 Initialisation de l'index des régressions");
 refreshIndex(false);
 watchScreenshotsDirectory();
+warmStorybookIndexCache(getStorybookUrl(PROJECT_ROOT));
 
 // ============================================
 // SERVEUR HTTP (Node)
@@ -449,7 +452,7 @@ const handler = async (req: IncomingMessage, res: ServerResponse) => {
   // 📖 GET /regressions/capture-errors — stories × devices en échec de capture
   if (req.method === "GET" && url.pathname === "/regressions/capture-errors") {
     try {
-      const errors = readCaptureErrors(PROJECT_ROOT);
+      const errors = await purgeIgnoredCaptureErrors(PROJECT_ROOT);
       sendJson(res, { errors, count: errors.length, lastUpdate: Date.now() });
     } catch (err) {
       console.error("❌ Error fetching capture errors:", err);

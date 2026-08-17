@@ -329,17 +329,13 @@ const main = async () => {
       { auto: true },
     );
   } else {
-    // Le conteneur choisit son mode Storybook via VR_STORYBOOK_MODE.
+    // Le sidecar doit tourner le même mode que l'hôte (dev HMR par défaut).
     const captureStorybookMode = resolveStorybookModeForCapture(PROJECT_ROOT);
-    if (captureStorybookMode === "static") {
-      process.env.VR_STORYBOOK_MODE = "static";
-      if (explicitStorybookMode !== "static") {
-        log(
-          "yellow",
-          "ℹ️",
-          "Storybook statique activé dans Docker (capture rapide) — VR_STORYBOOK_MODE=dev pour forcer le HMR",
-        );
-      }
+    process.env.VR_STORYBOOK_MODE = captureStorybookMode;
+    if (captureStorybookMode === "dev") {
+      log("green", "📚", "Storybook live (HMR) — les stories suivent le disque comme yarn storybook");
+    } else {
+      log("blue", "📚", "Storybook statique (VR_STORYBOOK_MODE / launcher.storybookMode) — build storybook-static");
     }
     if (
       explicitStorybookMode !== "static" &&
@@ -353,7 +349,7 @@ const main = async () => {
     // Les sidecars des autres projets restent intacts (ports / Compose distincts).
     const thisProjectPortsBusy = !storybookAvailable || !daemonAvailable;
     const existingHealth = thisProjectPortsBusy ? await fetchCaptureDaemonHealth() : null;
-    const canReuseSidecar = isCaptureDaemonReusableForProject(existingHealth, PROJECT_ROOT);
+    const canReuseSidecar = isCaptureDaemonReusableForProject(existingHealth, PROJECT_ROOT, captureStorybookMode);
 
     if (canReuseSidecar) {
       log(
@@ -414,8 +410,13 @@ const main = async () => {
         await startLocalCaptureFallback(`docker compose up a échoué (code ${composeCode})`, { auto: autoFallback });
       } else {
         restartDockerLogFollow();
-        log("blue", "⏳", "Attente du daemon de capture (Storybook + Playwright — le 1er build peut être long)");
-        let daemonReady = await waitForCaptureDaemon(300);
+        log(
+          "blue",
+          "⏳",
+          "Attente du daemon de capture (Storybook + Playwright — yarn install Docker + 1er build peuvent dépasser 5 min)",
+        );
+        // 15 min : install yarn.lock dans le sidecar + compile Vite HMR, pas seulement le healthcheck.
+        let daemonReady = await waitForCaptureDaemon(900);
         if (!daemonReady) {
           log("yellow", "⚠️", "Daemon non prêt après démarrage — rebuild forcé du sidecar");
           if (!vrConfig.docker.showLogs) {
@@ -429,7 +430,7 @@ const main = async () => {
           if (rebuildCode === 0) {
             restartDockerLogFollow();
             log("blue", "⏳", "Attente du daemon après rebuild forcé");
-            daemonReady = await waitForCaptureDaemon(300);
+            daemonReady = await waitForCaptureDaemon(900);
           }
           if (!daemonReady) {
             if (!vrConfig.docker.showLogs) {

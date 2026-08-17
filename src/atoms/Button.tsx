@@ -20,6 +20,7 @@ export type ButtonProps = {
   number?: number;
   title?: { text: string };
   disabled?: boolean;
+  accessibilityLabel?: string;
 };
 
 const colorBg: Record<string, string> = {
@@ -42,6 +43,7 @@ export const Button: React.FC<ButtonProps> = ({
   number,
   title,
   disabled,
+  accessibilityLabel,
 }) => {
   const bg = colorBg[color] ?? colorBg.primary;
   const textColor = color === "base" ? colors.newTheme_textOnSurface : colors.newTheme_textOnPrimary;
@@ -91,10 +93,11 @@ export const Button: React.FC<ButtonProps> = ({
     <TouchableOpacity
       onPress={onPress}
       disabled={disabled || loading}
+      accessibilityLabel={accessibilityLabel}
       style={{
         backgroundColor: bg,
         paddingVertical: spacing.s,
-        paddingHorizontal: spacing.m,
+        paddingHorizontal: spacing.s,
         borderRadius: 8,
         minWidth: width,
         flex: flex,

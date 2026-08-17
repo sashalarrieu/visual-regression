@@ -45,9 +45,9 @@ module.exports = {
   ],
   capture: {
     // static (local) + CI — override CI : VR_CONCURRENCY
-    concurrency: 15,
+    concurrency: 6,
     // Storybook dev (Vite) — override : VR_CONCURRENCY_DEV
-    concurrencyDev: 2,
+    concurrencyDev: 4,
     maxTestTime: 10000,
     remoteChunkSize: 50,
   },

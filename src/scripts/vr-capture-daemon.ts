@@ -15,11 +15,13 @@ import { format } from "util";
 
 import { CAPTURE_DAEMON_PORT, STORYBOOK_PORT } from "../constants/constants";
 import { getProjectRoot, resolveVrConfig } from "../utils/node";
+import { resetStorybookIndexCache } from "../utils/vr-storybook-index";
 import {
   ensureStaticStorybookFresh,
   getStorybookMode,
   startStorybook,
   stopStorybook,
+  waitForDevStorybookIndexSettle,
 } from "../utils/vr-storybook-runtime";
 
 import type { CaptureBatchOptions, CaptureBatchResult, CaptureTask } from "./vr-capture-engine";
@@ -134,6 +136,8 @@ const main = async (): Promise<void> => {
           return;
         }
 
+        resetStorybookIndexCache(config.storybook.url);
+
         if (mode === "static") {
           try {
             const fresh = await ensureStaticStorybookFresh({
@@ -156,6 +160,8 @@ const main = async (): Promise<void> => {
             sendJson(res, { success: false, error: "Storybook pas prêt après rebuild" }, 503);
             return;
           }
+        } else {
+          await waitForDevStorybookIndexSettle(config.storybook.url);
         }
 
         const result: CaptureBatchResult = await runSerialized(() => runCaptureWithConsole(tasks, options));

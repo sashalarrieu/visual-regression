@@ -1,11 +1,20 @@
-import { describe, expect, it } from "vitest";
-
-import { PLAY_FN_TAG, SKIP_PLAY_VR_TAG } from "../constants/constants";
+import type { Page } from "playwright";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  LIVE_ANIMATION_VR_TAG,
+  PLAY_FN_TAG,
+  SKIP_PLAY_VR_TAG,
+  VR_CAPTURE_ANIMATION_FREEZE_CSS,
+} from "../constants/constants";
+
+import { createTestVrConfig } from "./test-helpers";
+import {
   appendVrCaptureParam,
+  applyCaptureMotionPreference,
   clampCaptureClipToViewport,
   expectsVrStoryPlay,
+  shouldFreezeMotion,
   unionCaptureClips,
 } from "./vr-steadysnap";
 
@@ -26,19 +35,68 @@ describe("expectsVrStoryPlay", () => {
 });
 
 describe("appendVrCaptureParam", () => {
-  it("adds vr-capture=1 to iframe URLs", () => {
+  it("adds vr-capture=1 and embed=true to iframe URLs", () => {
     const url = "http://localhost:6006/iframe.html?id=demo-button--primary&viewMode=story";
-    expect(appendVrCaptureParam(url)).toContain("vr-capture=1");
+    const next = appendVrCaptureParam(url);
+    expect(next).toContain("vr-capture=1");
+    expect(next).toContain("embed=true");
   });
 
-  it("is idempotent when vr-capture is already set", () => {
-    const url = "http://localhost:6006/iframe.html?id=demo--x&vr-capture=1";
-    expect(appendVrCaptureParam(url)).toBe("http://localhost:6006/iframe.html?id=demo--x&vr-capture=1");
+  it("is idempotent when capture params are already set", () => {
+    const url = "http://localhost:6006/iframe.html?id=demo--x&viewMode=story";
+    const once = appendVrCaptureParam(url);
+    expect(appendVrCaptureParam(once)).toBe(once);
   });
 
   it("falls back for malformed URLs", () => {
-    expect(appendVrCaptureParam("not-a-url")).toBe("not-a-url?vr-capture=1");
-    expect(appendVrCaptureParam("not-a-url?foo=1")).toBe("not-a-url?foo=1&vr-capture=1");
+    expect(appendVrCaptureParam("not-a-url")).toBe("not-a-url?vr-capture=1&embed=true");
+    expect(appendVrCaptureParam("not-a-url?foo=1")).toBe("not-a-url?foo=1&vr-capture=1&embed=true");
+  });
+});
+
+describe("shouldFreezeMotion", () => {
+  const config = createTestVrConfig();
+
+  it("freezes by default when freezeAnimations is true", () => {
+    expect(shouldFreezeMotion(config, [])).toBe(true);
+  });
+
+  it("opts out for live-animation-vr", () => {
+    expect(shouldFreezeMotion(config, [LIVE_ANIMATION_VR_TAG])).toBe(false);
+  });
+
+  it("does not freeze when freezeAnimations is false", () => {
+    const off = createTestVrConfig({
+      stabilize: { ...config.stabilize, freezeAnimations: false },
+    });
+    expect(shouldFreezeMotion(off, [])).toBe(false);
+  });
+});
+
+describe("applyCaptureMotionPreference", () => {
+  it("emulates reduced motion before navigation", async () => {
+    const emulateMedia = vi.fn().mockResolvedValue(undefined);
+    const page = { emulateMedia } as unknown as Page;
+
+    await applyCaptureMotionPreference(page, true);
+
+    expect(emulateMedia).toHaveBeenCalledWith({ reducedMotion: "reduce" });
+  });
+
+  it("emulates no-preference when freeze is off", async () => {
+    const emulateMedia = vi.fn().mockResolvedValue(undefined);
+    const page = { emulateMedia } as unknown as Page;
+
+    await applyCaptureMotionPreference(page, false);
+
+    expect(emulateMedia).toHaveBeenCalledWith({ reducedMotion: "no-preference" });
+  });
+});
+
+describe("VR_CAPTURE_ANIMATION_FREEZE_CSS", () => {
+  it("stops infinite CSS loops instead of freezing the first keyframe", () => {
+    expect(VR_CAPTURE_ANIMATION_FREEZE_CSS).toContain("animation-iteration-count: 1");
+    expect(VR_CAPTURE_ANIMATION_FREEZE_CSS).toContain("0.001ms");
   });
 });
 

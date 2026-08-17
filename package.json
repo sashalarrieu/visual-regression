@@ -27,6 +27,7 @@
     "bin",
     "src",
     "docker",
+    "assets",
     "app.config.js",
     "metro.config.cjs",
     "babel.config.cjs",
