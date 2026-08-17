@@ -8,6 +8,7 @@ export { Icon } from "./Icon";
 export { Modal } from "./Modal";
 export { Picture } from "./Picture";
 export { SearchField } from "./SearchField";
+export { StorybookIcon, STORYBOOK_BRAND_COLOR } from "./StorybookIcon";
 export { TabBar } from "./TabBar";
 export { Tag } from "./Tag";
 export { TagNew } from "./TagNew";

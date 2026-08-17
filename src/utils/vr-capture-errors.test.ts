@@ -2,17 +2,20 @@ import { mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   captureErrorKey,
   getCaptureErrorsPath,
+  purgeIgnoredCaptureErrors,
   readCaptureErrors,
   syncCaptureErrorsAfterBatch,
   syncCaptureErrorsAllFailed,
   syncCaptureErrorsFromBatch,
+  withoutIgnoredCaptureErrors,
   writeCaptureErrors,
 } from "./vr-capture-errors";
+import { resetStorybookIndexCache } from "./vr-storybook-index";
 
 const tempDirs: string[] = [];
 
@@ -162,5 +165,91 @@ describe("vr-capture-errors", () => {
     );
     expect(next).toHaveLength(2);
     expect(next.every(item => item.message === "daemon down")).toBe(true);
+  });
+
+  it("withoutIgnoredCaptureErrors retire les stories ignore-vr", () => {
+    const ignored = new Set(["blocked--story"]);
+    const items = withoutIgnoredCaptureErrors(
+      [
+        {
+          storyId: "blocked--story",
+          deviceName: "desktop",
+          componentDir: "src/b",
+          message: "err",
+          at: 1,
+        },
+        {
+          storyId: "ok--story",
+          deviceName: "desktop",
+          componentDir: "src/o",
+          message: "err",
+          at: 2,
+        },
+      ],
+      ignored,
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]?.storyId).toBe("ok--story");
+  });
+
+  it("syncCaptureErrorsFromBatch n’enregistre pas les ignore-vr", () => {
+    const root = makeTempRoot();
+    const ignored = new Set(["blocked--story"]);
+    const next = syncCaptureErrorsFromBatch(
+      root,
+      [{ storyId: "blocked--story", deviceName: "desktop", componentDir: "src/b" }],
+      [
+        {
+          storyId: "blocked--story",
+          deviceName: "desktop",
+          componentDir: "src/b",
+          message: "should not persist",
+          at: 1,
+        },
+      ],
+      ignored,
+    );
+    expect(next).toEqual([]);
+  });
+
+  it("purgeIgnoredCaptureErrors nettoie le fichier stale", async () => {
+    const root = makeTempRoot();
+    writeCaptureErrors(root, [
+      {
+        storyId: "blocked--story",
+        deviceName: "desktop",
+        componentDir: "src/b",
+        message: "stale",
+        at: 1,
+      },
+      {
+        storyId: "real--story",
+        deviceName: "desktop",
+        componentDir: "src/r",
+        message: "keep",
+        at: 2,
+      },
+    ]);
+
+    const storybookUrl = "http://storybook.test";
+    resetStorybookIndexCache(storybookUrl);
+    const { getStorybookIndexCacheForTests } = await import("./vr-storybook-index");
+    getStorybookIndexCacheForTests().set(storybookUrl, {
+      entries: {
+        "blocked--story": { id: "blocked--story", type: "story", tags: ["ignore-vr"] },
+        "real--story": { id: "real--story", type: "story", tags: [] },
+      },
+      fetchedAt: Date.now(),
+    });
+
+    vi.spyOn(await import("./node"), "getStorybookUrl").mockReturnValue(storybookUrl);
+
+    const next = await purgeIgnoredCaptureErrors(root);
+    expect(next).toHaveLength(1);
+    expect(next[0]?.storyId).toBe("real--story");
+    expect(readCaptureErrors(root)).toEqual(next);
+
+    vi.restoreAllMocks();
+    resetStorybookIndexCache(storybookUrl);
   });
 });

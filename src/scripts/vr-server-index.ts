@@ -16,6 +16,7 @@ import {
 } from "../constants/constants";
 import type { DeletedItem, Node, ParsedPath, RegressionIndex, StoryScreenshotsPath } from "../types/types";
 import { getDevicesNames, getProjectPaths, getProjectRoot, resolveVrConfig } from "../utils/node";
+import { compareNodeTypeForDisplay } from "../utils/tree-order";
 
 const PROJECT_ROOT = getProjectRoot();
 const { publicDir: PUBLIC_DIR, publicScreenshotsDir: PUBLIC_SCREENSHOTS_DIR } = getProjectPaths(PROJECT_ROOT);
@@ -454,6 +455,9 @@ const sortTree = (node: Node): Node => {
 
   const sortedChildren: Record<string, Node> = {};
   const entries = Object.values(node.children ?? {}).sort((a, b) => {
+    const typeCompare = compareNodeTypeForDisplay(a, b);
+    if (typeCompare !== 0) return typeCompare;
+
     const storyIdA = getStoryId(a);
     const storyIdB = getStoryId(b);
     const storyIdCompare = storyIdA.localeCompare(storyIdB);

@@ -2,34 +2,38 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList } from "react-native";
 
 import { Box } from "./atoms/Box";
-import { Bullet } from "./atoms/Bullet";
-import { Divider } from "./atoms/Divider";
 import { EndOfList } from "./atoms/EndOfList";
 import { Modal } from "./atoms/Modal";
+import { STORYBOOK_BRAND_COLOR, StorybookIcon } from "./atoms/StorybookIcon";
 import { TabBar, type TabBarTab } from "./atoms/TabBar";
 import { Typo } from "./atoms/Typo";
 import { CaptureErrorsModal } from "./components/CaptureErrorsModal";
 import { CompareModal } from "./components/CompareModal";
 import { ContentPanel } from "./components/ContentPanel";
 import { DeletedItemRow } from "./components/DeletedItemRow";
+import { DraggableSplitView } from "./components/DraggableSplitView";
 import { ErrorState } from "./components/ErrorState";
 import { TreePanel } from "./components/TreePanel";
 import { VisualRegressionTopBar } from "./components/VisualRegressionTopBar";
-import { VR_SERVER_URL } from "./constants/constants";
+import {
+  createInitialTabStates,
+  useAllStoriesTree,
+  useCaptureErrors,
+  useDeletedRegressions,
+  useDevicesConfig,
+  useOrphansTree,
+  usePixelDiffMetrics,
+  useRegressionTrees,
+  useValidatedRegressions,
+} from "./hooks/useVisualRegressionData";
 import { DeviceConfigProvider } from "./providers/DeviceConfigProvider";
-import { spacing, type ColorKey } from "./themes/theme";
-import type {
-  CaptureErrorItem,
-  DeletedItem,
-  DeviceDisplayConfig,
-  Node,
-  OrphansTreeResponse,
-  StoriesTreeResponse,
-  StoryScreenshotsPath,
-} from "./types/types";
+import { colors, spacing } from "./themes/theme";
+import type { DeviceDisplayConfig, Node, StoryScreenshotsPath } from "./types/types";
 import {
   createVisualRegressionActions,
   filterTree,
+  flattenTreeVisual,
+  isSelectableTreeFile,
   togglePaths,
   type StatusFilterValue,
   type TreePanelMode,
@@ -38,375 +42,6 @@ import {
 export type VisualRegressionsProps = {
   /** Config d'affichage des devices (label, icon, color). Optionnel : si absent, récupérée depuis le serveur VR (GET /regressions/config/devices, depuis vr.config.cjs). */
   devices?: DeviceDisplayConfig[];
-};
-
-/** État UI local, indépendant par onglet (sélection, search, filtres). */
-type TabLocalState = {
-  selectedPath?: string;
-  searchQuery: string;
-  statusFilter: Set<StatusFilterValue>;
-  multiSelectMode: boolean;
-  selectedPaths: Set<string>;
-};
-
-const createEmptyTabState = (): TabLocalState => ({
-  searchQuery: "",
-  statusFilter: new Set(),
-  multiSelectMode: false,
-  selectedPaths: new Set(),
-});
-
-const createInitialTabStates = (): Record<TreePanelMode, TabLocalState> => ({
-  regressions: createEmptyTabState(),
-  "all-stories": createEmptyTabState(),
-  orphans: createEmptyTabState(),
-});
-
-type ServerEventListener = () => void;
-
-/** Une seule connexion SSE partagée — évite de saturer le pool HTTP du navigateur (6/host). */
-let sharedEventSource: EventSource | null = null;
-const serverEventListeners = new Set<ServerEventListener>();
-
-const ensureSharedEventSource = (): void => {
-  if (sharedEventSource) return;
-  try {
-    sharedEventSource = new EventSource(`${VR_SERVER_URL}/events`);
-    sharedEventSource.onmessage = event => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === "index-updated" || data.type === "connected") {
-          serverEventListeners.forEach(listener => listener());
-        }
-      } catch {
-        /* ignore parse errors */
-      }
-    };
-    sharedEventSource.onerror = () => {
-      if (sharedEventSource?.readyState === EventSource.CLOSED) {
-        sharedEventSource = null;
-      }
-    };
-  } catch (err) {
-    console.error("❌ Error setting up SSE:", err);
-  }
-};
-
-const useServerEvents = (onEvent: () => void) => {
-  const onEventRef = useRef(onEvent);
-  useEffect(() => {
-    onEventRef.current = onEvent;
-  }, [onEvent]);
-
-  useEffect(() => {
-    ensureSharedEventSource();
-    const listener = () => onEventRef.current();
-    serverEventListeners.add(listener);
-    return () => {
-      serverEventListeners.delete(listener);
-      if (serverEventListeners.size === 0 && sharedEventSource) {
-        sharedEventSource.close();
-        sharedEventSource = null;
-      }
-    };
-  }, []);
-};
-
-const useRegressionTrees = () => {
-  const [data, setData] = useState<{ tree: Node | null; lastUpdate: number }>({ tree: null, lastUpdate: 0 });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchTrees = useCallback(async (options?: { silent?: boolean }) => {
-    try {
-      if (!options?.silent) {
-        setLoading(true);
-        setError(null);
-      }
-      const response = await fetch(`${VR_SERVER_URL}/regressions/tree`);
-      if (!response.ok) throw new Error("Failed to fetch tree");
-      const result = await response.json();
-      setData(result);
-    } catch (err) {
-      console.error("❌ Error fetching tree:", err);
-      if (!options?.silent) {
-        setError(err instanceof Error ? err.message : "Unknown error");
-      }
-    } finally {
-      if (!options?.silent) {
-        setLoading(false);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchTrees();
-  }, [fetchTrees]);
-
-  const handleServerEvent = useCallback(() => {
-    fetchTrees({ silent: true });
-  }, [fetchTrees]);
-
-  useServerEvents(handleServerEvent);
-
-  const rebuild = useCallback(async () => {
-    try {
-      setLoading(true);
-      await fetch(`${VR_SERVER_URL}/regressions/rebuild`, { method: "POST" });
-    } catch (err) {
-      console.error("❌ Error rebuilding index:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  return { ...data, loading, error, refresh: rebuild };
-};
-
-type FingerprintedFetchOptions = {
-  /** Pas de spinner / pas d’erreur UI (SSE, switch d’onglet). */
-  silent?: boolean;
-};
-
-/** Catalogue / orphelins — fetch avec anti-rebuild via fingerprint (pas de poll). */
-const useFingerprintedTree = <T extends { fingerprint: string; tree: Node | null }>(endpoint: string) => {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const fingerprintRef = useRef<string | null>(null);
-
-  const fetchTree = useCallback(
-    async (options?: FingerprintedFetchOptions) => {
-      try {
-        if (!options?.silent) {
-          setLoading(true);
-          setError(null);
-        }
-        const response = await fetch(`${VR_SERVER_URL}${endpoint}`);
-        if (!response.ok) throw new Error(`Failed to fetch ${endpoint}`);
-        const result = (await response.json()) as T;
-        // Anti-rebuild UI : fingerprint structurel identique → no-op (SSE, switch, bouton).
-        if (result.fingerprint === fingerprintRef.current) {
-          return;
-        }
-        fingerprintRef.current = result.fingerprint;
-        setData(result);
-      } catch (err) {
-        console.error(`❌ Error fetching ${endpoint}:`, err);
-        if (!options?.silent) {
-          setError(err instanceof Error ? err.message : "Unknown error");
-        }
-      } finally {
-        if (!options?.silent) {
-          setLoading(false);
-        }
-      }
-    },
-    [endpoint],
-  );
-
-  // Chargement initial (badges tabs) — pas de poll ensuite.
-  useEffect(() => {
-    fetchTree();
-  }, [fetchTree]);
-
-  const handleServerEvent = useCallback(() => {
-    fetchTree({ silent: true });
-  }, [fetchTree]);
-
-  useServerEvents(handleServerEvent);
-
-  const refresh = useCallback((options?: FingerprintedFetchOptions) => fetchTree(options), [fetchTree]);
-
-  return { data, loading, error, refresh };
-};
-
-const useAllStoriesTree = () => {
-  const { data, loading, error, refresh } = useFingerprintedTree<StoriesTreeResponse>("/regressions/stories-tree");
-  return {
-    tree: data?.tree ?? null,
-    fingerprint: data?.fingerprint,
-    storyCount: data?.storyCount ?? 0,
-    loading,
-    error,
-    refresh,
-  };
-};
-
-const useOrphansTree = () => {
-  const { data, loading, error, refresh } = useFingerprintedTree<OrphansTreeResponse>("/regressions/orphans-tree");
-  return {
-    tree: data?.tree ?? null,
-    fingerprint: data?.fingerprint,
-    countTotal: data?.countTotal ?? 0,
-    loading,
-    error,
-    refresh,
-  };
-};
-
-const useDeletedRegressions = () => {
-  const [deletedList, setDeletedList] = useState<DeletedItem[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  const fetchDeleted = useCallback(async (options?: { silent?: boolean }) => {
-    try {
-      if (!options?.silent) setLoading(true);
-      const response = await fetch(`${VR_SERVER_URL}/regressions/deleted`);
-      if (!response.ok) throw new Error("Failed to fetch deleted");
-      const result = await response.json();
-      setDeletedList(result.deleted || []);
-    } catch (err) {
-      console.error("❌ Error fetching deleted:", err);
-    } finally {
-      if (!options?.silent) setLoading(false);
-    }
-  }, []);
-
-  useServerEvents(() => {
-    fetchDeleted({ silent: true });
-  });
-
-  return { deletedList, loading, refresh: fetchDeleted };
-};
-
-const useValidatedRegressions = () => {
-  const [validatedList, setValidatedList] = useState<DeletedItem[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  const fetchValidated = useCallback(async (options?: { silent?: boolean }) => {
-    try {
-      if (!options?.silent) setLoading(true);
-      const response = await fetch(`${VR_SERVER_URL}/regressions/validated`);
-      if (!response.ok) throw new Error("Failed to fetch validated");
-      const result = await response.json();
-      setValidatedList(result.validated || []);
-    } catch (err) {
-      console.error("❌ Error fetching validated:", err);
-    } finally {
-      if (!options?.silent) setLoading(false);
-    }
-  }, []);
-
-  useServerEvents(() => {
-    fetchValidated({ silent: true });
-  });
-
-  return { validatedList, loading, refresh: fetchValidated };
-};
-
-const useCaptureErrors = () => {
-  const [errors, setErrors] = useState<CaptureErrorItem[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  const fetchErrors = useCallback(async (options?: { silent?: boolean }) => {
-    try {
-      if (!options?.silent) setLoading(true);
-      const response = await fetch(`${VR_SERVER_URL}/regressions/capture-errors`);
-      if (!response.ok) throw new Error("Failed to fetch capture errors");
-      const result = await response.json();
-      setErrors(Array.isArray(result.errors) ? result.errors : []);
-    } catch (err) {
-      console.error("❌ Error fetching capture errors:", err);
-    } finally {
-      if (!options?.silent) setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchErrors();
-  }, [fetchErrors]);
-
-  useServerEvents(() => {
-    fetchErrors({ silent: true });
-  });
-
-  return { errors, loading, refresh: fetchErrors };
-};
-
-const usePixelDiffMetrics = (diffPath: string | undefined, enabled: boolean) => {
-  const [countPixelDiff, setCountPixelDiff] = useState<number | null | undefined>(undefined);
-
-  useEffect(() => {
-    if (!enabled || !diffPath) {
-      setCountPixelDiff(undefined);
-      return;
-    }
-
-    let cancelled = false;
-    setCountPixelDiff(undefined);
-
-    fetch(`${VR_SERVER_URL}/regressions/metrics?path=${encodeURIComponent(diffPath)}`)
-      .then(res => {
-        if (!res.ok) throw new Error("Failed to fetch metrics");
-        return res.json();
-      })
-      .then(result => {
-        if (!cancelled) setCountPixelDiff(result.countPixelDiff ?? null);
-      })
-      .catch(err => {
-        console.error("❌ Error fetching pixel diff metrics:", err);
-        if (!cancelled) setCountPixelDiff(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [diffPath, enabled]);
-
-  return countPixelDiff;
-};
-
-const useDevicesConfig = (devicesProp?: DeviceDisplayConfig[]) => {
-  const hasProp = Boolean(devicesProp && devicesProp.length > 0);
-  const [devices, setDevices] = useState<DeviceDisplayConfig[]>(devicesProp ?? []);
-  const [loading, setLoading] = useState(!hasProp);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (devicesProp?.length) {
-      setDevices(devicesProp);
-      setLoading(false);
-      setError(null);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    fetch(`${VR_SERVER_URL}/regressions/config/devices`)
-      .then(res => {
-        if (!res.ok) {
-          throw new Error(
-            `Le serveur VR a répondu avec un statut ${res.status} (${res.statusText || "inconnu"}) pour la config devices.`,
-          );
-        }
-        return res.json();
-      })
-      .then(data => {
-        if (!cancelled && Array.isArray(data?.devices)) setDevices(data.devices);
-      })
-      .catch(err => {
-        if (!cancelled) {
-          let message: string;
-          if (err instanceof TypeError || String(err).includes("Failed to fetch")) {
-            message = `Impossible de contacter le serveur VR (${VR_SERVER_URL}). Vérifie qu'il est bien démarré (script "vr:server") et accessible depuis ta machine.`;
-          } else if (err instanceof Error) {
-            message = err.message;
-          } else {
-            message = String(err);
-          }
-          setError(message);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [devicesProp]);
-
-  return { devices, loading, error };
 };
 
 export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsProps) => {
@@ -469,32 +104,6 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     [leftTab],
   );
 
-  const handleTogglePath = useCallback(
-    (path: string) => {
-      setTabStates(prev => ({
-        ...prev,
-        [leftTab]: {
-          ...prev[leftTab],
-          selectedPaths: togglePaths(prev[leftTab].selectedPaths, [path]),
-        },
-      }));
-    },
-    [leftTab],
-  );
-
-  const handleTogglePaths = useCallback(
-    (paths: readonly string[]) => {
-      setTabStates(prev => ({
-        ...prev,
-        [leftTab]: {
-          ...prev[leftTab],
-          selectedPaths: togglePaths(prev[leftTab].selectedPaths, paths),
-        },
-      }));
-    },
-    [leftTab],
-  );
-
   const clearSelectedPaths = useCallback(() => {
     setTabStates(prev => ({
       ...prev,
@@ -513,12 +122,14 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   const {
     tree: allStoriesTree,
     storyCount,
+    fingerprint: allStoriesFingerprint,
     loading: allStoriesLoading,
     refresh: refreshAllStories,
   } = useAllStoriesTree();
   const {
     tree: orphansTree,
     countTotal: orphansCountTotal,
+    fingerprint: orphansFingerprint,
     loading: orphansLoading,
     refresh: refreshOrphans,
   } = useOrphansTree();
@@ -567,10 +178,10 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   const activeLoading =
     leftTab === "all-stories" ? allStoriesLoading : leftTab === "orphans" ? orphansLoading : regressionsLoading;
 
-  /** Bouton TreePanel : catalogue/orphelins = GET + fingerprint ; régressions = rebuild index. */
+  /** Bouton TreePanel : catalogue/orphelins = GET forcé ; régressions = rebuild index. */
   const refreshActive = useCallback(() => {
-    if (leftTab === "all-stories") return refreshAllStories();
-    if (leftTab === "orphans") return refreshOrphans();
+    if (leftTab === "all-stories") return refreshAllStories({ force: true });
+    if (leftTab === "orphans") return refreshOrphans({ force: true });
     return refreshRegressions();
   }, [leftTab, refreshAllStories, refreshOrphans, refreshRegressions]);
 
@@ -578,54 +189,102 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   const regressionsCount = regressionsTree?.countTotal ?? 0;
   const catalogCount = allStoriesTree?.countTotal ?? storyCount;
 
-  const leftTabs = useMemo<TabBarTab<TreePanelMode>[]>(() => {
-    const tabBullet = (value: number, color: ColorKey) => (
-      <Bullet
-        value={value}
-        color={color}
-      />
-    );
-
-    const tabs: TabBarTab<TreePanelMode>[] = [
+  const leftTabs = useMemo<TabBarTab<TreePanelMode>[]>(
+    () => [
       {
         key: "regressions",
         title: "Régressions",
-        badge: tabBullet(regressionsCount, regressionsCount > 0 ? "newTheme_danger" : "newTheme_primary"),
+        shortTitle: "VR",
+        bullet: { value: regressionsCount, color: regressionsCount > 0 ? "newTheme_danger" : "newTheme_primary" },
       },
       {
         key: "all-stories",
-        title: "Toutes les stories",
-        badge: tabBullet(catalogCount, "newTheme_base10"),
+        title: "Stories",
+        renderIcon: ({ selected }) => (
+          <StorybookIcon
+            color={selected ? colors.newTheme_textOnPrimary : STORYBOOK_BRAND_COLOR}
+            markColor={selected ? colors.newTheme_primary : "#FFFFFF"}
+          />
+        ),
+        bullet: { value: catalogCount, color: "newTheme_storybook" },
       },
-    ];
-
-    if (orphansCountTotal > 0) {
-      tabs.push({
+      {
         key: "orphans",
         title: "Orphelins",
-        badge: tabBullet(orphansCountTotal, "newTheme_warning"),
+        icon: { name: "link-off" },
+        bullet: { value: orphansCountTotal, color: "newTheme_warning" },
+        disabled: orphansCountTotal === 0,
+      },
+    ],
+    [regressionsCount, catalogCount, orphansCountTotal],
+  );
+
+  const allList = useMemo(() => flattenTreeVisual(filteredTree), [filteredTree]);
+
+  const handleTogglePath = useCallback(
+    (path: string) => {
+      const node = allList.find(n => n.path === path);
+      if (node && !isSelectableTreeFile(node)) return;
+      setTabStates(prev => ({
+        ...prev,
+        [leftTab]: {
+          ...prev[leftTab],
+          selectedPaths: togglePaths(prev[leftTab].selectedPaths, [path]),
+        },
+      }));
+    },
+    [leftTab, allList],
+  );
+
+  const handleTogglePaths = useCallback(
+    (paths: readonly string[]) => {
+      const selectablePaths = paths.filter(path => {
+        const node = allList.find(n => n.path === path);
+        return node ? isSelectableTreeFile(node) : false;
       });
-    }
+      if (selectablePaths.length === 0) return;
+      setTabStates(prev => ({
+        ...prev,
+        [leftTab]: {
+          ...prev[leftTab],
+          selectedPaths: togglePaths(prev[leftTab].selectedPaths, selectablePaths),
+        },
+      }));
+    },
+    [leftTab, allList],
+  );
 
-    return tabs;
-  }, [regressionsCount, catalogCount, orphansCountTotal]);
+  const handleSelectPaths = useCallback(
+    (paths: readonly string[]) => {
+      const selectablePaths = paths.filter(path => {
+        const node = allList.find(n => n.path === path);
+        return node ? isSelectableTreeFile(node) : false;
+      });
+      if (selectablePaths.length === 0) return;
+      setTabStates(prev => {
+        const next = new Set(prev[leftTab].selectedPaths);
+        for (const path of selectablePaths) next.add(path);
+        return {
+          ...prev,
+          [leftTab]: {
+            ...prev[leftTab],
+            multiSelectMode: true,
+            selectedPaths: next,
+          },
+        };
+      });
+    },
+    [leftTab, allList],
+  );
 
-  const flattenTree = useCallback((node: Node | null): Node[] => {
-    if (!node) return [];
-    if (node.type === "file") return [node];
-    return Object.values(node.children ?? {}).flatMap(flattenTree);
-  }, []);
-
-  const allList = useMemo(() => flattenTree(filteredTree), [filteredTree, flattenTree]);
-
-  /** Élaguer les paths absents de l’arbre filtré (refresh SSE / filtre). */
+  /** Élaguer les paths absents de l’arbre filtré (refresh SSE / filtre) ou non sélectionnables (ignore-vr). */
   useEffect(() => {
     if (selectedPaths.size === 0) return;
-    const visible = new Set(allList.map(n => n.path));
+    const visibleSelectable = new Set(allList.filter(isSelectableTreeFile).map(n => n.path));
     let changed = false;
     const next = new Set<string>();
     for (const path of selectedPaths) {
-      if (visible.has(path)) next.add(path);
+      if (visibleSelectable.has(path)) next.add(path);
       else changed = true;
     }
     if (!changed) return;
@@ -654,6 +313,13 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
     () => currentStory?.imagePaths,
     [currentStory],
   );
+
+  const contentKey = useMemo(() => {
+    const path = selectedPath ?? "";
+    if (leftTab === "all-stories") return `${path}-${allStoriesFingerprint ?? ""}`;
+    if (leftTab === "orphans") return `${path}-${orphansFingerprint ?? ""}`;
+    return `${path}-${lastUpdate}`;
+  }, [selectedPath, leftTab, allStoriesFingerprint, orphansFingerprint, lastUpdate]);
 
   const goTo = useCallback(
     (node: Node) => {
@@ -799,10 +465,10 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
 
   const [regeneratingPaths, setRegeneratingPaths] = useState<Set<string>>(new Set());
 
-  /** Fichiers de la sélection multi-select (arbre filtré courant). */
+  /** Fichiers sélectionnables de la sélection multi-select (hors ignore-vr). */
   const getSelectedNodes = useCallback((): Node[] => {
     if (selectedPaths.size === 0) return [];
-    return allList.filter(n => selectedPaths.has(n.path));
+    return allList.filter(n => selectedPaths.has(n.path) && isSelectableTreeFile(n));
   }, [allList, selectedPaths]);
 
   const getSelectedImagePaths = useCallback((): StoryScreenshotsPath[] => {
@@ -819,7 +485,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
 
   const handleCompareStoryFromTree = useCallback(
     async (node: Node) => {
-      if (!node.storyId || !node.deviceName) return;
+      if (!node.storyId || !node.deviceName || node.ignored) return;
       const path = node.path;
       const lastSlash = path.lastIndexOf("/");
       const componentDir = lastSlash > 0 ? path.slice(0, lastSlash) : undefined;
@@ -899,7 +565,7 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
       });
       return;
     }
-    if (!currentStory) return;
+    if (!currentStory || currentStory.ignored) return;
     void handleCompareStoryFromTree(currentStory);
   }, [multiSelectMode, getSelectedNodes, runBulk, handleCompareSelected, currentStory, handleCompareStoryFromTree]);
 
@@ -930,22 +596,12 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
       {
         key: "rejected",
         title: "Refusés",
-        badge: (
-          <Bullet
-            value={deletedList.length}
-            color="newTheme_danger"
-          />
-        ),
+        bullet: { value: deletedList.length, color: "newTheme_danger" },
       },
       {
         key: "validated",
         title: "Validés",
-        badge: (
-          <Bullet
-            value={validatedList.length}
-            color="newTheme_primary"
-          />
-        ),
+        bullet: { value: validatedList.length, color: "newTheme_primary" },
       },
     ],
     [deletedList.length, validatedList.length],
@@ -984,86 +640,88 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   return (
     <DeviceConfigProvider deviceConfigs={devices}>
       <>
-        <Box
-          flex={1}
-          flexDirection="row"
-          backgroundColor="newTheme_background"
-        >
-          <Box width={300}>
-            <Box px="m">
-              <TabBar
-                tabs={leftTabs}
-                selectedTabKey={leftTab}
-                onSelectedTabKey={setLeftTab}
+        <DraggableSplitView
+          left={
+            <>
+              <Box px="m">
+                <TabBar
+                  tabs={leftTabs}
+                  selectedTabKey={leftTab}
+                  onSelectedTabKey={setLeftTab}
+                  compressed
+                />
+              </Box>
+              <TreePanel
+                tree={activeTree}
+                loading={activeLoading}
+                onRefresh={refreshActive}
+                onNodeClick={goTo}
+                currentStory={currentStory}
+                onCompareStoryNode={leftTab === "regressions" ? handleCompareStoryFromTree : undefined}
+                regeneratingPaths={regeneratingPaths}
+                mode={leftTab}
+                searchQuery={searchQuery}
+                onSearchQuery={setSearchQuery}
+                statusFilter={statusFilter}
+                onStatusFilter={setStatusFilter}
+                multiSelectMode={multiSelectMode}
+                onMultiSelectModeChange={setMultiSelectMode}
+                selectedPaths={selectedPaths}
+                onTogglePath={handleTogglePath}
+                onTogglePaths={handleTogglePaths}
+                onSelectPaths={handleSelectPaths}
+              />
+            </>
+          }
+          right={
+            <Box
+              flex={1}
+              p="m"
+            >
+              <VisualRegressionTopBar
+                mode={leftTab}
+                currentStory={currentStory}
+                storyType={storyType}
+                treeType={treeType}
+                showHeatmap={showHeatmap}
+                countPixelDiff={countPixelDiff}
+                storyScreenshotsPath={storyScreenshotsPath}
+                hasItems={allList.length > 0}
+                bulkLoading={bulkLoading}
+                multiSelectMode={multiSelectMode}
+                selectionCount={selectedPaths.size}
+                currentStoryIgnored={Boolean(currentStory?.ignored)}
+                onPrev={goPrev}
+                onNext={goNext}
+                onValid={handleTopBarValid}
+                onDelete={handleTopBarDelete}
+                onRegenerate={handleTopBarRegenerate}
+                onValidAll={() => runBulk(handleValidAll)}
+                onDeleteAll={() => runBulk(handleDeleteAll)}
+                onShowDeleted={() => setShowDeleted(true)}
+                onToggleHeatmap={setShowHeatmap}
+                onOpenCompareModal={() => setShowCompareModal(true)}
+                onOpenCaptureErrorsModal={() => setShowCaptureErrorsModal(true)}
+                captureErrorsCount={captureErrors.length}
+              />
+              <ContentPanel
+                mode={leftTab}
+                tree={filteredTree}
+                storyType={storyType}
+                treeType={treeType}
+                showHeatmap={showHeatmap}
+                imageUrls={imageUrls}
+                isRegenerating={currentStory ? regeneratingPaths.has(currentStory.path) : false}
+                storyId={currentStory?.storyId}
+                deviceName={currentStory?.deviceName}
+                fetchError={leftTab === "regressions" ? treeError : null}
+                contentKey={contentKey}
+                ignored={Boolean(currentStory?.ignored)}
+                onGenerate={leftTab === "all-stories" ? handleGenerateFromCatalog : undefined}
               />
             </Box>
-            <TreePanel
-              tree={activeTree}
-              loading={activeLoading}
-              onRefresh={refreshActive}
-              onNodeClick={goTo}
-              currentStory={currentStory}
-              onCompareStoryNode={leftTab === "regressions" ? handleCompareStoryFromTree : undefined}
-              regeneratingPaths={regeneratingPaths}
-              mode={leftTab}
-              searchQuery={searchQuery}
-              onSearchQuery={setSearchQuery}
-              statusFilter={statusFilter}
-              onStatusFilter={setStatusFilter}
-              multiSelectMode={multiSelectMode}
-              onMultiSelectModeChange={setMultiSelectMode}
-              selectedPaths={selectedPaths}
-              onTogglePath={handleTogglePath}
-              onTogglePaths={handleTogglePaths}
-            />
-          </Box>
-          <Divider orientation="vertical" />
-          <Box
-            flex={1}
-            p="m"
-          >
-            <VisualRegressionTopBar
-              mode={leftTab}
-              currentStory={currentStory}
-              storyType={storyType}
-              treeType={treeType}
-              showHeatmap={showHeatmap}
-              countPixelDiff={countPixelDiff}
-              storyScreenshotsPath={storyScreenshotsPath}
-              hasItems={allList.length > 0}
-              bulkLoading={bulkLoading}
-              multiSelectMode={multiSelectMode}
-              selectionCount={selectedPaths.size}
-              onPrev={goPrev}
-              onNext={goNext}
-              onValid={handleTopBarValid}
-              onDelete={handleTopBarDelete}
-              onRegenerate={handleTopBarRegenerate}
-              onValidAll={() => runBulk(handleValidAll)}
-              onDeleteAll={() => runBulk(handleDeleteAll)}
-              onShowDeleted={() => setShowDeleted(true)}
-              onToggleHeatmap={setShowHeatmap}
-              onOpenCompareModal={() => setShowCompareModal(true)}
-              onOpenCaptureErrorsModal={() => setShowCaptureErrorsModal(true)}
-              captureErrorsCount={captureErrors.length}
-            />
-            <ContentPanel
-              mode={leftTab}
-              tree={filteredTree}
-              storyType={storyType}
-              treeType={treeType}
-              showHeatmap={showHeatmap}
-              imageUrls={imageUrls}
-              isRegenerating={currentStory ? regeneratingPaths.has(currentStory.path) : false}
-              storyId={currentStory?.storyId}
-              deviceName={currentStory?.deviceName}
-              fetchError={leftTab === "regressions" ? treeError : null}
-              contentKey={`${selectedPath ?? ""}-${lastUpdate}`}
-              ignored={Boolean(currentStory?.ignored)}
-              onGenerate={leftTab === "all-stories" ? handleGenerateFromCatalog : undefined}
-            />
-          </Box>
-        </Box>
+          }
+        />
         <Modal
           isOpen={showDeleted}
           onClose={() => {

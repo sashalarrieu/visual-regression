@@ -8,6 +8,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:-1.61.1}
     init: true
     volumes:
       # Code du projet hôte (stories, .storybook, vr.config.cjs, baselines).
@@ -24,7 +26,8 @@ services:
       VR_HOST_PROJECT_ROOT: "${VR_HOST_PROJECT_ROOT:-}"
       VR_COMPOSE_PROJECT_NAME: "${VR_COMPOSE_PROJECT_NAME:-}"
       VR_CAPTURE_BACKEND: local
-      VR_STORYBOOK_MODE: "${VR_STORYBOOK_MODE:-}"
+      # Résolu hôte : VR_STORYBOOK_MODE → launcher.storybookMode → défaut `dev`.
+      VR_STORYBOOK_MODE: "${VR_STORYBOOK_MODE:-dev}"
       # Transmis depuis l'hôte (ex. monorepo : apps/storybook/.storybook).
       SBCONFIG_CONFIG_DIR: "${SBCONFIG_CONFIG_DIR:-}"
       # Auth npm privé (packages @scope restreints) — complémentaire au mount ~/.npmrc.

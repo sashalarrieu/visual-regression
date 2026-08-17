@@ -237,7 +237,7 @@ export type VrConfig = {
   };
   launcher: {
     runInitialCompare: boolean;
-    /** Mode Storybook explicite ; omis = auto (static en Docker + nextjs-vite). */
+    /** Mode Storybook explicite ; omis = `dev` (HMR). CI : `static`. */
     storybookMode?: VrStorybookMode;
     /** Force rebuild storybook-static avant capture. */
     forceStaticRebuild: boolean;

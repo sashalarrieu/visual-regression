@@ -1,17 +1,20 @@
 import type { Node } from "../types/types";
 
+import { flattenTreeVisual } from "./tree-order";
+
 export type SelectionState = "none" | "partial" | "all";
 
-/** Collecte récursivement les paths des nœuds fichier sous `node` (fichier inclus). */
-export const collectFilePaths = (node: Node): string[] => {
-  if (node.type === "file") return [node.path];
+/** Fichier sélectionnable en multi-select (hors stories ignore-vr). */
+export const isSelectableTreeFile = (node: Node): boolean => node.type === "file" && !node.ignored;
 
-  const paths: string[] = [];
-  for (const child of Object.values(node.children ?? {})) {
-    paths.push(...collectFilePaths(child));
-  }
-  return paths;
-};
+/** Collecte récursivement les paths des nœuds fichier sous `node` (fichier inclus), ordre visuel. */
+export const collectFilePaths = (node: Node): string[] => flattenTreeVisual(node).map(file => file.path);
+
+/** Comme collectFilePaths, sans les fichiers tagués ignore-vr (catalogue). */
+export const collectSelectableFilePaths = (node: Node): string[] =>
+  flattenTreeVisual(node)
+    .filter(isSelectableTreeFile)
+    .map(file => file.path);
 
 /** État de sélection pour un groupe de paths fichier. */
 export const selectionState = (paths: readonly string[], selected: ReadonlySet<string>): SelectionState => {

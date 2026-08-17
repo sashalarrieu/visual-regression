@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList } from "react-native";
 
 import { Box } from "../atoms/Box";
-import { Bullet } from "../atoms/Bullet";
 import { Button } from "../atoms/Button";
 import { EndOfList } from "../atoms/EndOfList";
 import { Modal } from "../atoms/Modal";
@@ -132,12 +131,7 @@ export const CaptureErrorsModal: React.FC<CaptureErrorsModalProps> = ({
         key: "all",
         title: "Tous",
         icon: { name: "grid-view" },
-        badge: (
-          <Bullet
-            value={deviceCounts.get("all") || 0}
-            color="newTheme_base10"
-          />
-        ),
+        bullet: { value: deviceCounts.get("all") || 0, color: "newTheme_base10" },
       },
       ...configuredDevices.map(device => {
         const deviceStyle = getDeviceStyle(device);
@@ -146,12 +140,7 @@ export const CaptureErrorsModal: React.FC<CaptureErrorsModalProps> = ({
           key: device,
           title: getDeviceDisplayName(device),
           icon: { name: deviceStyle.icon, fill: deviceStyle.color },
-          badge: (
-            <Bullet
-              value={count}
-              color={deviceStyle.color as ColorKey}
-            />
-          ),
+          bullet: { value: count, color: deviceStyle.color as ColorKey },
         };
       }),
     ];
@@ -241,7 +230,7 @@ export const CaptureErrorsModal: React.FC<CaptureErrorsModalProps> = ({
                 variant="paragraphe_semiBold"
                 color="newTheme_textOnSurface"
               >
-                Régénérer par device
+                Générer par device
               </Typo>
               <TabBar
                 tabs={deviceTabs}
@@ -285,7 +274,7 @@ export const CaptureErrorsModal: React.FC<CaptureErrorsModalProps> = ({
         buttons: {
           left: { title: { text: "Annuler" }, onPress: onClose, disabled: loading, color: "base" },
           right: {
-            title: { text: "Régénérer la sélection" },
+            title: { text: "Générer la sélection" },
             onPress: handleCompareSelected,
             disabled: selectedItems.size === 0 || loading,
             color: "primary",

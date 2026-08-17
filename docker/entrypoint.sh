@@ -51,9 +51,12 @@ install_deps() {
   set -e
   if [ "$install_status" -ne 0 ]; then
     echo "❌ [vr-docker] Installation des dépendances échouée (code $install_status)."
-    echo "   Si le projet utilise des packages npm privés (@scope/…), montez l'auth hôte :"
-    echo "   - fichier ~/.npmrc (monté automatiquement par yarn vr), ou"
-    echo "   - export NPM_TOKEN=… / NODE_AUTH_TOKEN=… avant yarn vr"
+    echo "   Causes fréquentes :"
+    echo "   - yarn.lock / pnpm-lock désynchronisé de package.json (ex. file: ↔ version npm)."
+    echo "     Sur l'hôte, à la racine du projet : yarn install   (ou pnpm install)"
+    echo "     puis relancer yarn vr. Les deux fichiers doivent être commités ensemble."
+    echo "   - packages npm privés (@scope/…) : ~/.npmrc (monté automatiquement par yarn vr),"
+    echo "     ou export NPM_TOKEN=… / NODE_AUTH_TOKEN=… avant yarn vr"
     exit "$install_status"
   fi
 }
@@ -86,6 +89,13 @@ fi
 
 # Sous-commande CLI à lancer : daemon (dev, défaut) ou oneshot (CI).
 CMD="${VR_ENTRYPOINT_CMD:-capture-daemon}"
+
+# Mode Storybook : même hiérarchie que l'hôte (env VR_* → vr.config.cjs → défauts).
+# Le launcher pose VR_STORYBOOK_MODE avant compose ; on ne l'écrase pas ici.
+# CI oneshot (docker-compose.ci.yml) exporte VR_STORYBOOK_MODE=static.
+if [ -n "${VR_STORYBOOK_MODE:-}" ]; then
+  echo "📚 [vr-docker] Storybook mode=${VR_STORYBOOK_MODE}"
+fi
 
 # Sync des sources file: dans le package installé (deps Linux restent dans
 # node_modules du projet). Exécuter directement /visual-regression échoue car

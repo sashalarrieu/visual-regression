@@ -38,6 +38,36 @@ export const resolveStoryPlayFunction = (context: StoryContextLike): VrStoryPlay
   return typeof playFn === "function" ? playFn : undefined;
 };
 
+export type VrStoryPlayRunnerStatus = "pending" | "success" | "error";
+
+/**
+ * Rejouer `play()` uniquement si Storybook ne l'a pas réellement exécuté
+ * (static no-op historique). Un second play sur un état déjà muté fait échouer
+ * les assertions (spies, findBy* d'éléments disparus).
+ */
+export const shouldReplayVrStoryPlay = ({
+  hasPortal,
+  playStarted,
+}: {
+  hasPortal: boolean;
+  playStarted: boolean;
+}): boolean => {
+  if (hasPortal) return false;
+  if (playStarted) return false;
+  return true;
+};
+
+export const formatVrPlayError = (error: unknown): string => {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error) return error;
+  if (error == null) return "";
+  try {
+    return String(error);
+  } catch {
+    return "";
+  }
+};
+
 /** Exécute `play()` avec le contexte Storybook complet (playFunction attend le contexte entier). */
 export const runVrStoryPlay = async (context: StoryContextLike): Promise<void> => {
   const playFn = resolveStoryPlayFunction(context);

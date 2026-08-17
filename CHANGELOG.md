@@ -4,9 +4,62 @@ Ce projet suit le format [Keep a Changelog](https://keepachangelog.com/fr/1.1.2/
 
 ## [Unreleased]
 
+### Added
+
+- Arbre UI : Maj+clic pour sélectionner une plage de stories, Option+clic (Alt) pour ouvrir/fermer récursivement un accordéon, bouton tout déplier / tout replier.
+
+### Fixed
+
+- Arbre UI : Option+clic (macOS, équivalent Alt) ouvre/ferme récursivement un accordéon — React Native Web ignorait `onPress` si `altKey`.
+- Arbre UI : les stories d’un dossier s’affichent avant les sous-dossiers.
+- Sidecar Docker : `launcher.storybookMode` / `VR_STORYBOOK_MODE` sont respectés (env → `vr.config.cjs` → défaut). L’entrypoint n’écrase plus le mode en HMR.
+- `yarn vr` lance Storybook **dev (HMR)** par défaut, comme `yarn storybook` : plus de snapshot statique figé. Un sidecar déjà en mode static est recréé. En mode static (CI), le rebuild se base sur une empreinte du **contenu** des stories, pas le mtime Docker.
+- Sidecar Docker : l’image Playwright suit la version **résolue dans le lockfile du projet hôte** pour `@setshao/visual-regression` (pas le Playwright Vitest hoisté). Rebuild auto si le tag `vr-capture:<version>` change.
+- Storybook du sidecar : `@storybook/addon-vitest` est retiré (`VR_DOCKER=1`) — plus d’erreur `UniversalStoreFollowerTimeoutError` (`storybook/test`).
+- Capture : Reanimated web est figé via `prefers-reduced-motion: reduce` (contexte Playwright + `emulateMedia` avant navigation). Le decorator Storybook ne réimporte plus Reanimated (Vite / FlatList). Opt-out inchangé : tag `live-animation-vr`.
+- Capture : l'iframe pose `embed=true` pour couper l'autoplay Storybook. `play()` s'exécute alors dans le decorator (après les `useEffect` de sync props→state) — plus d'onglet / sélection réinitialisés au screenshot.
+
+## [1.2.0] - 2026-08-07
+
+### Added
+
+- UI : trois onglets d’arbre (régressions, catalogue Storybook, orphelins conditionnels) avec search et filtres de statut.
+- Endpoints `GET /regressions/stories-tree` et `GET /regressions/orphans-tree`.
+- Multi-sélection dans l’arbre avec actions bulk (validate / delete / compare) et endpoints `POST /validate/selected`, `POST /delete/selected`.
+- Modal d’erreurs de capture (`GET /regressions/capture-errors`) pour régénérer cas par cas ou en masse.
+- Auth npm privé dans le sidecar Docker (`NPM_TOKEN` / `NODE_AUTH_TOKEN`, en complément du mount `~/.npmrc`).
+
 ### Fixed
 
 - Capture VR : les modals / portals rendus hors de `#storybook-root` (backdrop visible, panneau hors crop) sont inclus via un clip élargi (union root ∪ overlays).
+- Docs Storybook : focus patché, navigation validate/refuse et compteurs px.
+- Decorator preview VR allégé (retrait SafeArea / GestureHandler).
+
+## [1.1.5] - 2026-07-20
+
+### Fixed
+
+- Sidecar Docker et captures UI : priorisation des singletons React depuis l’hôte dans Metro, résumé VR après les batches UI, logs timeout sans doublon.
+- Restauration des dépendances optionnelles dans le sidecar CI (bindings natifs Storybook / `oxc-parser` sous Linux).
+
+## [1.1.4] - 2026-07-20
+
+### Fixed
+
+- Conflit `lru-cache` hoisté qui cassait Metro/Babel : résolution locale des deps du package VR et pin `lru-cache@5` / `yallist`.
+
+## [1.1.3] - 2026-07-20
+
+### Added
+
+- Ports sidecar dynamiques, `concurrencyDev`, CLI `kill-ports` / `validate-delete`.
+- Logs Docker optionnels (`docker.showLogs`), export `@setshao/visual-regression/types`, volumes `node_modules` masqués pour les deps `file:`.
+- Ouverture Storybook/Expo sans doublon d’onglets et résumé compare enrichi (décompte + durée).
+
+### Fixed
+
+- Auto-démarrage de Storybook dans `vr:test-validation` quand l’URL résolue est absente.
+- Synchronisation de `yarn.lock` après bump reanimated / worklets / semver (CI `frozen-lockfile`).
 
 ## [1.1.2] - 2026-07-15
 

@@ -9,6 +9,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:-1.61.1}
     init: true
     volumes:
       - "${VR_PROJECT_ROOT:-..}:/work"

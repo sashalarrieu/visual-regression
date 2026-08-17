@@ -14,6 +14,7 @@ import { CAPTURE_DAEMON_PORT, STORYBOOK_PORT } from "../constants/constants";
 import { getScriptDir } from "./node";
 import { resolveVrConfig, VR_CONFIG_FILENAME } from "./vr-config";
 import { getComposeProjectNameForRoot, getHostSidecarPorts, parseUrlPort } from "./vr-sidecar-ports";
+import { resolveStorybookModeForCapture } from "./vr-storybook-runtime";
 
 const SCRIPT_DIR = getScriptDir(import.meta);
 /** Racine du package (src/utils → ../..). */
@@ -59,12 +60,120 @@ export const getComposeProjectName = (projectRoot: string): string => getCompose
 /** Nom legacy (avant fingerprint par projet) — pour `compose down` de sidecars orphelins. */
 export const LEGACY_COMPOSE_PROJECT_NAME = "docker";
 
+const DEFAULT_PLAYWRIGHT_VERSION = "1.61.1";
+const PLAYWRIGHT_VERSION_RE = /^\d+\.\d+\.\d+$/;
+
 /** Image Docker par défaut (override VR_DOCKER_IMAGE). */
-export const getDockerImage = (): string => process.env.VR_DOCKER_IMAGE || "vr-capture:1.61.1";
+export const getDockerImage = (): string =>
+  process.env.VR_DOCKER_IMAGE || `vr-capture:${process.env.PLAYWRIGHT_VERSION || DEFAULT_PLAYWRIGHT_VERSION}`;
 
 /** Image de base Playwright pour builder le sidecar (override VR_PLAYWRIGHT_IMAGE). */
 export const getPlaywrightBaseImage = (): string =>
-  process.env.VR_PLAYWRIGHT_IMAGE || "mcr.microsoft.com/playwright:v1.61.1-jammy";
+  process.env.VR_PLAYWRIGHT_IMAGE ||
+  `mcr.microsoft.com/playwright:v${process.env.PLAYWRIGHT_VERSION || DEFAULT_PLAYWRIGHT_VERSION}-jammy`;
+
+export const vrCaptureImageForVersion = (version: string): string => `vr-capture:${version}`;
+
+export const playwrightBaseImageForVersion = (version: string): string =>
+  `mcr.microsoft.com/playwright:v${version}-jammy`;
+
+const readJsonVersion = (pkgPath: string): string | null => {
+  if (!existsSync(pkgPath)) return null;
+  try {
+    const version = (JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string }).version;
+    return typeof version === "string" && PLAYWRIGHT_VERSION_RE.test(version) ? version : null;
+  } catch {
+    return null;
+  }
+};
+
+const readPlaywrightSpecifier = (pkgPath: string): string | null => {
+  if (!existsSync(pkgPath)) return null;
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const spec = pkg.dependencies?.playwright ?? pkg.devDependencies?.playwright;
+    return typeof spec === "string" && spec.length > 0 ? spec : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Version résolue dans un yarn.lock classic (entrée `playwright@<specifier>`).
+ * On ne lit pas `node_modules/playwright` à la racine hôte : le projet peut
+ * avoir un autre Playwright (Vitest) que celui de @setshao/visual-regression.
+ */
+export const resolveYarnLockPlaywrightVersion = (lockfile: string, specifier?: string): string | null => {
+  const specPattern = specifier ? specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "[^:\\n]+";
+  const re = new RegExp(
+    `^"?playwright@${specPattern}"?:\\r?\\n(?:  [^\\n]*\\r?\\n)*?  version "(\\d+\\.\\d+\\.\\d+)"`,
+    "m",
+  );
+  return lockfile.match(re)?.[1] ?? null;
+};
+
+/**
+ * Version Playwright utilisée par le moteur de capture (pas le Playwright Vitest hôte).
+ */
+export const resolveCapturePlaywrightVersion = (projectRoot: string): string => {
+  const lockPath = path.join(projectRoot, "yarn.lock");
+  const copySpec = readPlaywrightSpecifier(
+    path.join(projectRoot, "node_modules", "@setshao", "visual-regression", "package.json"),
+  );
+  const liveSpec = readPlaywrightSpecifier(path.join(PACKAGE_ROOT, "package.json"));
+
+  if (existsSync(lockPath)) {
+    try {
+      const lock = readFileSync(lockPath, "utf8");
+      // Docker installe depuis yarn.lock : ne pas utiliser le Playwright Vitest hôte (souvent plus vieux).
+      for (const spec of [copySpec, liveSpec, "^1.61.1"]) {
+        if (!spec) continue;
+        const fromLock = resolveYarnLockPlaywrightVersion(lock, spec);
+        if (fromLock) return fromLock;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const nested = readJsonVersion(
+    path.join(
+      projectRoot,
+      "node_modules",
+      "@setshao",
+      "visual-regression",
+      "node_modules",
+      "playwright",
+      "package.json",
+    ),
+  );
+  if (nested) return nested;
+
+  return (
+    readJsonVersion(path.join(PACKAGE_ROOT, "node_modules", "playwright", "package.json")) ?? DEFAULT_PLAYWRIGHT_VERSION
+  );
+};
+
+/**
+ * Aligne VR_DOCKER_IMAGE / VR_PLAYWRIGHT_IMAGE sur le Playwright de capture.
+ * N'écrase pas un override explicite (env déjà posé).
+ */
+export const applyPlaywrightDockerAlignment = (projectRoot: string): void => {
+  const version = resolveCapturePlaywrightVersion(projectRoot);
+  if (!process.env.PLAYWRIGHT_VERSION) {
+    process.env.PLAYWRIGHT_VERSION = version;
+  }
+  if (!process.env.VR_PLAYWRIGHT_IMAGE) {
+    process.env.VR_PLAYWRIGHT_IMAGE = playwrightBaseImageForVersion(process.env.PLAYWRIGHT_VERSION);
+  }
+  if (!process.env.VR_DOCKER_IMAGE) {
+    process.env.VR_DOCKER_IMAGE = vrCaptureImageForVersion(process.env.PLAYWRIGHT_VERSION);
+  }
+  console.log(`🐳 [vr-docker] Playwright capture ${process.env.PLAYWRIGHT_VERSION} → ${process.env.VR_DOCKER_IMAGE}`);
+};
 
 /** true si la CLI docker est installée. */
 export const isDockerCliAvailable = (): boolean => {
@@ -124,6 +233,42 @@ export const getLinkedFileDependencyMounts = (projectRoot: string): DockerVolume
   }
 
   return mounts;
+};
+
+const VR_PACKAGE_NAME = "@setshao/visual-regression";
+
+/**
+ * Yarn classic : la clé du lockfile est `"name@specifier":`.
+ * Détecte le cas file: ↔ version npm (frozen-lockfile échoue dans le sidecar).
+ */
+export const findYarnLockSpecifierMismatch = (
+  packageJson: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> },
+  yarnLock: string,
+  packageName = VR_PACKAGE_NAME,
+): string | null => {
+  const spec = packageJson.dependencies?.[packageName] ?? packageJson.devDependencies?.[packageName];
+  if (typeof spec !== "string" || spec.length === 0) return null;
+  const key = `"${packageName}@${spec}":`;
+  if (yarnLock.includes(key)) return null;
+  return (
+    `${packageName} dans package.json (« ${spec} ») est absent de yarn.lock. ` +
+    `Exécutez yarn install à la racine du projet, puis relancez yarn vr.`
+  );
+};
+
+const yarnLockIsOutOfSync = (projectRoot: string): string | null => {
+  const pkgPath = path.join(projectRoot, "package.json");
+  const lockPath = path.join(projectRoot, "yarn.lock");
+  if (!existsSync(pkgPath) || !existsSync(lockPath)) return null;
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    return findYarnLockSpecifierMismatch(pkg, readFileSync(lockPath, "utf8"));
+  } catch {
+    return null;
+  }
 };
 
 /**
@@ -282,9 +427,11 @@ const composeEnv = (projectRoot: string): NodeJS.ProcessEnv => {
     VR_COMPOSE_PROJECT_NAME: composeProjectName,
     VR_HOST_STORYBOOK_PORT: String(hostPorts.storybookPort),
     VR_HOST_DAEMON_PORT: String(hostPorts.daemonPort),
-    VR_STORYBOOK_MODE: process.env.VR_STORYBOOK_MODE || "",
+    VR_STORYBOOK_MODE: resolveStorybookModeForCapture(projectRoot),
     SBCONFIG_CONFIG_DIR: toDockerProjectPath(projectRoot, process.env.SBCONFIG_CONFIG_DIR || ""),
     VR_DOCKER_IMAGE: getDockerImage(),
+    VR_PLAYWRIGHT_IMAGE: getPlaywrightBaseImage(),
+    PLAYWRIGHT_VERSION: process.env.PLAYWRIGHT_VERSION || DEFAULT_PLAYWRIGHT_VERSION,
     COMPOSE_PROJECT_NAME: composeProjectName,
   };
 };
@@ -385,7 +532,13 @@ const applyResolvedDockerEnv = (projectRoot: string): void => {
 
 /** Démarre le sidecar en arrière-plan (build automatique au 1er lancement si besoin). */
 export const composeUp = async (projectRoot: string, forceBuild = false): Promise<number> => {
+  const lockMismatch = yarnLockIsOutOfSync(projectRoot);
+  if (lockMismatch) {
+    console.error(`❌ [vr-docker] ${lockMismatch}`);
+    return 1;
+  }
   invalidateDockerDepsCacheIfLinkedPackagesChanged(projectRoot);
+  applyPlaywrightDockerAlignment(projectRoot);
   applyResolvedDockerEnv(projectRoot);
 
   if (forceBuild) {

@@ -33,6 +33,16 @@ describe("isCaptureDaemonReusableForProject", () => {
     };
     expect(isCaptureDaemonReusableForProject(health, projectRoot)).toBe(true);
   });
+
+  it("refuse un sidecar dont le mode Storybook diffère", () => {
+    const health: CaptureDaemonHealth = {
+      ready: true,
+      mode: "static",
+      hostProjectRoot: projectRoot,
+    };
+    expect(isCaptureDaemonReusableForProject(health, projectRoot, "dev")).toBe(false);
+    expect(isCaptureDaemonReusableForProject(health, projectRoot, "static")).toBe(true);
+  });
 });
 
 describe("getComposeProjectName", () => {

@@ -5,6 +5,7 @@ import type { Node } from "../types/types";
 import {
   buildStoriesTreeFromEntries,
   resolvePublicBaselinePath,
+  resolveSourceBaselinePath,
   type StorybookIndexEntry,
 } from "./vr-server-stories-tree";
 
@@ -92,6 +93,37 @@ describe("buildStoriesTreeFromEntries", () => {
     expect(result.tree?.countMissing).toBe(2);
   });
 
+  it("détecte une baseline source validée (hors public/Screenshots)", () => {
+    const sourceBaseline = resolveSourceBaselinePath(
+      "/tmp/project",
+      "src/atoms/Button",
+      "desktop-fhd",
+      "atoms-button--color",
+    );
+
+    const result = buildStoriesTreeFromEntries({
+      entries: entries([
+        {
+          id: "atoms-button--color",
+          type: "story",
+          importPath: "src/atoms/Button/Button.stories.tsx",
+          tags: [],
+        },
+      ]),
+      deviceNames: ["desktop-fhd"],
+      publicScreenshotsDir: publicDir,
+      projectRoot: "/tmp/project",
+      baselineExists: abs => abs === sourceBaseline,
+      vrServerUrl: "http://localhost:2805",
+    });
+
+    const file = collectFiles(result.tree)[0];
+    expect(file?.storyType).toBe("baseline");
+    expect(file?.imageUrls?.original).toBe(
+      "http://localhost:2805/project-file/src/atoms/Button/Screenshots/desktop-fhd-atoms-button--color.screenshot.png",
+    );
+  });
+
   it("fingerprint stable si structure inchangée, change si baseline apparaît", () => {
     const input = {
       entries: entries([
@@ -112,6 +144,52 @@ describe("buildStoriesTreeFromEntries", () => {
 
     const c = buildStoriesTreeFromEntries({ ...input, baselineExists: () => true });
     expect(c.fingerprint).not.toBe(a.fingerprint);
+  });
+
+  it("place les stories (fichiers) avant les sous-dossiers d’un même parent", () => {
+    const result = buildStoriesTreeFromEntries({
+      entries: entries([
+        {
+          id: "comp-a--story-one",
+          type: "story",
+          importPath: "src/A/A.stories.tsx",
+          tags: [],
+        },
+        {
+          id: "comp-a--story-two",
+          type: "story",
+          importPath: "src/A/A.stories.tsx",
+          tags: [],
+        },
+        {
+          id: "comp-a-sub--nested",
+          type: "story",
+          importPath: "src/A/SousA/SousA.stories.tsx",
+          tags: [],
+        },
+      ]),
+      deviceNames: ["desktop-fhd"],
+      publicScreenshotsDir: publicDir,
+      baselineExists: () => false,
+    });
+
+    const findFolder = (node: Node | null, name: string): Node | null => {
+      if (!node) return null;
+      if (node.type === "folder" && node.name === name) return node;
+      for (const child of Object.values(node.children ?? {})) {
+        const found = findFolder(child, name);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const parent = findFolder(result.tree, "A");
+    expect(parent).toBeTruthy();
+    const childTypes = Object.values(parent!.children ?? {}).map(child => child.type);
+    const lastFile = childTypes.lastIndexOf("file");
+    const firstFolder = childTypes.indexOf("folder");
+    expect(lastFile).toBeGreaterThanOrEqual(0);
+    expect(firstFolder).toBeGreaterThan(lastFile);
   });
 
   it("ignore docs et entries sans importPath", () => {

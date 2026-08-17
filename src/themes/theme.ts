@@ -27,6 +27,7 @@ export const colors = {
   newTheme_fantasy: "#8b5cf6",
   newTheme_base: "#6b7280",
   newTheme_base10: "#9ca3af",
+  newTheme_storybook: "#ff4785",
 } as const;
 
 export type SpacingKey = keyof typeof spacing;

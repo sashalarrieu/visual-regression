@@ -8,17 +8,19 @@ export type BulletProps = {
   color: ColorKey;
 };
 
-export const Bullet: React.FC<BulletProps> = ({ value, color }) => (
-  <View style={{ flexDirection: "row", alignItems: "center" }}>
+export const Bullet: React.FC<BulletProps> = ({ value, color }) => {
+  const textColor = color === "newTheme_background" ? colors.newTheme_textOnSurface : colors.newTheme_textOnPrimary;
+
+  return (
     <View
       style={{
-        width: 8,
-        height: 8,
         borderRadius: 4,
         backgroundColor: colors[color],
-        marginRight: 4,
+        paddingHorizontal: 4,
+        paddingVertical: 2,
       }}
-    />
-    <Text style={{ fontSize: 12, color: colors.newTheme_textLegend }}>{value}</Text>
-  </View>
-);
+    >
+      <Text style={{ fontSize: 8, color: textColor }}>{value}</Text>
+    </View>
+  );
+};

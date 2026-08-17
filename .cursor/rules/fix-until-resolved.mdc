@@ -1,0 +1,30 @@
+---
+description: Un fix lib n’est pas terminé tant que le symptôme n’est pas vérifié disparu sur le projet hôte (yarn vr / yarn storybook, kill des process autant que nécessaire).
+alwaysApply: true
+---
+
+# Fix lib — boucler jusqu’à résolution réelle
+
+Un patch dans `visual-regression/` **n’est pas livré** tant que le problème signalé n’est pas **reproduit puis constaté disparu** sur le projet hôte (ex. `EIWIE_PRO_FRONTEND/`, `eiwie-frontend-apps/`). Unitaire / lecture de logs / « ça devrait marcher » ne suffisent pas.
+
+## Obligatoire
+
+1. **Reproduire** le symptôme sur le client en erreur (`yarn vr`, `yarn storybook`, capture, UI).
+2. **Corriger la lib**, pas un workaround client (voir aussi la rule workspace lib-first).
+3. **Relancer** le flux qui cassait. Relire les logs du sidecar / launcher : le symptôme d’origine doit avoir disparu.
+4. **Répéter** jusqu’à ce que ce soit vrai. Ne pas s’arrêter après le premier diff de code.
+
+## Processus et terminaux — autorisé et attendu
+
+- Lancer `yarn vr` et/ou `yarn storybook` **dans le projet hôte en erreur**, autant de fois que nécessaire.
+- **Kill** les process / terminaux (Ctrl+C, `vr:capture:down`, sidecar Compose de **ce** projet) et relancer sans demander la permission — un sidecar périmé (mauvais mode Storybook, cache, HMR figé) est une cause fréquente de faux « toujours cassé ».
+- Un seul launcher UI à la fois (`2805` / Expo `2804`). Ne pas lancer deux `yarn vr` interactifs en parallèle. Les sidecars Docker d’**autres** projets ne doivent pas être tués.
+
+```text
+❌ BAD — modifier entrypoint.sh / le CLI, lancer les tests unitaires, conclure
+   « relance yarn vr de ton côté »
+
+✅ GOOD — kill le yarn vr du client, relancer, vérifier le log
+   (ex. Storybook mode=static si vr.config le demande), recapturer la story en erreur,
+   confirmer 0 erreur / le pixel attendu, seulement ensuite s’arrêter
+```

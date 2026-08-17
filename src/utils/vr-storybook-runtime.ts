@@ -2,19 +2,20 @@
  * Lancement de Storybook pour la capture VR (dev HMR ou statique).
  * Utilisé par le daemon de capture (sidecar Docker) et réutilisable par le launcher.
  *
- * - mode "dev"    : `storybook dev` (HMR — les changements de stories/composants
- *   sont pris en compte sans rebuild). Recommandé en session locale.
- * - mode "static" : build `storybook-static` (+ stats) puis `serve`. Recommandé en CI
- *   (build unique, plus déterministe).
+ * - mode "dev"    : `storybook dev` (HMR). Défaut local — identique à `yarn storybook`.
+ * - mode "static" : build `storybook-static` (+ stats) puis serve. CI
+ *   (`VR_STORYBOOK_MODE=static` / docker-compose.ci.yml). Rebuild si l'empreinte
+ *   des sources change (pas le mtime Docker Desktop).
  */
 import { spawn } from "child_process";
 import type { ChildProcess } from "child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { createHash } from "crypto";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
 import { getPackageScriptCommand, getProjectRoot, spawnShellOption, waitForStorybookStories } from "./node";
-import { resolveVrConfig } from "./vr-config";
+import { resolveVrConfig, VR_CONFIG_FILENAME } from "./vr-config";
 
 /** Racine du package visual-regression (src/utils → ../..). */
 const PACKAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -37,9 +38,11 @@ export const usesNextJsViteStorybook = (projectRoot: string): boolean => {
 
 /**
  * Mode Storybook pour la capture (daemon Docker ou scripts).
- * Capture via Docker (sidecar ou VR_DOCKER=1) : **static** par défaut
- * (Vite dev = lent, HMR reload mid-capture, concurrencyDev trop bas).
- * Forcer le HMR : `VR_STORYBOOK_MODE=dev` ou `launcher.storybookMode: "dev"`.
+ *
+ * Local (`yarn vr`) : **dev** (HMR) par défaut — identique à `yarn storybook`.
+ * Override : `VR_STORYBOOK_MODE` > `launcher.storybookMode` dans `vr.config.cjs`.
+ * CI / oneshot : `VR_STORYBOOK_MODE=static` (docker-compose.ci.yml).
+ * Exception : `@storybook/nextjs-vite` reste en static (dev headless vide).
  */
 export const resolveStorybookModeForCapture = (projectRoot: string): StorybookMode => {
   const envMode = (process.env.VR_STORYBOOK_MODE || "").toLowerCase();
@@ -53,8 +56,8 @@ export const resolveStorybookModeForCapture = (projectRoot: string): StorybookMo
     return config.launcher.storybookMode;
   }
 
-  // Sidecar Docker (hôte backend docker, ou process dans le conteneur).
-  if (process.env.VR_DOCKER === "1" || config.capture.backend !== "local") {
+  // Next.js Vite : le mode dev ne rend pas les stories en capture Playwright.
+  if (usesNextJsViteStorybook(projectRoot)) {
     return "static";
   }
 
@@ -70,7 +73,7 @@ export const getStorybookMode = (): StorybookMode => {
     if (envMode === "static" || envMode === "dev") {
       return envMode === "static" ? "static" : "dev";
     }
-    return process.env.VR_DOCKER === "1" ? "static" : "dev";
+    return "dev";
   }
 };
 
@@ -126,47 +129,114 @@ const withLocalBinPath = (projectRoot: string, env: NodeJS.ProcessEnv): NodeJS.P
   return { ...env, PATH: `${binDirs.join(sep)}${sep}${currentPath}` };
 };
 
-const STORYBOOK_SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".cjs", ".mjs", ".css", ".scss", ".mdx"]);
+const STORYBOOK_SOURCE_EXTENSIONS = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".cjs",
+  ".mjs",
+  ".css",
+  ".scss",
+  ".mdx",
+  ".html",
+]);
 
-/** mtime le plus récent parmi src/, .storybook/ et le package VR lié (decorators preview). */
-export const getNewestStorybookInputMtime = (projectRoot: string): number => {
-  const roots = ["src", ".storybook"];
-  let newest = 0;
+export const STORYBOOK_INPUT_FINGERPRINT_FILE = ".vr-cache/storybook-input.fingerprint";
+
+const storybookInputRoots = (projectRoot: string): string[] => [
+  path.join(projectRoot, "src"),
+  path.join(projectRoot, ".storybook"),
+  path.join(projectRoot, "apps", "storybook"),
+  path.join(projectRoot, "node_modules", "@setshao", "visual-regression", "src", "storybook"),
+  path.join(projectRoot, "node_modules", "@setshao", "visual-regression", "src", "utils"),
+  path.join(projectRoot, "..", "visual-regression", "src", "storybook"),
+  path.join(projectRoot, "..", "visual-regression", "src", "utils"),
+];
+
+const collectStorybookInputFiles = (projectRoot: string): string[] => {
+  const files: string[] = [];
+  const seen = new Set<string>();
 
   const walk = (dir: string): void => {
     if (!existsSync(dir)) return;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "Screenshots") continue;
+        if (entry.name === "node_modules" || entry.name === "Screenshots" || entry.name === "storybook-static") {
+          continue;
+        }
         walk(full);
         continue;
       }
       if (!STORYBOOK_SOURCE_EXTENSIONS.has(path.extname(entry.name))) continue;
-      try {
-        const mtime = statSync(full).mtimeMs;
-        if (mtime > newest) newest = mtime;
-      } catch {
-        // ignore fichiers supprimés pendant le walk
-      }
+      const resolved = path.resolve(full);
+      if (seen.has(resolved)) continue;
+      seen.add(resolved);
+      files.push(resolved);
     }
   };
 
-  for (const root of roots) {
-    walk(path.join(projectRoot, root));
+  for (const root of storybookInputRoots(projectRoot)) {
+    walk(root);
   }
 
-  // Decorators `@setshao/visual-regression/storybook` sont bundlés dans storybook-static :
-  // un changement lib doit invalider le build (symlink file: ou node_modules).
-  const vrStorybookDirs = [
-    path.join(projectRoot, "node_modules", "@setshao", "visual-regression", "src", "storybook"),
-    path.join(projectRoot, "..", "visual-regression", "src", "storybook"),
-  ];
-  for (const dir of vrStorybookDirs) {
-    walk(dir);
-  }
+  return files.sort();
+};
 
-  return newest;
+/** Empreinte du contenu des sources Storybook (mtime Docker Desktop non fiable). */
+export const computeStorybookInputFingerprint = (projectRoot: string): string => {
+  const hash = createHash("sha1");
+  for (const file of collectStorybookInputFiles(projectRoot)) {
+    hash.update(path.relative(projectRoot, file));
+    hash.update("\0");
+    try {
+      hash.update(readFileSync(file));
+    } catch {
+      hash.update("missing");
+    }
+    hash.update("\n");
+  }
+  return hash.digest("hex");
+};
+
+export const readStoredStorybookInputFingerprint = (projectRoot: string): string | null => {
+  const fingerprintPath = path.join(projectRoot, STORYBOOK_INPUT_FINGERPRINT_FILE);
+  if (!existsSync(fingerprintPath)) return null;
+  try {
+    const value = readFileSync(fingerprintPath, "utf8").trim();
+    return value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+};
+
+export const writeStoredStorybookInputFingerprint = (projectRoot: string, fingerprint?: string): void => {
+  const fingerprintPath = path.join(projectRoot, STORYBOOK_INPUT_FINGERPRINT_FILE);
+  mkdirSync(path.dirname(fingerprintPath), { recursive: true });
+  writeFileSync(fingerprintPath, `${fingerprint ?? computeStorybookInputFingerprint(projectRoot)}\n`, "utf8");
+};
+
+/** true si un build statique de Storybook est nécessaire (absent, stats manquantes ou sources changées). */
+export const needsStaticStorybookBuild = (projectRoot: string, statsRelativePath: string): boolean => {
+  if (process.env.VR_STORYBOOK_STATIC_REBUILD === "1") return true;
+  try {
+    if (
+      existsSync(path.join(projectRoot, VR_CONFIG_FILENAME)) &&
+      resolveVrConfig(projectRoot).launcher.forceStaticRebuild
+    ) {
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+  const staticIndex = path.join(projectRoot, "storybook-static", "index.html");
+  const statsPath = path.join(projectRoot, statsRelativePath);
+  if (!existsSync(staticIndex) || !existsSync(statsPath)) return true;
+
+  const stored = readStoredStorybookInputFingerprint(projectRoot);
+  if (!stored) return true;
+  return stored !== computeStorybookInputFingerprint(projectRoot);
 };
 
 /**
@@ -196,25 +266,6 @@ export const ensureStorybookStaticAssets = (projectRoot: string): void => {
       error instanceof Error ? error.message : error,
     );
   }
-};
-
-/** true si un build statique de Storybook est nécessaire (absent, stats manquantes ou sources plus récentes). */
-export const needsStaticStorybookBuild = (projectRoot: string, statsRelativePath: string): boolean => {
-  if (process.env.VR_STORYBOOK_STATIC_REBUILD === "1") return true;
-  try {
-    if (resolveVrConfig(projectRoot).launcher.forceStaticRebuild) return true;
-  } catch {
-    // ignore
-  }
-  const staticIndex = path.join(projectRoot, "storybook-static", "index.html");
-  const statsPath = path.join(projectRoot, statsRelativePath);
-  const missingBuild = !existsSync(staticIndex) || !existsSync(statsPath);
-  const buildMtime = missingBuild ? 0 : statSync(staticIndex).mtimeMs;
-  const sourceMtime = getNewestStorybookInputMtime(projectRoot);
-  const stale = !missingBuild && sourceMtime > buildMtime;
-  const needsBuild = missingBuild || stale;
-
-  return needsBuild;
 };
 
 /** Build Storybook statique (--stats-json). Résout avec le code de sortie. */
@@ -296,7 +347,7 @@ const withDockerPolling = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
     ...env,
     WATCHPACK_POLLING: env.WATCHPACK_POLLING ?? "true",
     CHOKIDAR_USEPOLLING: env.CHOKIDAR_USEPOLLING ?? "true",
-    CHOKIDAR_INTERVAL: env.CHOKIDAR_INTERVAL ?? "300",
+    CHOKIDAR_INTERVAL: env.CHOKIDAR_INTERVAL ?? "200",
   };
 };
 
@@ -360,6 +411,7 @@ export const startStorybook = async (options: StartStorybookOptions): Promise<St
         throw new Error(`Build Storybook statique échoué (code ${code})`);
       }
       ensureStorybookStaticAssets(projectRoot);
+      writeStoredStorybookInputFingerprint(projectRoot);
     } else {
       // Build déjà là : quand même (re)copier fonts/assets (souvent oubliés hors staticDirs).
       ensureStorybookStaticAssets(projectRoot);
@@ -404,8 +456,42 @@ export const ensureStaticStorybookFresh = async (options: {
 
   const proc = startStaticStorybookServer(projectRoot, port);
   const ready = await waitForStorybookStories(1, waitMaxAttempts, projectRoot);
+  writeStoredStorybookInputFingerprint(projectRoot);
 
   return { process: proc, ready, rebuilt: true };
+};
+
+const sleepMs = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Attend que l'index Storybook dev se stabilise (HMR en cours après un save).
+ * Ne jette pas : un timeout ne doit pas bloquer la capture.
+ */
+export const waitForDevStorybookIndexSettle = async (
+  storybookUrl: string,
+  options?: { stableMs?: number; timeoutMs?: number },
+): Promise<void> => {
+  const stableMs = options?.stableMs ?? 400;
+  const timeoutMs = options?.timeoutMs ?? 8000;
+  const deadline = Date.now() + timeoutMs;
+  const url = `${storybookUrl.replace(/\/$/, "")}/index.json`;
+  let last = "";
+  let lastAt = 0;
+
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      const text = res.ok ? await res.text() : "";
+      if (text && text === last && Date.now() - lastAt >= stableMs) return;
+      if (text !== last) {
+        last = text;
+        lastAt = Date.now();
+      }
+    } catch {
+      // Storybook encore en reload
+    }
+    await sleepMs(150);
+  }
 };
 
 /** Arrête proprement le process Storybook. */

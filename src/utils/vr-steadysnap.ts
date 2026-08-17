@@ -8,7 +8,12 @@ import pixelmatch from "pixelmatch";
 import type { Page } from "playwright";
 import { PNG } from "pngjs";
 
-import { PLAY_FN_TAG, SKIP_PLAY_VR_TAG } from "../constants/constants";
+import {
+  LIVE_ANIMATION_VR_TAG,
+  PLAY_FN_TAG,
+  SKIP_PLAY_VR_TAG,
+  VR_CAPTURE_ANIMATION_FREEZE_CSS,
+} from "../constants/constants";
 import type { VrConfig } from "../types/types";
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -88,15 +93,42 @@ export class NetworkQuietTracker {
 export const expectsVrStoryPlay = (storyTags: string[]): boolean =>
   storyTags.includes(PLAY_FN_TAG) && !storyTags.includes(SKIP_PLAY_VR_TAG);
 
-/** Ajoute `vr-capture=1` pour activer le mode capture côté Storybook preview. */
+/** Freeze CSS + Reanimated (prefers-reduced-motion) sauf opt-out `live-animation-vr`. */
+export const shouldFreezeMotion = (config: VrConfig, storyTags: string[] = []): boolean =>
+  config.stabilize.freezeAnimations && !storyTags.includes(LIVE_ANIMATION_VR_TAG);
+
+/**
+ * Fige Reanimated web **avant** le chargement de la story : Reanimated lit
+ * `prefers-reduced-motion` au import (`ReducedMotionManager`), pas au screenshot.
+ * Sans ça, withRepeat/withTiming continuent de tourner (CSS freeze inopérant).
+ */
+export const applyCaptureMotionPreference = async (page: Page, freeze: boolean): Promise<void> => {
+  await page.emulateMedia({ reducedMotion: freeze ? "reduce" : "no-preference" });
+};
+
+/**
+ * Query params du iframe de capture.
+ * - `vr-capture=1` : active les decorators preview (freeze CSS, runner `play()`).
+ * - `embed=true` : Storybook désactive l'autoplay (`shouldAutoplay`). Sinon `play()`
+ *   tourne juste après le commit React, **avant** les `useEffect` des demos qui
+ *   resynchronisent props → state — le clic est alors écrasé (onglet selected, etc.).
+ *   Le runner VR rejoue `play()` dans un `useEffect` (après cette sync).
+ */
 export const appendVrCaptureParam = (url: string): string => {
   try {
     const parsed = new URL(url);
     parsed.searchParams.set("vr-capture", "1");
+    parsed.searchParams.set("embed", "true");
     return parsed.toString();
   } catch {
-    const sep = url.includes("?") ? "&" : "?";
-    return `${url}${sep}vr-capture=1`;
+    let next = url;
+    if (!next.includes("vr-capture=")) {
+      next += `${next.includes("?") ? "&" : "?"}vr-capture=1`;
+    }
+    if (!/[?&]embed=/.test(next)) {
+      next += `${next.includes("?") ? "&" : "?"}embed=true`;
+    }
+    return next;
   }
 };
 
@@ -158,7 +190,10 @@ export const waitForStoryStable = async (
       if (!root) return false;
       const state = root.getAttribute("data-vr-ready");
       // Échec du play() → on interrompt tout de suite (pas de screenshot d'un état faux).
-      if (state === "error") throw new Error("VR play() a échoué (data-vr-ready=error)");
+      if (state === "error") {
+        const detail = root.getAttribute("data-vr-error");
+        throw new Error(detail ? `VR play() a échoué: ${detail}` : "VR play() a échoué (data-vr-ready=error)");
+      }
       if (expectsPlay) return state === "true";
       if (state === null) return true;
       return state === "true";
@@ -201,17 +236,33 @@ export const waitForStoryStable = async (
   }
 
   if (config.stabilize.freezeAnimations) {
-    await page.addStyleTag({
-      content: `
-        *, *::before, *::after {
-          animation-duration: 0s !important;
-          animation-delay: 0s !important;
-          transition-duration: 0s !important;
-          transition-delay: 0s !important;
-        }
-      `,
-    });
+    await page.addStyleTag({ content: VR_CAPTURE_ANIMATION_FREEZE_CSS });
     await freezeDynamicContent(page);
+    try {
+      await page.evaluate(`(() => {
+        const animations = typeof document.getAnimations === "function" ? document.getAnimations() : [];
+        return Promise.allSettled(
+          animations.map((animation) => {
+            try {
+              const iterations =
+                animation.effect && animation.effect.getComputedTiming
+                  ? animation.effect.getComputedTiming().iterations
+                  : undefined;
+              if (iterations === Infinity) {
+                animation.cancel();
+                return Promise.resolve();
+              }
+              if (typeof animation.finish === "function") animation.finish();
+              return animation.finished ? animation.finished.catch(() => undefined) : Promise.resolve();
+            } catch {
+              return Promise.resolve();
+            }
+          }),
+        );
+      })()`);
+    } catch {
+      // best-effort — une animation bloquée ne doit pas faire échouer la capture
+    }
     await page.evaluate(
       () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
     );

@@ -37,7 +37,12 @@ import { getComposeFile, getDockerImage } from "../utils/vr-docker";
 import { filterCaptureTasks, getChangedFiles, type StoryIndexEntry } from "../utils/vr-incremental";
 import { estimateCiWallClockMs, partitionTasksByShardTotal } from "../utils/vr-sharding";
 import { parseUrlPort } from "../utils/vr-sidecar-ports";
-import { appendVrCaptureParam, expectsVrStoryPlay, waitForStoryStable } from "../utils/vr-steadysnap";
+import {
+  appendVrCaptureParam,
+  expectsVrStoryPlay,
+  shouldFreezeMotion,
+  waitForStoryStable,
+} from "../utils/vr-steadysnap";
 import { normalizeStoryVrParameters, resolveEffectiveVrConfig, shouldUseBurstCapture } from "../utils/vr-story-config";
 import { resolveStoryPlayFunction } from "../utils/vr-story-play";
 import { startStorybook, stopStorybook } from "../utils/vr-storybook-runtime";
@@ -257,9 +262,20 @@ const runStaticChecks = (): CheckResult[] => {
 
   results.push(
     check(
-      appendVrCaptureParam("http://localhost:6006/iframe.html?id=demo--x").includes("vr-capture=1"),
-      "SteadySnap : param vr-capture=1 sur iframe URL",
+      (() => {
+        const next = appendVrCaptureParam("http://localhost:6006/iframe.html?id=demo--x");
+        return next.includes("vr-capture=1") && next.includes("embed=true");
+      })(),
+      "SteadySnap : params vr-capture=1 et embed=true sur iframe URL",
       "SteadySnap : appendVrCaptureParam échoué",
+    ),
+  );
+
+  results.push(
+    check(
+      shouldFreezeMotion(config, []) && !shouldFreezeMotion(config, [LIVE_ANIMATION_VR_TAG]),
+      "SteadySnap : freeze motion sauf tag live-animation-vr",
+      "SteadySnap : shouldFreezeMotion échoué",
     ),
   );
 
@@ -380,7 +396,7 @@ const runDockerChecks = (): CheckResult[] => {
   if (existsSync(dockerfile)) {
     const pkgVersion = getPackagePlaywrightVersion(dockerDir);
     const dockerfileContent = readFileSync(dockerfile, "utf8");
-    const match = dockerfileContent.match(/mcr\.microsoft\.com\/playwright:v([\d.]+)/);
+    const match = dockerfileContent.match(/ARG PLAYWRIGHT_VERSION=([\d.]+)/);
     const imageVersion = match ? match[1] : null;
     const image = getDockerImage();
     results.push(

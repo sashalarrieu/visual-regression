@@ -58,6 +58,7 @@ module.exports = [
     },
     rules: {
       // TypeScript rules
+      "react-hooks/exhaustive-deps": "off",
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-empty-interface": "off",
       "@typescript-eslint/no-empty-function": "off",

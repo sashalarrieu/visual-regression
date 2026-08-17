@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef } from "react";
-import { Text, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Text, View, type ViewStyle } from "react-native";
 import { ScrollView } from "react-native-gesture-handler";
 
 import { Accordion } from "../atoms/Accordion";
@@ -10,16 +10,22 @@ import { Icon } from "../atoms/Icon";
 import { SearchField } from "../atoms/SearchField";
 import { Touchable } from "../atoms/Touchable";
 import { Typo } from "../atoms/Typo";
+import { usePressModifiers } from "../hooks/usePressModifiers";
 import { useDeviceConfig } from "../providers/DeviceConfigProvider";
 import { colors, spacing, type ColorKey } from "../themes/theme";
 import type { MaterialIconName, Node } from "../types/types";
 import {
   calculateFolderDepth,
-  collectFilePaths,
+  collectFolderPaths,
+  collectSelectableFilePaths,
   filterTree,
   findFirstFile,
+  flattenTreeVisual,
   formatStoryName,
   getStoryNameFromId,
+  getVisualChildGroups,
+  isSelectableTreeFile,
+  pathsInVisualRange,
   selectionState,
   type SelectionState,
   type StatusFilterValue,
@@ -46,6 +52,8 @@ export type TreePanelProps = {
   selectedPaths?: ReadonlySet<string>;
   onTogglePath?: (path: string) => void;
   onTogglePaths?: (paths: readonly string[]) => void;
+  /** Ajoute les paths à la sélection (Maj+clic) et active le multi-select si besoin. */
+  onSelectPaths?: (paths: readonly string[]) => void;
 };
 
 type StatusChipDef = { value: StatusFilterValue; label: string };
@@ -154,11 +162,15 @@ export const TreePanel: React.FC<TreePanelProps> = ({
   selectedPaths = new Set(),
   onTogglePath,
   onTogglePaths,
+  onSelectPaths,
 }) => {
   const { getDeviceStyle, getDeviceDisplayName } = useDeviceConfig();
   const scrollViewRef = useRef<ScrollView>(null);
   const scrollContentRef = useRef<View>(null);
   const nodeRefs = useRef<Map<string, View>>(new Map());
+  const lastAnchorPathRef = useRef<string | null>(null);
+  const modifiersRef = usePressModifiers();
+  const [folderOpen, setFolderOpen] = useState<Record<string, boolean>>({});
 
   const statusChips = STATUS_CHIPS_BY_MODE[mode];
   const selectionCount = selectedPaths.size;
@@ -216,6 +228,92 @@ export const TreePanel: React.FC<TreePanelProps> = ({
     onMultiSelectModeChange?.(!multiSelectMode);
   }, [multiSelectMode, onMultiSelectModeChange]);
 
+  const visualSelectablePaths = useMemo(
+    () =>
+      flattenTreeVisual(displayTree)
+        .filter(isSelectableTreeFile)
+        .filter(file => !regeneratingPaths.has(file.path))
+        .map(file => file.path),
+    [displayTree, regeneratingPaths],
+  );
+
+  const allFolderPaths = useMemo(() => collectFolderPaths(displayTree), [displayTree]);
+  const nestedFolderPaths = useMemo(
+    () => allFolderPaths.filter(path => path !== displayTree?.path),
+    [allFolderPaths, displayTree?.path],
+  );
+  const allNestedOpen = nestedFolderPaths.length === 0 || nestedFolderPaths.every(path => folderOpen[path] !== false);
+
+  const isFolderOpen = (path: string) => folderOpen[path] !== false;
+
+  const setFoldersOpen = useCallback((paths: readonly string[], open: boolean) => {
+    if (paths.length === 0) return;
+    setFolderOpen(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const path of paths) {
+        if (next[path] !== open) {
+          next[path] = open;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!searchQuery.trim() || !displayTree) return;
+    setFoldersOpen(collectFolderPaths(displayTree), true);
+  }, [searchQuery, displayTree, setFoldersOpen]);
+
+  const handleToggleExpandAll = useCallback(() => {
+    if (allNestedOpen) {
+      setFoldersOpen(nestedFolderPaths, false);
+      if (displayTree) setFoldersOpen([displayTree.path], true);
+      return;
+    }
+    setFoldersOpen(allFolderPaths, true);
+  }, [allNestedOpen, nestedFolderPaths, allFolderPaths, displayTree, setFoldersOpen]);
+
+  const rememberAnchor = (paths: readonly string[]) => {
+    lastAnchorPathRef.current = paths[0] ?? lastAnchorPathRef.current;
+  };
+
+  const applyRangeSelect = (targetPaths: readonly string[]) => {
+    if (targetPaths.length === 0) return;
+    const range = pathsInVisualRange(visualSelectablePaths, lastAnchorPathRef.current, targetPaths);
+    onSelectPaths?.(range);
+    if (!lastAnchorPathRef.current) rememberAnchor(targetPaths);
+  };
+
+  const handleFileActivate = (fileNode: Node, selectable: boolean) => {
+    const paths = selectable ? [fileNode.path] : [];
+    if (modifiersRef.current.shiftKey && paths.length > 0) {
+      applyRangeSelect(paths);
+      return;
+    }
+    if (paths.length > 0) rememberAnchor(paths);
+    if (multiSelectMode) {
+      if (selectable) onTogglePath?.(fileNode.path);
+      else onNodeClick(fileNode);
+      return;
+    }
+    onNodeClick(fileNode);
+  };
+
+  const handleStoryActivate = (paths: readonly string[], firstFile?: Node) => {
+    if (modifiersRef.current.shiftKey && paths.length > 0) {
+      applyRangeSelect(paths);
+      return;
+    }
+    if (paths.length > 0) rememberAnchor(paths);
+    if (multiSelectMode) {
+      if (paths.length > 0) onTogglePaths?.(paths);
+      return;
+    }
+    if (firstFile) onNodeClick(firstFile);
+  };
+
   const showSync = mode === "regressions" && !!onCompareStoryNode && !multiSelectMode;
 
   const renderFile = (fileNode: Node) => {
@@ -223,7 +321,8 @@ export const TreePanel: React.FC<TreePanelProps> = ({
     const deviceName = fileNode.deviceName;
     const deviceStyle = getDeviceStyle(deviceName);
     const isCurrentStory = !multiSelectMode && currentStory?.path === fileNode.path;
-    const isSelected = multiSelectMode && selectedPaths.has(fileNode.path);
+    const selectable = isSelectableTreeFile(fileNode);
+    const isSelected = multiSelectMode && selectable && selectedPaths.has(fileNode.path);
     const deviceDisplayName = deviceName ? getDeviceDisplayName(deviceName) : fileNode.name;
     const statusIcon = getFileStatusIcon(fileNode, mode, isCurrentStory || isSelected);
     const highlight = isCurrentStory || isSelected;
@@ -236,9 +335,9 @@ export const TreePanel: React.FC<TreePanelProps> = ({
           alignItems="center"
           style={{ paddingRight: spacing.m - spacing.s + 1 }}
         >
-          {multiSelectMode && (
+          {multiSelectMode && selectable && (
             <Touchable
-              onPress={() => onTogglePath?.(fileNode.path)}
+              onPress={() => handleFileActivate(fileNode, selectable)}
               hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
               accessibilityRole="checkbox"
               accessibilityState={{ checked: isSelected }}
@@ -251,13 +350,19 @@ export const TreePanel: React.FC<TreePanelProps> = ({
               />
             </Touchable>
           )}
+          {multiSelectMode && !selectable && (
+            <Icon
+              name="block"
+              size="s"
+              fill="newTheme_base10"
+              style={{ marginRight: 4, opacity: 0.5 }}
+            />
+          )}
           <Button
             label={deviceDisplayName}
             color={highlight ? "primary" : "base"}
-            onPress={() => {
-              if (multiSelectMode) onTogglePath?.(fileNode.path);
-              else onNodeClick(fileNode);
-            }}
+            onPress={() => handleFileActivate(fileNode, selectable)}
+            disabled={multiSelectMode && !selectable}
             leftIcon={{
               name: deviceStyle.icon,
               fill: (highlight ? "newTheme_textOnPrimary" : deviceStyle.color) as keyof typeof colors,
@@ -282,7 +387,8 @@ export const TreePanel: React.FC<TreePanelProps> = ({
   };
 
   const renderStoryHeader = (storyName: string, storyFiles: Node[]) => {
-    const paths = storyFiles.map(f => f.path);
+    const selectableFiles = storyFiles.filter(isSelectableTreeFile);
+    const paths = selectableFiles.map(f => f.path);
     const state = selectionState(paths, selectedPaths);
 
     if (!multiSelectMode) {
@@ -291,12 +397,17 @@ export const TreePanel: React.FC<TreePanelProps> = ({
           pb="xs"
           px="xs"
         >
-          <Typo
-            variant="paragraphe_semiBold"
-            color="newTheme_textOnSurface"
+          <Touchable
+            onPress={() => handleStoryActivate(paths, storyFiles[0])}
+            accessibilityHint="Maj+clic pour sélectionner une plage de stories"
           >
-            {storyName}
-          </Typo>
+            <Typo
+              variant="paragraphe_semiBold"
+              color="newTheme_textOnSurface"
+            >
+              {storyName}
+            </Typo>
+          </Touchable>
         </Box>
       );
     }
@@ -309,24 +420,36 @@ export const TreePanel: React.FC<TreePanelProps> = ({
         alignItems="center"
         gap="xs"
       >
-        <Touchable
-          onPress={() => onTogglePaths?.(paths)}
-          hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-          accessibilityRole="checkbox"
-          accessibilityState={{
-            checked: state === "partial" ? "mixed" : state === "all",
-          }}
-        >
+        {paths.length > 0 ? (
+          <Touchable
+            onPress={() => handleStoryActivate(paths, storyFiles[0])}
+            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+            accessibilityRole="checkbox"
+            accessibilityState={{
+              checked: state === "partial" ? "mixed" : state === "all",
+            }}
+            accessibilityHint="Maj+clic pour sélectionner une plage de stories"
+          >
+            <Icon
+              name={checkboxIconName(state)}
+              size="s"
+              fill={state === "none" ? "newTheme_textOnSurface" : "newTheme_primary"}
+              style={{ marginRight: 4 }}
+            />
+          </Touchable>
+        ) : (
           <Icon
-            name={checkboxIconName(state)}
+            name="block"
             size="s"
-            fill={state === "none" ? "newTheme_textOnSurface" : "newTheme_primary"}
-            style={{ marginRight: 4 }}
+            fill="newTheme_base10"
+            style={{ marginRight: 4, opacity: 0.5 }}
           />
-        </Touchable>
+        )}
         <Touchable
-          onPress={() => onTogglePaths?.(paths)}
+          onPress={() => handleStoryActivate(paths, storyFiles[0])}
           style={{ flexShrink: 1 }}
+          notPressable={paths.length === 0}
+          accessibilityHint="Maj+clic pour sélectionner une plage de stories"
         >
           <Typo
             variant="paragraphe_semiBold"
@@ -341,12 +464,10 @@ export const TreePanel: React.FC<TreePanelProps> = ({
 
   const renderTree = (node: Node | null): React.ReactNode => {
     if (!node) return null;
-    const entries = Object.values(node.children ?? {});
-
     if (node.type === "file") return renderFile(node);
 
-    const files = entries.filter(c => c.type === "file" && !regeneratingPaths.has(c.path));
-    const folders = entries.filter(c => c.type === "folder");
+    const { files: childFiles, folders } = getVisualChildGroups(node);
+    const files = childFiles.filter(child => !regeneratingPaths.has(child.path));
 
     const filesByStoryId = new Map<string, Node[]>();
     files.forEach(file => {
@@ -355,30 +476,38 @@ export const TreePanel: React.FC<TreePanelProps> = ({
       filesByStoryId.get(storyId)!.push(file);
     });
 
-    const folderPaths = multiSelectMode ? collectFilePaths(node).filter(p => !regeneratingPaths.has(p)) : [];
+    const folderPaths = multiSelectMode ? collectSelectableFilePaths(node).filter(p => !regeneratingPaths.has(p)) : [];
     const folderSelection = multiSelectMode ? selectionState(folderPaths, selectedPaths) : "none";
+
+    const handleFolderSelect = () => {
+      if (folderPaths.length === 0) return;
+      if (modifiersRef.current.shiftKey) {
+        applyRangeSelect(folderPaths);
+        return;
+      }
+      rememberAnchor(folderPaths);
+      onTogglePaths?.(folderPaths);
+    };
 
     return (
       <Accordion
-        key={node.name}
+        key={node.path || node.name}
+        accordionId={node.path || node.name}
         label={{ text: node.name }}
         tags={folderTagsForMode(node, mode)}
-        defaultOpened
+        opened={isFolderOpen(node.path)}
+        onOpenedChange={(next, options) => {
+          if (options?.recursive) {
+            setFoldersOpen(collectFolderPaths(node), next);
+            return;
+          }
+          setFolderOpen(prev => ({ ...prev, [node.path]: next }));
+        }}
         style={{ paddingBottom: 0 }}
         selectionMode={multiSelectMode}
         selectionState={folderSelection}
-        onToggleSelect={multiSelectMode ? () => onTogglePaths?.(folderPaths) : undefined}
+        onToggleSelect={multiSelectMode ? handleFolderSelect : undefined}
       >
-        {folders.map((child, index) => (
-          <Box
-            key={child.name}
-            p="xs"
-            pb={index === folders.length - 1 && filesByStoryId.size === 0 ? "s" : "none"}
-            style={{ right: -spacing.xs - 1, bottom: -1 }}
-          >
-            {renderTree(child)}
-          </Box>
-        ))}
         {Array.from(filesByStoryId.entries()).map(([storyId, storyFiles], storyIndex) => {
           const rawStoryName = storyFiles[0]?.displayName || getStoryNameFromId(storyId);
           const storyName = formatStoryName(rawStoryName);
@@ -386,7 +515,7 @@ export const TreePanel: React.FC<TreePanelProps> = ({
           return (
             <Box
               key={storyId}
-              pb={isLastStory ? "s" : "m"}
+              pb={isLastStory && folders.length === 0 ? "s" : "m"}
               style={{ right: -spacing.xs - 1, bottom: -1 }}
             >
               {renderStoryHeader(storyName, storyFiles)}
@@ -402,6 +531,16 @@ export const TreePanel: React.FC<TreePanelProps> = ({
             </Box>
           );
         })}
+        {folders.map((child, index) => (
+          <Box
+            key={child.name}
+            p="xs"
+            pb={index === folders.length - 1 ? "s" : "none"}
+            style={{ right: -spacing.xs - 1, bottom: -1 }}
+          >
+            {renderTree(child)}
+          </Box>
+        ))}
       </Accordion>
     );
   };
@@ -427,6 +566,13 @@ export const TreePanel: React.FC<TreePanelProps> = ({
           flexDirection="row"
           gap="xs"
         >
+          <Button
+            icon={{ name: allNestedOpen ? "unfold-less" : "unfold-more" }}
+            color="base"
+            onPress={handleToggleExpandAll}
+            disabled={!displayTree}
+            accessibilityLabel={allNestedOpen ? "Tout replier" : "Tout déplier"}
+          />
           <Button
             icon={{ name: "checklist" }}
             color={multiSelectMode ? "primary" : "base"}
@@ -503,7 +649,10 @@ export const TreePanel: React.FC<TreePanelProps> = ({
         ref={scrollViewRef}
         style={{ marginHorizontal: -spacing.m }}
       >
-        <View ref={scrollContentRef}>
+        <View
+          ref={scrollContentRef}
+          style={{ userSelect: "none" } as ViewStyle}
+        >
           <Box px="m">{renderTree(displayTree)}</Box>
         </View>
       </ScrollView>
