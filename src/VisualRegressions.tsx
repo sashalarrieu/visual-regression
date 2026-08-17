@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList } from "react-native";
 
 import { Box } from "./atoms/Box";
-import { Divider } from "./atoms/Divider";
 import { EndOfList } from "./atoms/EndOfList";
 import { Modal } from "./atoms/Modal";
 import { STORYBOOK_BRAND_COLOR, StorybookIcon } from "./atoms/StorybookIcon";
@@ -12,6 +11,7 @@ import { CaptureErrorsModal } from "./components/CaptureErrorsModal";
 import { CompareModal } from "./components/CompareModal";
 import { ContentPanel } from "./components/ContentPanel";
 import { DeletedItemRow } from "./components/DeletedItemRow";
+import { DraggableSplitView } from "./components/DraggableSplitView";
 import { ErrorState } from "./components/ErrorState";
 import { TreePanel } from "./components/TreePanel";
 import { VisualRegressionTopBar } from "./components/VisualRegressionTopBar";
@@ -640,89 +640,88 @@ export const VisualRegressions = ({ devices: devicesProp }: VisualRegressionsPro
   return (
     <DeviceConfigProvider deviceConfigs={devices}>
       <>
-        <Box
-          flex={1}
-          flexDirection="row"
-          backgroundColor="newTheme_background"
-        >
-          <Box width={300}>
-            <Box px="m">
-              <TabBar
-                tabs={leftTabs}
-                selectedTabKey={leftTab}
-                onSelectedTabKey={setLeftTab}
-                compressed
+        <DraggableSplitView
+          left={
+            <>
+              <Box px="m">
+                <TabBar
+                  tabs={leftTabs}
+                  selectedTabKey={leftTab}
+                  onSelectedTabKey={setLeftTab}
+                  compressed
+                />
+              </Box>
+              <TreePanel
+                tree={activeTree}
+                loading={activeLoading}
+                onRefresh={refreshActive}
+                onNodeClick={goTo}
+                currentStory={currentStory}
+                onCompareStoryNode={leftTab === "regressions" ? handleCompareStoryFromTree : undefined}
+                regeneratingPaths={regeneratingPaths}
+                mode={leftTab}
+                searchQuery={searchQuery}
+                onSearchQuery={setSearchQuery}
+                statusFilter={statusFilter}
+                onStatusFilter={setStatusFilter}
+                multiSelectMode={multiSelectMode}
+                onMultiSelectModeChange={setMultiSelectMode}
+                selectedPaths={selectedPaths}
+                onTogglePath={handleTogglePath}
+                onTogglePaths={handleTogglePaths}
+                onSelectPaths={handleSelectPaths}
+              />
+            </>
+          }
+          right={
+            <Box
+              flex={1}
+              p="m"
+            >
+              <VisualRegressionTopBar
+                mode={leftTab}
+                currentStory={currentStory}
+                storyType={storyType}
+                treeType={treeType}
+                showHeatmap={showHeatmap}
+                countPixelDiff={countPixelDiff}
+                storyScreenshotsPath={storyScreenshotsPath}
+                hasItems={allList.length > 0}
+                bulkLoading={bulkLoading}
+                multiSelectMode={multiSelectMode}
+                selectionCount={selectedPaths.size}
+                currentStoryIgnored={Boolean(currentStory?.ignored)}
+                onPrev={goPrev}
+                onNext={goNext}
+                onValid={handleTopBarValid}
+                onDelete={handleTopBarDelete}
+                onRegenerate={handleTopBarRegenerate}
+                onValidAll={() => runBulk(handleValidAll)}
+                onDeleteAll={() => runBulk(handleDeleteAll)}
+                onShowDeleted={() => setShowDeleted(true)}
+                onToggleHeatmap={setShowHeatmap}
+                onOpenCompareModal={() => setShowCompareModal(true)}
+                onOpenCaptureErrorsModal={() => setShowCaptureErrorsModal(true)}
+                captureErrorsCount={captureErrors.length}
+              />
+              <ContentPanel
+                mode={leftTab}
+                tree={filteredTree}
+                storyType={storyType}
+                treeType={treeType}
+                showHeatmap={showHeatmap}
+                imageUrls={imageUrls}
+                isRegenerating={currentStory ? regeneratingPaths.has(currentStory.path) : false}
+                storyId={currentStory?.storyId}
+                deviceName={currentStory?.deviceName}
+                fetchError={leftTab === "regressions" ? treeError : null}
+                contentKey={contentKey}
+                ignored={Boolean(currentStory?.ignored)}
+                onGenerate={leftTab === "all-stories" ? handleGenerateFromCatalog : undefined}
               />
             </Box>
-            <TreePanel
-              tree={activeTree}
-              loading={activeLoading}
-              onRefresh={refreshActive}
-              onNodeClick={goTo}
-              currentStory={currentStory}
-              onCompareStoryNode={leftTab === "regressions" ? handleCompareStoryFromTree : undefined}
-              regeneratingPaths={regeneratingPaths}
-              mode={leftTab}
-              searchQuery={searchQuery}
-              onSearchQuery={setSearchQuery}
-              statusFilter={statusFilter}
-              onStatusFilter={setStatusFilter}
-              multiSelectMode={multiSelectMode}
-              onMultiSelectModeChange={setMultiSelectMode}
-              selectedPaths={selectedPaths}
-              onTogglePath={handleTogglePath}
-              onTogglePaths={handleTogglePaths}
-              onSelectPaths={handleSelectPaths}
-            />
-          </Box>
-          <Divider orientation="vertical" />
-          <Box
-            flex={1}
-            p="m"
-          >
-            <VisualRegressionTopBar
-              mode={leftTab}
-              currentStory={currentStory}
-              storyType={storyType}
-              treeType={treeType}
-              showHeatmap={showHeatmap}
-              countPixelDiff={countPixelDiff}
-              storyScreenshotsPath={storyScreenshotsPath}
-              hasItems={allList.length > 0}
-              bulkLoading={bulkLoading}
-              multiSelectMode={multiSelectMode}
-              selectionCount={selectedPaths.size}
-              currentStoryIgnored={Boolean(currentStory?.ignored)}
-              onPrev={goPrev}
-              onNext={goNext}
-              onValid={handleTopBarValid}
-              onDelete={handleTopBarDelete}
-              onRegenerate={handleTopBarRegenerate}
-              onValidAll={() => runBulk(handleValidAll)}
-              onDeleteAll={() => runBulk(handleDeleteAll)}
-              onShowDeleted={() => setShowDeleted(true)}
-              onToggleHeatmap={setShowHeatmap}
-              onOpenCompareModal={() => setShowCompareModal(true)}
-              onOpenCaptureErrorsModal={() => setShowCaptureErrorsModal(true)}
-              captureErrorsCount={captureErrors.length}
-            />
-            <ContentPanel
-              mode={leftTab}
-              tree={filteredTree}
-              storyType={storyType}
-              treeType={treeType}
-              showHeatmap={showHeatmap}
-              imageUrls={imageUrls}
-              isRegenerating={currentStory ? regeneratingPaths.has(currentStory.path) : false}
-              storyId={currentStory?.storyId}
-              deviceName={currentStory?.deviceName}
-              fetchError={leftTab === "regressions" ? treeError : null}
-              contentKey={contentKey}
-              ignored={Boolean(currentStory?.ignored)}
-              onGenerate={leftTab === "all-stories" ? handleGenerateFromCatalog : undefined}
-            />
-          </Box>
-        </Box>
+          }
+        />
         <Modal
           isOpen={showDeleted}
           onClose={() => {

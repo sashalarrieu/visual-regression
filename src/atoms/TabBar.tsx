@@ -26,7 +26,7 @@ export type TabBarProps<T = string> = {
   tabs: TabBarTab<T>[];
   selectedTabKey: T;
   onSelectedTabKey: (key: T) => void;
-  /** Pastille + icône ou texte court ; le `title` n’est affiché qu’hors compressed. */
+  /** Pastille + icône ou texte court ; le `title` reste affiché sur l’onglet sélectionné. */
   compressed?: boolean;
   onBackground?: boolean;
 };
@@ -43,7 +43,7 @@ export const TabBar = <T = string,>({
   const unselectedBg = onBackground ? colors.newTheme_surface : colors.newTheme_background;
 
   const row = (
-    <View style={{ flexDirection: "row", gap: spacing.xs, flex: compressed ? 1 : undefined }}>
+    <View style={{ flexDirection: "row", gap: spacing.xs, width: compressed ? "100%" : undefined }}>
       {tabs.map(tab => {
         const selected = selectedTabKey === tab.key;
         const computedCompressed = compressed && !selected;
@@ -71,7 +71,7 @@ export const TabBar = <T = string,>({
               paddingHorizontal: computedCompressed ? spacing.s : spacing.m,
               borderRadius: 8,
               backgroundColor: selected ? colors.newTheme_primary : unselectedBg,
-              flex: computedCompressed ? 1 : undefined,
+              ...(compressed ? (selected ? { flex: 1, minWidth: 0 } : { flexGrow: 0, flexShrink: 0 }) : null),
               alignItems: "center",
               justifyContent: "center",
             }}
@@ -113,7 +113,7 @@ export const TabBar = <T = string,>({
   );
 
   if (compressed) {
-    return <View style={{ marginVertical: spacing.s }}>{row}</View>;
+    return <View style={{ marginVertical: spacing.s, width: "100%" }}>{row}</View>;
   }
 
   return (
