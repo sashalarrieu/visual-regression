@@ -231,11 +231,11 @@ Le log au démarrage du pool l’indique explicitement, ex. :
 
 #### `launcher` — comportement de `yarn vr`
 
-| Paramètre            | Défaut   | En bref                                                                                                                                                                                                |
-| -------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `runInitialCompare`  | `true`   | Lance une comparaison automatique au démarrage de `yarn vr`. Mettez `false` si vous voulez seulement ouvrir l’UI sans capturer.                                                                        |
-| `storybookMode`      | _(auto)_ | `"dev"` = Storybook HMR (défaut local). `"static"` = build `storybook-static`. **Omis** = `dev`, sauf `@storybook/nextjs-vite` → `static`. Priorité : `VR_STORYBOOK_MODE` **>** ce champ **>** défaut. |
-| `forceStaticRebuild` | `false`  | Si `true`, rebuild `storybook-static` avant chaque capture (mode static uniquement). Le rebuild se déclenche aussi dès qu’une story/source change (empreinte de contenu).                              |
+| Paramètre            | Défaut   | En bref                                                                                                                                                                                                                                                                                 |
+| -------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runInitialCompare`  | `true`   | Lance une comparaison automatique au démarrage de `yarn vr`. Mettez `false` si vous voulez seulement ouvrir l’UI sans capturer.                                                                                                                                                         |
+| `storybookMode`      | _(auto)_ | `"dev"` = Storybook HMR. **`yarn vr` local ignore `static`** (un build de 10–20 min fige le catalogue) — forcer `VR_STORYBOOK_MODE=static`. CI / oneshot : `static`. `@storybook/nextjs-vite` → `static`. Priorité : `VR_STORYBOOK_MODE` **>** CI `launcher.storybookMode` **>** `dev`. |
+| `forceStaticRebuild` | `false`  | Si `true`, rebuild `storybook-static` avant chaque capture (mode static uniquement). Un rebuild se déclenche aussi dès qu’une story/source change (empreinte de contenu + watcher keep-fresh).                                                                                          |
 
 **Variable d’env équivalente** : `VR_RUN_INITIAL_COMPARE`, `VR_STORYBOOK_MODE` (`dev` `static`), `VR_STORYBOOK_STATIC` (alias → `static`), `VR_STORYBOOK_STATIC_REBUILD`.
 

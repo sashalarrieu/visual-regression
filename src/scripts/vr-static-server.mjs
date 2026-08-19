@@ -103,7 +103,7 @@ const sendFile = (res, filePath, { injectFirstStory = false } = {}) => {
     res.writeHead(200, {
       "Content-Type": MIME[".html"],
       "Content-Length": body.length,
-      "Cache-Control": "no-cache",
+      "Cache-Control": "no-store",
     });
     res.end(body);
     return;
@@ -112,7 +112,7 @@ const sendFile = (res, filePath, { injectFirstStory = false } = {}) => {
   res.writeHead(200, {
     "Content-Type": MIME[ext] || "application/octet-stream",
     "Content-Length": stat.size,
-    "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=31536000, immutable",
+    "Cache-Control": "no-store",
   });
   fs.createReadStream(filePath).pipe(res);
 };

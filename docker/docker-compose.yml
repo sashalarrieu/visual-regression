@@ -30,6 +30,10 @@ services:
       VR_STORYBOOK_MODE: "${VR_STORYBOOK_MODE:-dev}"
       # Transmis depuis l'hôte (ex. monorepo : apps/storybook/.storybook).
       SBCONFIG_CONFIG_DIR: "${SBCONFIG_CONFIG_DIR:-}"
+      # Bind mounts Docker Desktop : inotify hôte → conteneur non fiable.
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "200"
+      WATCHPACK_POLLING: "true"
       # Auth npm privé (packages @scope restreints) — complémentaire au mount ~/.npmrc.
       NPM_TOKEN: "${NPM_TOKEN:-}"
       NODE_AUTH_TOKEN: "${NODE_AUTH_TOKEN:-}"

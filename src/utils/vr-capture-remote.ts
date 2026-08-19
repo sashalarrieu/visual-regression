@@ -29,6 +29,11 @@ export type CaptureDaemonHealth = {
   ready?: boolean;
   mode?: string;
   storybook?: boolean;
+  /**
+   * Daemon qui surveille les sources (HMR nudge / rebuild static).
+   * Absent sur les vieux sidecars → recréation obligatoire.
+   */
+  keepFresh?: boolean;
   /** Chemin absolu du projet hôte monté (pas /work dans le conteneur). */
   hostProjectRoot?: string;
   /** Nom Compose du stack qui sert ce daemon. */
@@ -50,6 +55,7 @@ export const fetchCaptureDaemonHealth = async (config?: VrConfig): Promise<Captu
  * true si le sidecar actif correspond au projet courant **et** au mode Storybook attendu.
  * Sans hostProjectRoot (vieux daemon) → false pour forcer une recréation sûre.
  * Un sidecar static ne doit jamais être réutilisé quand on veut du HMR (stories figées).
+ * Sans keepFresh → recréation (Storybook non surveillé, snapshot périmé).
  */
 export const isCaptureDaemonReusableForProject = (
   health: CaptureDaemonHealth | null,
@@ -57,6 +63,7 @@ export const isCaptureDaemonReusableForProject = (
   expectedMode?: string,
 ): boolean => {
   if (!health?.ready) return false;
+  if (health.keepFresh !== true) return false;
   const remote = health.hostProjectRoot?.trim();
   if (!remote) return false;
   if (path.resolve(remote) !== path.resolve(projectRoot)) return false;
@@ -96,6 +103,16 @@ export const waitForCaptureDaemon = async (maxAttempts = 120, config?: VrConfig)
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   return false;
+};
+
+/** Demande au daemon de resynchroniser Storybook (keep-fresh immédiat). */
+export const refreshCaptureDaemonStorybook = async (config?: VrConfig): Promise<boolean> => {
+  try {
+    const res = await fetch(`${getCaptureDaemonUrl(config)}/storybook/refresh`, { method: "POST" });
+    return res.ok;
+  } catch {
+    return false;
+  }
 };
 
 const formatTransportError = (err: unknown): string => {

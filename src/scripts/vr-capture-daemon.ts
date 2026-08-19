@@ -2,8 +2,9 @@
  * Daemon de capture VR (sidecar Docker).
  *
  * Démarre Storybook (dev HMR ou statique selon VR_STORYBOOK_MODE) puis expose :
- *   - GET  /health         → { ready, mode, storybook, hostProjectRoot, composeProjectName }
- *   - POST /capture/batch  → exécute runCaptureBatch localement et renvoie le résultat
+ *   - GET  /health              → { ready, mode, storybook, keepFresh, hostProjectRoot, composeProjectName }
+ *   - POST /storybook/refresh   → resync sources (HMR nudge / rebuild static)
+ *   - POST /capture/batch       → exécute runCaptureBatch localement et renvoie le résultat
  *
  * S'exécute *à l'intérieur* du conteneur (VR_DOCKER=1). Force le backend "local"
  * pour que runCaptureBatch effectue la vraie capture Playwright (pas de renvoi réseau).
@@ -16,6 +17,7 @@ import { format } from "util";
 import { CAPTURE_DAEMON_PORT, STORYBOOK_PORT } from "../constants/constants";
 import { getProjectRoot, resolveVrConfig } from "../utils/node";
 import { resetStorybookIndexCache } from "../utils/vr-storybook-index";
+import { nudgeFsWatchers, startStorybookKeepFresh } from "../utils/vr-storybook-keep-fresh";
 import {
   ensureStaticStorybookFresh,
   getStorybookMode,
@@ -63,6 +65,14 @@ const runSerialized = <T>(fn: () => Promise<T>): Promise<T> => {
   return next;
 };
 
+/** Rebuild / nudge Storybook : un seul à la fois (capture ∩ keep-fresh). */
+let storybookSync: Promise<unknown> = Promise.resolve();
+const withStorybookLock = <T>(fn: () => Promise<T>): Promise<T> => {
+  const next = storybookSync.then(fn, fn);
+  storybookSync = next.catch(() => undefined);
+  return next;
+};
+
 /**
  * Exécute le batch en capturant la sortie console (console.log/warn/error) pour
  * la renvoyer à l'hôte, tout en conservant l'affichage dans les logs du conteneur.
@@ -103,6 +113,7 @@ const main = async (): Promise<void> => {
   // État partagé : /health répond dès maintenant (ready:false) pendant le build Storybook.
   let storybookReady = false;
   let storybookProcess: ChildProcess | null = null;
+  let keepFresh: ReturnType<typeof startStorybookKeepFresh> | null = null;
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? "/", `http://localhost:${CAPTURE_DAEMON_PORT}`);
@@ -112,9 +123,24 @@ const main = async (): Promise<void> => {
         ready: storybookReady,
         mode,
         storybook: storybookReady,
+        keepFresh: true,
         hostProjectRoot: process.env.VR_HOST_PROJECT_ROOT || "",
         composeProjectName: process.env.VR_COMPOSE_PROJECT_NAME || "",
       });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/storybook/refresh") {
+      if (!storybookReady) {
+        sendJson(res, { success: false, error: "Storybook pas encore prêt" }, 503);
+        return;
+      }
+      try {
+        const result = keepFresh ? await keepFresh.refresh() : { changed: false };
+        sendJson(res, { success: true, ...result });
+      } catch (err) {
+        sendJson(res, { success: false, error: err instanceof Error ? err.message : String(err) }, 500);
+      }
       return;
     }
 
@@ -140,12 +166,14 @@ const main = async (): Promise<void> => {
 
         if (mode === "static") {
           try {
-            const fresh = await ensureStaticStorybookFresh({
-              projectRoot: PROJECT_ROOT,
-              port: storybookPort,
-              statsFile: config.compare.statsFile,
-              currentProcess: storybookProcess,
-            });
+            const fresh = await withStorybookLock(() =>
+              ensureStaticStorybookFresh({
+                projectRoot: PROJECT_ROOT,
+                port: storybookPort,
+                statsFile: config.compare.statsFile,
+                currentProcess: storybookProcess,
+              }),
+            );
             storybookProcess = fresh.process;
             storybookReady = fresh.ready;
             if (fresh.rebuilt) {
@@ -190,6 +218,7 @@ const main = async (): Promise<void> => {
 
   const shutdown = (signal: string): void => {
     console.log(`\n⚠️  [vr-daemon] Arrêt (${signal})`);
+    keepFresh?.stop();
     server.close();
     stopStorybook(storybookProcess);
     process.exit(0);
@@ -208,10 +237,37 @@ const main = async (): Promise<void> => {
   storybookProcess = storybook.process;
   storybookReady = storybook.ready;
 
+  keepFresh = startStorybookKeepFresh({
+    projectRoot: PROJECT_ROOT,
+    mode,
+    onDevChange: async files => {
+      await withStorybookLock(async () => {
+        nudgeFsWatchers(files);
+        await waitForDevStorybookIndexSettle(config.storybook.url);
+      });
+    },
+    onStaticChange: async () => {
+      await withStorybookLock(async () => {
+        storybookReady = false;
+        const fresh = await ensureStaticStorybookFresh({
+          projectRoot: PROJECT_ROOT,
+          port: storybookPort,
+          statsFile: config.compare.statsFile,
+          currentProcess: storybookProcess,
+        });
+        storybookProcess = fresh.process;
+        storybookReady = fresh.ready;
+        if (fresh.rebuilt) {
+          console.log("✅ [vr-daemon] Storybook statique reconstruit (keep-fresh)");
+        }
+      });
+    },
+  });
+
   if (!storybookReady) {
     console.error("❌ [vr-daemon] Storybook n'a pas indexé les stories à temps");
   } else {
-    console.log(`✅ [vr-daemon] Storybook prêt sur le port ${storybookPort} — capture disponible`);
+    console.log(`✅ [vr-daemon] Storybook prêt sur le port ${storybookPort} — capture disponible (keep-fresh)`);
   }
 };
 

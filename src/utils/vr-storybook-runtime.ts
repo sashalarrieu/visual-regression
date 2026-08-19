@@ -5,12 +5,13 @@
  * - mode "dev"    : `storybook dev` (HMR). Défaut local — identique à `yarn storybook`.
  * - mode "static" : build `storybook-static` (+ stats) puis serve. CI
  *   (`VR_STORYBOOK_MODE=static` / docker-compose.ci.yml). Rebuild si l'empreinte
- *   des sources change (pas le mtime Docker Desktop).
+ *   des sources change (pas le mtime Docker Desktop). Le daemon **surveille**
+ *   ensuite les sources (dev : nudge inotify / static : rebuild).
  */
 import { spawn } from "child_process";
 import type { ChildProcess } from "child_process";
 import { createHash } from "crypto";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -36,12 +37,18 @@ export const usesNextJsViteStorybook = (projectRoot: string): boolean => {
   }
 };
 
+/** CI / oneshot : le build static (plusieurs minutes) est acceptable. */
+export const isCiLikeStorybookStatic = (): boolean => {
+  const ci = (process.env.CI || "").toLowerCase();
+  if (ci === "true" || ci === "1") return true;
+  return process.env.VR_ENTRYPOINT_CMD === "oneshot";
+};
+
 /**
  * Mode Storybook pour la capture (daemon Docker ou scripts).
  *
- * Local (`yarn vr`) : **dev** (HMR) par défaut — identique à `yarn storybook`.
- * Override : `VR_STORYBOOK_MODE` > `launcher.storybookMode` dans `vr.config.cjs`.
- * CI / oneshot : `VR_STORYBOOK_MODE=static` (docker-compose.ci.yml).
+ * Priorité : `VR_STORYBOOK_MODE` / `VR_STORYBOOK_STATIC=1` > `launcher.storybookMode`
+ * dans vr.config.cjs > défaut (`static` en CI/oneshot, sinon `dev`).
  * Exception : `@storybook/nextjs-vite` reste en static (dev headless vide).
  */
 export const resolveStorybookModeForCapture = (projectRoot: string): StorybookMode => {
@@ -51,17 +58,17 @@ export const resolveStorybookModeForCapture = (projectRoot: string): StorybookMo
   }
   if (process.env.VR_STORYBOOK_STATIC === "1") return "static";
 
-  const config = resolveVrConfig(projectRoot);
-  if (config.launcher.storybookMode === "static" || config.launcher.storybookMode === "dev") {
-    return config.launcher.storybookMode;
-  }
-
   // Next.js Vite : le mode dev ne rend pas les stories en capture Playwright.
   if (usesNextJsViteStorybook(projectRoot)) {
     return "static";
   }
 
-  return "dev";
+  const config = resolveVrConfig(projectRoot);
+  if (config.launcher.storybookMode === "static" || config.launcher.storybookMode === "dev") {
+    return config.launcher.storybookMode;
+  }
+
+  return isCiLikeStorybookStatic() ? "static" : "dev";
 };
 
 /** Mode Storybook résolu (env > vr.config > auto Docker/static). */
@@ -138,51 +145,156 @@ const STORYBOOK_SOURCE_EXTENSIONS = new Set([
   ".mjs",
   ".css",
   ".scss",
+  ".less",
   ".mdx",
   ".html",
+  ".json",
+  ".svg",
+  ".png",
+  ".webp",
+  ".gif",
+  ".jpg",
+  ".jpeg",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".otf",
+  ".graphql",
+  ".gql",
+]);
+
+const SKIP_DIR_NAMES = new Set([
+  "node_modules",
+  "Screenshots",
+  "storybook-static",
+  "coverage",
+  "dist",
+  "build",
+  "android",
+  "ios",
+  "web-build",
+  "Pods",
 ]);
 
 export const STORYBOOK_INPUT_FINGERPRINT_FILE = ".vr-cache/storybook-input.fingerprint";
+/** Bump si le pipeline de build change (wipe cache Vite, nouveaux roots). Les empreintes v1 sont ignorées. */
+export const STORYBOOK_INPUT_FINGERPRINT_VERSION = "2";
 
 const storybookInputRoots = (projectRoot: string): string[] => [
-  path.join(projectRoot, "src"),
-  path.join(projectRoot, ".storybook"),
-  path.join(projectRoot, "apps", "storybook"),
+  projectRoot,
   path.join(projectRoot, "node_modules", "@setshao", "visual-regression", "src", "storybook"),
   path.join(projectRoot, "node_modules", "@setshao", "visual-regression", "src", "utils"),
   path.join(projectRoot, "..", "visual-regression", "src", "storybook"),
   path.join(projectRoot, "..", "visual-regression", "src", "utils"),
 ];
 
-const collectStorybookInputFiles = (projectRoot: string): string[] => {
-  const files: string[] = [];
+const shouldSkipStorybookInputDir = (name: string): boolean => {
+  if (SKIP_DIR_NAMES.has(name)) return true;
+  // .storybook doit rester ; le reste des dossiers cachés (git, cache, expo…) non.
+  return name.startsWith(".") && name !== ".storybook";
+};
+
+const walkStorybookInputFiles = (projectRoot: string): Generator<string> => {
   const seen = new Set<string>();
 
-  const walk = (dir: string): void => {
+  function* walk(dir: string): Generator<string> {
     if (!existsSync(dir)) return;
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "Screenshots" || entry.name === "storybook-static") {
-          continue;
-        }
-        walk(full);
+        if (shouldSkipStorybookInputDir(entry.name)) continue;
+        yield* walk(full);
         continue;
       }
       if (!STORYBOOK_SOURCE_EXTENSIONS.has(path.extname(entry.name))) continue;
       const resolved = path.resolve(full);
       if (seen.has(resolved)) continue;
       seen.add(resolved);
-      files.push(resolved);
+      yield resolved;
     }
-  };
-
-  for (const root of storybookInputRoots(projectRoot)) {
-    walk(root);
   }
 
+  return (function* all(): Generator<string> {
+    for (const root of storybookInputRoots(projectRoot)) {
+      yield* walk(root);
+    }
+  })();
+};
+
+export const collectStorybookInputFiles = (projectRoot: string): string[] =>
+  [...walkStorybookInputFiles(projectRoot)].sort();
+
+/** Walk non bloquant (keep-fresh) : cède le event loop tous les `yieldEvery` fichiers. */
+export const collectStorybookInputFilesAsync = async (projectRoot: string, yieldEvery = 128): Promise<string[]> => {
+  const files: string[] = [];
+  let n = 0;
+  for (const file of walkStorybookInputFiles(projectRoot)) {
+    files.push(file);
+    if (yieldEvery > 0 && ++n % yieldEvery === 0) {
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+  }
   return files.sort();
 };
+
+/** Empreinte légère pour le poll keep-fresh (mtime+size, ~50 ms vs ~10 s de SHA1). */
+export const snapshotStorybookInputStats = (files: string[]): Map<string, string> => {
+  const snapshot = new Map<string, string>();
+  for (const file of files) {
+    try {
+      const stat = statSync(file);
+      snapshot.set(file, `${stat.mtimeMs}:${stat.size}`);
+    } catch {
+      snapshot.set(file, "missing");
+    }
+  }
+  return snapshot;
+};
+
+export const snapshotStorybookInputs = (projectRoot: string): Map<string, string> => {
+  const snapshot = new Map<string, string>();
+  for (const file of collectStorybookInputFiles(projectRoot)) {
+    try {
+      snapshot.set(file, createHash("sha1").update(readFileSync(file)).digest("hex"));
+    } catch {
+      snapshot.set(file, "missing");
+    }
+  }
+  return snapshot;
+};
+
+export type StorybookInputDiff = {
+  changed: string[];
+  added: string[];
+  removed: string[];
+};
+
+export const diffStorybookInputSnapshots = (
+  previous: Map<string, string>,
+  next: Map<string, string>,
+): StorybookInputDiff => {
+  const changed: string[] = [];
+  const added: string[] = [];
+  const removed: string[] = [];
+  for (const [file, hash] of next) {
+    const prev = previous.get(file);
+    if (prev === undefined) added.push(file);
+    else if (prev !== hash) changed.push(file);
+  }
+  for (const file of previous.keys()) {
+    if (!next.has(file)) removed.push(file);
+  }
+  return { changed, added, removed };
+};
+
+export const storybookInputDiffHasChanges = (diff: StorybookInputDiff): boolean =>
+  diff.changed.length > 0 || diff.added.length > 0 || diff.removed.length > 0;
 
 /** Empreinte du contenu des sources Storybook (mtime Docker Desktop non fiable). */
 export const computeStorybookInputFingerprint = (projectRoot: string): string => {
@@ -200,12 +312,17 @@ export const computeStorybookInputFingerprint = (projectRoot: string): string =>
   return hash.digest("hex");
 };
 
+const fingerprintStoragePrefix = (): string => `${STORYBOOK_INPUT_FINGERPRINT_VERSION}:`;
+
 export const readStoredStorybookInputFingerprint = (projectRoot: string): string | null => {
   const fingerprintPath = path.join(projectRoot, STORYBOOK_INPUT_FINGERPRINT_FILE);
   if (!existsSync(fingerprintPath)) return null;
   try {
     const value = readFileSync(fingerprintPath, "utf8").trim();
-    return value.length > 0 ? value : null;
+    const prefix = fingerprintStoragePrefix();
+    if (!value.startsWith(prefix)) return null;
+    const hash = value.slice(prefix.length).trim();
+    return hash.length > 0 ? hash : null;
   } catch {
     return null;
   }
@@ -214,7 +331,27 @@ export const readStoredStorybookInputFingerprint = (projectRoot: string): string
 export const writeStoredStorybookInputFingerprint = (projectRoot: string, fingerprint?: string): void => {
   const fingerprintPath = path.join(projectRoot, STORYBOOK_INPUT_FINGERPRINT_FILE);
   mkdirSync(path.dirname(fingerprintPath), { recursive: true });
-  writeFileSync(fingerprintPath, `${fingerprint ?? computeStorybookInputFingerprint(projectRoot)}\n`, "utf8");
+  const hash = fingerprint ?? computeStorybookInputFingerprint(projectRoot);
+  writeFileSync(fingerprintPath, `${fingerprintStoragePrefix()}${hash}\n`, "utf8");
+};
+
+/**
+ * Vide storybook-static + caches Vite/Storybook.
+ * Sans ça, un rebuild Docker peut réémettre d'anciens chunks (mtime virtiofs).
+ */
+export const clearStaleStorybookBuildCaches = (projectRoot: string): void => {
+  const targets = [
+    path.join(projectRoot, "storybook-static"),
+    path.join(projectRoot, "node_modules", ".cache", "storybook"),
+    path.join(projectRoot, "node_modules", ".vite"),
+  ];
+  for (const target of targets) {
+    try {
+      rmSync(target, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+  }
 };
 
 /** true si un build statique de Storybook est nécessaire (absent, stats manquantes ou sources changées). */
@@ -271,6 +408,7 @@ export const ensureStorybookStaticAssets = (projectRoot: string): void => {
 /** Build Storybook statique (--stats-json). Résout avec le code de sortie. */
 export const buildStaticStorybook = (projectRoot: string): Promise<number> =>
   new Promise((resolve, reject) => {
+    clearStaleStorybookBuildCaches(projectRoot);
     const { command, args } = getPackageScriptCommand(projectRoot, "storybook:build:stats");
     const proc = spawn(command, args, {
       stdio: "inherit",
@@ -281,6 +419,29 @@ export const buildStaticStorybook = (projectRoot: string): Promise<number> =>
     proc.on("error", reject);
     proc.on("close", code => resolve(code ?? 1));
   });
+
+const MAX_STATIC_BUILD_ATTEMPTS = 3;
+
+/**
+ * Build static en figeant l’empreinte **avant** le compile.
+ * Sans ça, un edit pendant un build de 10–20 min est hashé après coup :
+ * le snapshot servi est périmé mais considéré à jour.
+ */
+export const rebuildStaticStorybookUntilFingerprintStable = async (projectRoot: string): Promise<number> => {
+  let lastCode = 1;
+  for (let attempt = 1; attempt <= MAX_STATIC_BUILD_ATTEMPTS; attempt += 1) {
+    const builtFrom = computeStorybookInputFingerprint(projectRoot);
+    lastCode = await buildStaticStorybook(projectRoot);
+    if (lastCode !== 0) return lastCode;
+    ensureStorybookStaticAssets(projectRoot);
+    writeStoredStorybookInputFingerprint(projectRoot, builtFrom);
+    if (computeStorybookInputFingerprint(projectRoot) === builtFrom) return 0;
+    console.log(
+      `🔄 [vr-storybook] Sources changées pendant le build (${attempt}/${MAX_STATIC_BUILD_ATTEMPTS}) — rebuild`,
+    );
+  }
+  return lastCode;
+};
 
 /** Démarre le serveur static storybook-static (vr-static-server, pas `serve`). */
 export const startStaticStorybookServer = (projectRoot: string, port: number): ChildProcess => {
@@ -406,12 +567,10 @@ export const startStorybook = async (options: StartStorybookOptions): Promise<St
 
   if (mode === "static") {
     if (needsStaticStorybookBuild(projectRoot, statsFile)) {
-      const code = await buildStaticStorybook(projectRoot);
+      const code = await rebuildStaticStorybookUntilFingerprintStable(projectRoot);
       if (code !== 0) {
         throw new Error(`Build Storybook statique échoué (code ${code})`);
       }
-      ensureStorybookStaticAssets(projectRoot);
-      writeStoredStorybookInputFingerprint(projectRoot);
     } else {
       // Build déjà là : quand même (re)copier fonts/assets (souvent oubliés hors staticDirs).
       ensureStorybookStaticAssets(projectRoot);
@@ -449,14 +608,13 @@ export const ensureStaticStorybookFresh = async (options: {
   console.log("🔄 [vr-storybook] Sources modifiées — rebuild Storybook statique…");
   stopStorybook(options.currentProcess);
 
-  const code = await buildStaticStorybook(projectRoot);
+  const code = await rebuildStaticStorybookUntilFingerprintStable(projectRoot);
   if (code !== 0) {
     throw new Error(`Build Storybook statique échoué (code ${code})`);
   }
 
   const proc = startStaticStorybookServer(projectRoot, port);
   const ready = await waitForStorybookStories(1, waitMaxAttempts, projectRoot);
-  writeStoredStorybookInputFingerprint(projectRoot);
 
   return { process: proc, ready, rebuilt: true };
 };
