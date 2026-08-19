@@ -186,7 +186,7 @@
     "cross-env": "^7.0.3",
     "expo": "~54.0.35",
     "expo-font": "~14.0.12",
-    "expo-updates": "~29.0.18",
+    "expo-updates": "~57.0.8",
     "lru-cache": "5.1.1",
     "yallist": "3.1.1",
     "pixelmatch": "^7.2.0",
