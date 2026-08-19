@@ -30,6 +30,7 @@ describe("isCaptureDaemonReusableForProject", () => {
     const health: CaptureDaemonHealth = {
       ready: true,
       hostProjectRoot: `${projectRoot}/`,
+      keepFresh: true,
     };
     expect(isCaptureDaemonReusableForProject(health, projectRoot)).toBe(true);
   });
@@ -39,9 +40,19 @@ describe("isCaptureDaemonReusableForProject", () => {
       ready: true,
       mode: "static",
       hostProjectRoot: projectRoot,
+      keepFresh: true,
     };
     expect(isCaptureDaemonReusableForProject(health, projectRoot, "dev")).toBe(false);
     expect(isCaptureDaemonReusableForProject(health, projectRoot, "static")).toBe(true);
+  });
+
+  it("refuse un sidecar sans keepFresh (Storybook non surveillé)", () => {
+    const health: CaptureDaemonHealth = {
+      ready: true,
+      mode: "static",
+      hostProjectRoot: projectRoot,
+    };
+    expect(isCaptureDaemonReusableForProject(health, projectRoot, "static")).toBe(false);
   });
 });
 

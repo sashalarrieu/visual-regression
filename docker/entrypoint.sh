@@ -102,19 +102,28 @@ fi
 # son node_modules est un volume anonyme vide (masque les binaires Darwin).
 sync_linked_vr_sources() {
   if [ ! -f /visual-regression/bin/visual-regression.mjs ]; then
+    echo "⚠️  [vr-docker] /visual-regression non monté — daemon = copie yarn du volume (peut être périmée)"
     return 0
   fi
   if [ ! -e node_modules/@setshao/visual-regression ]; then
+    echo "⚠️  [vr-docker] node_modules/@setshao/visual-regression absent — skip sync lib"
     return 0
   fi
   VR_PKG=$(cd node_modules/@setshao/visual-regression && pwd -P 2>/dev/null || true)
-  if [ -z "$VR_PKG" ] || [ "$VR_PKG" = "/visual-regression" ]; then
+  if [ -z "$VR_PKG" ]; then
     return 0
   fi
-  echo "🐳 [vr-docker] Sync sources file: → $VR_PKG"
-  rm -rf "$VR_PKG/src" "$VR_PKG/bin"
+  if [ "$VR_PKG" = "/visual-regression" ]; then
+    echo "🐳 [vr-docker] Lib live via symlink (/visual-regression)"
+    return 0
+  fi
+  echo "🐳 [vr-docker] Sync lib live → $VR_PKG"
+  rm -rf "$VR_PKG/src" "$VR_PKG/bin" "$VR_PKG/docker"
   cp -a /visual-regression/src "$VR_PKG/src"
   cp -a /visual-regression/bin "$VR_PKG/bin"
+  if [ -d /visual-regression/docker ]; then
+    cp -a /visual-regression/docker "$VR_PKG/docker"
+  fi
 }
 
 sync_linked_vr_sources

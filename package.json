@@ -1,6 +1,6 @@
 {
   "name": "@setshao/visual-regression",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Interface de régression visuelle pour Storybook (React Native / Expo), réutilisable dans tout projet",
   "type": "module",
   "main": "src/index.tsx",

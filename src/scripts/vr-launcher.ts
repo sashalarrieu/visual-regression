@@ -31,6 +31,7 @@ import { getCaptureDaemonUrl } from "../utils/vr-capture-backend";
 import {
   fetchCaptureDaemonHealth,
   isCaptureDaemonReusableForProject,
+  refreshCaptureDaemonStorybook,
   waitForCaptureDaemon,
 } from "../utils/vr-capture-remote";
 import {
@@ -329,13 +330,13 @@ const main = async () => {
       { auto: true },
     );
   } else {
-    // Le sidecar doit tourner le même mode que l'hôte (dev HMR par défaut).
+    // Le sidecar doit tourner le mode demandé (vr.config / env).
     const captureStorybookMode = resolveStorybookModeForCapture(PROJECT_ROOT);
     process.env.VR_STORYBOOK_MODE = captureStorybookMode;
     if (captureStorybookMode === "dev") {
       log("green", "📚", "Storybook live (HMR) — les stories suivent le disque comme yarn storybook");
     } else {
-      log("blue", "📚", "Storybook statique (VR_STORYBOOK_MODE / launcher.storybookMode) — build storybook-static");
+      log("blue", "📚", "Storybook statique (launcher.storybookMode / VR_STORYBOOK_MODE) — build storybook-static");
     }
     if (
       explicitStorybookMode !== "static" &&
@@ -349,7 +350,7 @@ const main = async () => {
     // Les sidecars des autres projets restent intacts (ports / Compose distincts).
     const thisProjectPortsBusy = !storybookAvailable || !daemonAvailable;
     const existingHealth = thisProjectPortsBusy ? await fetchCaptureDaemonHealth() : null;
-    const canReuseSidecar = isCaptureDaemonReusableForProject(existingHealth, PROJECT_ROOT, captureStorybookMode);
+    let canReuseSidecar = isCaptureDaemonReusableForProject(existingHealth, PROJECT_ROOT, captureStorybookMode);
 
     if (canReuseSidecar) {
       log(
@@ -357,8 +358,17 @@ const main = async () => {
         "✅",
         `Sidecar de capture déjà actif — réutilisation (${getCaptureDaemonUrl()} → Storybook ${storybookUrl})`,
       );
-      startDockerLogFollow();
-    } else {
+      log("blue", "🔄", "Synchronisation Storybook (keep-fresh)…");
+      const refreshed = await refreshCaptureDaemonStorybook(vrConfig);
+      if (refreshed) {
+        startDockerLogFollow();
+      } else {
+        log("yellow", "⚠️", "Keep-fresh sidecar injoignable — recréation du stack");
+        canReuseSidecar = false;
+      }
+    }
+
+    if (!canReuseSidecar) {
       if (thisProjectPortsBusy) {
         if (existingHealth?.ready && existingHealth.hostProjectRoot) {
           log(
@@ -415,8 +425,9 @@ const main = async () => {
           "⏳",
           "Attente du daemon de capture (Storybook + Playwright — yarn install Docker + 1er build peuvent dépasser 5 min)",
         );
-        // 15 min : install yarn.lock dans le sidecar + compile Vite HMR, pas seulement le healthcheck.
-        let daemonReady = await waitForCaptureDaemon(900);
+        // Static : build Vite 10–20 min. HMR : install + compile, souvent < 5 min.
+        const daemonWaitAttempts = captureStorybookMode === "static" ? 1800 : 900;
+        let daemonReady = await waitForCaptureDaemon(daemonWaitAttempts);
         if (!daemonReady) {
           log("yellow", "⚠️", "Daemon non prêt après démarrage — rebuild forcé du sidecar");
           if (!vrConfig.docker.showLogs) {
@@ -430,7 +441,7 @@ const main = async () => {
           if (rebuildCode === 0) {
             restartDockerLogFollow();
             log("blue", "⏳", "Attente du daemon après rebuild forcé");
-            daemonReady = await waitForCaptureDaemon(900);
+            daemonReady = await waitForCaptureDaemon(daemonWaitAttempts);
           }
           if (!daemonReady) {
             if (!vrConfig.docker.showLogs) {

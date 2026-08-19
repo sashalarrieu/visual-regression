@@ -4,9 +4,19 @@ Ce projet suit le format [Keep a Changelog](https://keepachangelog.com/fr/1.1.2/
 
 ## [Unreleased]
 
+### Fixed
+
+- Storybook du sidecar **reste à jour** en mode `dev` **et** `static` : keep-fresh poll **mtime+size** (~50 ms) au lieu d’un SHA1 de tout le repo (~7k fichiers / ~10 s, event loop bloquée → aucun nudge). En `dev`, `utimes` intra-conteneur débloque le HMR inotify ; en `static`, rebuild avec caches Vite/Storybook vidés. `index.json` n’est plus servi en `immutable`. Les sidecars sans `keepFresh` sont recréés.
+- `launcher.storybookMode` de `vr.config.cjs` est respecté en local (`static` ou `dev`). Plus d’override HMR silencieux. En static, l’attente daemon passe à 30 min (build Vite 10–20 min). Keep-fresh rebuild si les sources changent ; empreinte figée **avant** le compile.
+
+## [1.3.0] - 2026-08-17
+
 ### Added
 
 - Arbre UI : Maj+clic pour sélectionner une plage de stories, Option+clic (Alt) pour ouvrir/fermer récursivement un accordéon, bouton tout déplier / tout replier.
+- UI : panneau arbre redimensionnable (`DraggableSplitView`, double-clic pour reset).
+- Favicons / PWA Expo web servis depuis `assets/` (`EXPO_PUBLIC_FOLDER`).
+- Helper `vrStorybookAddons` pour retirer `@storybook/addon-vitest` dans le sidecar.
 
 ### Fixed
 
