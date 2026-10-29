@@ -16,16 +16,19 @@
  * Env optionnelles :
  * - NOTION_ID_PROPERTY   nom propriété ID (défaut: "ID")
  * - NOTION_ID_PREFIX     si défini, n’accepte que PREFIX-123 (ex. TAS)
- * - NOTION_VERSION       (défaut: 2022-06-28)
+ * - NOTION_VERSION       (défaut: 2026-03-11 — requis pour PAT Notion)
  */
 
 /** IDs des bases Notion de tickets à interroger (ordre = priorité). */
-const NOTION_DATABASE_IDS = ["40804205-6850-8059-b9b9-c055311377cc"];
+const NOTION_DATABASE_IDS = [
+  // https://app.notion.com/p/4080420568508059b9b9c055311377cc
+  "40804205-6850-8059-b9b9-c055311377cc",
+];
 
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const NOTION_ID_PROPERTY = process.env.NOTION_ID_PROPERTY || "ID";
 const NOTION_ID_PREFIX = (process.env.NOTION_ID_PREFIX || "").trim().toUpperCase();
-const NOTION_VERSION = process.env.NOTION_VERSION || "2022-06-28";
+const NOTION_VERSION = process.env.NOTION_VERSION || "2026-03-11";
 
 const PR_NUMBER = process.env.PR_NUMBER || "";
 const PR_TITLE = process.env.PR_TITLE || "";
@@ -170,17 +173,69 @@ function formatDatabaseId(raw) {
   return `${dbId.slice(0, 8)}-${dbId.slice(8, 12)}-${dbId.slice(12, 16)}-${dbId.slice(16, 20)}-${dbId.slice(20)}`;
 }
 
-function pickPageForTicket(results, ticket) {
+function pickPageForTicket(results, ticket, idPropertyName) {
   if (!results.length) return null;
   if (!ticket.prefix) return results[0].id;
   const match = results.find(page => {
-    const prop = page.properties?.[NOTION_ID_PROPERTY];
+    const prop = page.properties?.[idPropertyName];
     const uid = prop?.unique_id;
     if (!uid) return true;
     const pagePrefix = (uid.prefix || "").toUpperCase();
     return !pagePrefix || pagePrefix === ticket.prefix;
   });
   return match?.id ?? null;
+}
+
+/** Résout database_id → data_source_id (API Notion ≥ 2025-09-03). */
+async function resolveDataSource(databaseId) {
+  const db = await notionFetch(`/databases/${databaseId}`);
+  const sources = db.data_sources || [];
+  if (sources.length > 0) {
+    console.log(`📚 data_source=${sources[0].id} (base ${databaseId}, ${sources.length} source(s))`);
+    return { dataSourceId: sources[0].id, database: db };
+  }
+  // Ancienne forme / fallback : l’UUID base sert encore de data source
+  console.log(`📚 Pas de data_sources[] — fallback query data_sources/${databaseId}`);
+  return { dataSourceId: databaseId, database: db };
+}
+
+function findIdPropertyMeta(properties) {
+  const props = properties || {};
+  const preferredNames = [NOTION_ID_PROPERTY, "ID", "Identifiant", "Id"];
+  for (const name of preferredNames) {
+    if (props[name]) {
+      return { name, type: props[name].type };
+    }
+  }
+  const unique = Object.entries(props).find(([, p]) => p?.type === "unique_id");
+  if (unique) return { name: unique[0], type: "unique_id" };
+  return null;
+}
+
+function buildTicketFilter(idMeta, ticket) {
+  if (!idMeta) {
+    throw new Error(`Aucune propriété ID trouvée (cherché: ${NOTION_ID_PROPERTY} / Identifiant / unique_id).`);
+  }
+  if (idMeta.type === "unique_id") {
+    return { property: idMeta.name, unique_id: { equals: ticket.number } };
+  }
+  if (idMeta.type === "rich_text") {
+    return { property: idMeta.name, rich_text: { equals: ticket.raw } };
+  }
+  if (idMeta.type === "title") {
+    return { property: idMeta.name, title: { equals: ticket.raw } };
+  }
+  if (idMeta.type === "number") {
+    return { property: idMeta.name, number: { equals: ticket.number } };
+  }
+  throw new Error(`Type de propriété ID non supporté: ${idMeta.name} (${idMeta.type})`);
+}
+
+async function queryTicketInDataSource(dataSourceId, filter) {
+  return notionFetch(`/data_sources/${dataSourceId}/query`, {
+    method: "POST",
+    body: { page_size: 5, filter },
+  });
 }
 
 /** Cherche le ticket dans chaque base listée ; retourne le premier hit. */
@@ -193,30 +248,37 @@ async function findPageByUniqueId(ticket) {
   for (const rawId of NOTION_DATABASE_IDS) {
     const databaseId = formatDatabaseId(rawId);
     try {
-      const data = await notionFetch(`/databases/${databaseId}/query`, {
-        method: "POST",
-        body: {
-          page_size: 5,
-          filter: {
-            property: NOTION_ID_PROPERTY,
-            unique_id: { equals: ticket.number },
-          },
-        },
-      });
-      const pageId = pickPageForTicket(data.results || [], ticket);
+      const { dataSourceId, database } = await resolveDataSource(databaseId);
+      // Schéma des propriétés : sur data_source (API récente) ou database (fallback)
+      let properties = database.properties;
+      if (!properties || Object.keys(properties).length === 0) {
+        try {
+          const ds = await notionFetch(`/data_sources/${dataSourceId}`);
+          properties = ds.properties || {};
+        } catch {
+          // ignore — on tentera quand même avec NOTION_ID_PROPERTY
+        }
+      }
+      const idMeta = findIdPropertyMeta(properties) || {
+        name: NOTION_ID_PROPERTY,
+        type: "unique_id",
+      };
+      console.log(`🏷️  Filtre ID: ${idMeta.name} (${idMeta.type}) = ${ticket.raw}`);
+      const filter = buildTicketFilter(idMeta, ticket);
+      const data = await queryTicketInDataSource(dataSourceId, filter);
+      const pageId = pickPageForTicket(data.results || [], ticket, idMeta.name);
       if (pageId) {
-        console.log(`📂 Trouvé ${ticket.raw} dans la base ${databaseId}`);
+        console.log(`📂 Trouvé ${ticket.raw} → page ${pageId}`);
         return pageId;
       }
+      console.warn(`⚠️  Aucun résultat pour ${ticket.raw} dans data_source ${dataSourceId}`);
     } catch (err) {
       lastError = err;
       console.warn(`⚠️  Base ${databaseId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  if (lastError && NOTION_DATABASE_IDS.length === 1) {
-    throw lastError;
-  }
+  if (lastError) throw lastError;
   return null;
 }
 
@@ -318,6 +380,7 @@ async function resolveTargetPages(haystack) {
   }
 
   const tickets = extractTicketIds(haystack);
+  const lookupErrors = [];
   for (const ticket of tickets) {
     console.log(`🔎 Ticket ID détecté: ${ticket.raw}`);
     try {
@@ -328,8 +391,16 @@ async function resolveTargetPages(haystack) {
       }
       if (!targets.has(pageId)) targets.set(pageId, `id:${ticket.raw}`);
     } catch (err) {
-      console.warn(`⚠️  Lookup ${ticket.raw}: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`⚠️  Lookup ${ticket.raw}: ${msg}`);
+      lookupErrors.push(`${ticket.raw}: ${msg}`);
     }
+  }
+
+  // Si on a détecté des IDs mais aucune page résolue → échec explicite (évite un faux vert)
+  if (tickets.length > 0 && targets.size === 0) {
+    const detail = lookupErrors.length ? lookupErrors.join(" | ") : "aucun résultat Notion";
+    throw new Error(`Impossible de résoudre le(s) ticket(s) Notion (${detail})`);
   }
 
   return targets;
