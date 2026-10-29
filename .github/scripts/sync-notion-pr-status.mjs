@@ -3,7 +3,7 @@
  * POC — synchronise l’état d’une PR GitHub vers une page Notion.
  *
  * Entrées (env) :
- * - NOTION_TOKEN              secret API Notion (GitHub secret NOTION_VR)
+ * - NOTION_TOKEN              secret API Notion (GitHub secret NOTION_API_VR)
  * - PR_BODY                   corps de la PR (où coller l’URL Notion du ticket)
  * - PR_HTML_URL               URL de la PR GitHub
  * - PR_STATE                  open | closed
@@ -28,7 +28,8 @@ const STATUS_PROP = process.env.NOTION_PR_STATUS_PROPERTY || "PR status";
 const STATUS_TYPE = process.env.NOTION_PR_STATUS_TYPE || "select";
 const NOTION_VERSION = process.env.NOTION_VERSION || "2022-06-28";
 
-const NOTION_URL_RE = /https?:\/\/(?:www\.)?(?:notion\.so|notion\.site|notion\.com)\/[^\s)>\]"']+/gi;
+// Couvre notion.so, www.notion.so, app.notion.com, etc.
+const NOTION_URL_RE = /https?:\/\/(?:[a-z0-9-]+\.)*(?:notion\.so|notion\.site|notion\.com)\/[^\s)>\]"']+/gi;
 
 function fail(message, code = 1) {
   console.error(`❌ ${message}`);
@@ -88,7 +89,7 @@ async function patchNotionPage(pageId, properties) {
 }
 
 async function main() {
-  if (!NOTION_TOKEN) fail("NOTION_TOKEN manquant (secret GitHub NOTION_VR).");
+  if (!NOTION_TOKEN) fail("NOTION_TOKEN manquant (secret GitHub NOTION_API_VR).");
   if (!PR_HTML_URL) fail("PR_HTML_URL manquant.");
 
   const found = findNotionPageId(PR_BODY);
