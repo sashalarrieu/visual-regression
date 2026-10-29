@@ -2,6 +2,8 @@ import type { Preview } from "@storybook/react-webpack5";
 
 import { vrPreviewDecorators } from "@setshao/visual-regression/storybook";
 
+import "../src/web.css";
+
 const preview: Preview = {
   decorators: vrPreviewDecorators,
   parameters: {

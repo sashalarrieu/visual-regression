@@ -18,6 +18,11 @@
       "types": "./src/storybook/index.ts",
       "default": "./src/storybook/index.ts"
     },
+    "./storybook/vite": {
+      "types": "./src/storybook/vr-vite-browser-shims.ts",
+      "default": "./src/storybook/vr-vite-browser-shims.ts"
+    },
+    "./web.css": "./src/web.css",
     "./package.json": "./package.json"
   },
   "bin": {

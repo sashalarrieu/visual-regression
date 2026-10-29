@@ -7,9 +7,14 @@ import {
   PLAY_FN_TAG,
   SKIP_PLAY_VR_TAG,
   VR_CAPTURE_ANIMATION_FREEZE_CSS,
+  VR_CAPTURE_FOCUS_RESET_CSS,
+  VR_CAPTURE_FOCUS_RESET_STYLE_ID,
+  VR_PLAY_AUTOPLAY_GRACE_MS,
+  VR_PLAY_FALLBACK_TIMEOUT_MS,
 } from "../constants/constants";
 import {
   formatVrPlayError,
+  hasVisiblePortalDialogOutsideRoot,
   resolveStoryPlayFunction,
   runVrStoryPlay,
   shouldReplayVrStoryPlay,
@@ -18,6 +23,7 @@ import {
 } from "../utils/vr-story-play";
 
 import { patchStorybookFocusForDocs } from "./patch-storybook-focus";
+import { applyClassicScrollbarsInPage } from "./play-helpers";
 
 // Storybook 10.5+ : sans ce patch, addon-docs crash (Illegal invocation sur focus).
 patchStorybookFocusForDocs();
@@ -36,22 +42,48 @@ if (typeof window !== "undefined") {
 
 const VR_CAPTURE_FREEZE_STYLE_ID = "vr-capture-animation-freeze";
 
+const injectCaptureStyle = (id: string, css: string): (() => void) => {
+  const style = document.createElement("style");
+  style.id = id;
+  style.textContent = css;
+  document.head.appendChild(style);
+  return () => {
+    style.remove();
+  };
+};
+
 /** Fige les animations CSS pendant la capture VR (sans import Reanimated dans ce entry). */
 const VrCaptureAnimationFreeze = ({ active, children }: { active: boolean; children: ReactNode }) => {
   useEffect(() => {
     if (!active || typeof document === "undefined") return;
-
-    const style = document.createElement("style");
-    style.id = VR_CAPTURE_FREEZE_STYLE_ID;
-    style.textContent = VR_CAPTURE_ANIMATION_FREEZE_CSS;
-    document.head.appendChild(style);
-
-    return () => {
-      style.remove();
-    };
+    return injectCaptureStyle(VR_CAPTURE_FREEZE_STYLE_ID, VR_CAPTURE_ANIMATION_FREEZE_CSS);
   }, [active]);
 
   return <>{children}</>;
+};
+
+/** Outline / caret : Playwright laisse le focus après play() (anneau noir Chromium). */
+const VrCaptureFocusReset = ({ children }: { children: ReactNode }) => {
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    return injectCaptureStyle(VR_CAPTURE_FOCUS_RESET_STYLE_ID, VR_CAPTURE_FOCUS_RESET_CSS);
+  }, []);
+
+  return <>{children}</>;
+};
+
+/** Neutralise l’anneau :focus en capture (Playwright + Chromium Linux). */
+export const withVrCaptureFocusReset: Decorator = Story => {
+  const inCapture = typeof window !== "undefined" && window.__VR_CAPTURE__ === true;
+  if (!inCapture) {
+    return <Story />;
+  }
+
+  return (
+    <VrCaptureFocusReset>
+      <Story />
+    </VrCaptureFocusReset>
+  );
 };
 
 /** Fige les animations en capture VR sauf stories taguées `live-animation-vr`. */
@@ -73,24 +105,20 @@ export const withVrReanimatedFreeze: Decorator = (Story, context) => {
 
 type VrStoryPlayRunnerProps = {
   Story: () => JSX.Element;
-  context: { id?: string; tags?: string[]; playFunction?: VrStoryPlayFunction } & Record<string, unknown>;
-};
-
-const hasPortalDialogOutsideRoot = (): boolean => {
-  const root = document.getElementById("storybook-root");
-  return Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).some(
-    el => !root || !root.contains(el),
-  );
+  context: {
+    id?: string;
+    tags?: string[];
+    playFunction?: VrStoryPlayFunction;
+    parameters?: { vr?: { showScrollbars?: boolean } };
+  } & Record<string, unknown>;
 };
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /**
- * En capture VR : attend le play Storybook (et un portal s'il y en a).
- * L'URL de capture pose `embed=true` pour couper l'autoplay Storybook —
- * sinon `play()` s'exécute avant les `useEffect` (sync props→state) et l'UI
- * revient à l'état initial. On ne rejoue `play()` que s'il n'a pas tourné
- * (autoplay off / static no-op) : un second play casse spies et DOM déjà muté.
+ * En capture VR : exécute `play()` après les `useEffect` de sync (embed=true coupe l’autoplay).
+ * Un second play sur un DOM déjà muté casse spies et findBy*. On ne rejoue que si
+ * Storybook n’a pas vraiment joué. Un dialog 0×0 (Modal fermée) n’empêche pas le replay.
  */
 const VrStoryPlayRunner = ({ Story, context }: VrStoryPlayRunnerProps) => {
   useEffect(() => {
@@ -146,64 +174,68 @@ const VrStoryPlayRunner = ({ Story, context }: VrStoryPlayRunnerProps) => {
 
     void (async () => {
       try {
-        // Laisse le play Storybook auto tenter d'ouvrir un portal (max ~2.5s).
-        for (let i = 0; i < 50; i++) {
+        const graceSteps = Math.max(1, Math.ceil(VR_PLAY_AUTOPLAY_GRACE_MS / 50));
+        for (let i = 0; i < graceSteps; i++) {
           if (cancelled) return;
-          if (hasPortalDialogOutsideRoot()) {
-            mark("true");
-            return;
-          }
-          if (sb.status !== "pending") break;
+          if (sb.playStarted || sb.status !== "pending") break;
           await sleep(50);
         }
 
         if (cancelled) return;
-        if (hasPortalDialogOutsideRoot()) {
-          mark("true");
+        if (sb.status === "error") {
+          mark("error", sb.error);
           return;
-        }
-
-        // Play terminé : laisser un tick au portal RNW pour se monter.
-        if (sb.status === "success") {
-          for (let i = 0; i < 6; i++) {
-            if (cancelled) return;
-            if (hasPortalDialogOutsideRoot()) {
-              mark("true");
-              return;
-            }
-            await sleep(50);
-          }
         }
 
         if (
-          !shouldReplayVrStoryPlay({
-            hasPortal: hasPortalDialogOutsideRoot(),
+          shouldReplayVrStoryPlay({
+            hasPortal: hasVisiblePortalDialogOutsideRoot(),
             playStarted: sb.playStarted,
           })
         ) {
-          if (sb.status === "error") {
+          try {
+            await Promise.race([
+              runVrStoryPlay(context),
+              new Promise<never>((_, reject) => {
+                setTimeout(
+                  () => reject(new Error(`VR play() timeout (${VR_PLAY_FALLBACK_TIMEOUT_MS}ms)`)),
+                  VR_PLAY_FALLBACK_TIMEOUT_MS,
+                );
+              }),
+            ]);
+          } catch (error) {
+            console.error("[VR] play() fallback failed:", error);
+            mark("error", error);
+            return;
+          }
+        } else if (sb.playStarted && sb.status === "pending") {
+          const deadline = Date.now() + VR_PLAY_FALLBACK_TIMEOUT_MS;
+          while (!cancelled && sb.status === "pending" && Date.now() < deadline) {
+            await sleep(50);
+          }
+          if (cancelled) return;
+          // Relecture : TS ne voit pas les mutations async des handlers channel.
+          const statusAfterWait = sb.status as VrStoryPlayRunnerStatus;
+          if (statusAfterWait === "error") {
             mark("error", sb.error);
             return;
           }
-          mark("true");
-          return;
-        }
-
-        // Fallback : play Storybook absent / no-op / trop lent — on exécute nous-mêmes avec timeout.
-        try {
-          await Promise.race([
-            runVrStoryPlay(context),
-            new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error("VR play() timeout (6s)")), 6000);
-            }),
-          ]);
-        } catch (error) {
-          console.error("[VR] play() fallback failed:", error);
-          mark("error", error);
-          return;
+          if (statusAfterWait === "pending") {
+            mark("error", new Error(`VR play() timeout (${VR_PLAY_FALLBACK_TIMEOUT_MS}ms)`));
+            return;
+          }
         }
 
         if (cancelled) return;
+        for (let i = 0; i < 6; i++) {
+          if (cancelled) return;
+          if (hasVisiblePortalDialogOutsideRoot()) break;
+          await sleep(50);
+        }
+        if (cancelled) return;
+        if (context.parameters?.vr?.showScrollbars) {
+          applyClassicScrollbarsInPage();
+        }
         mark("true");
       } catch (error) {
         console.error("[VR] play() runner failed:", error);
@@ -217,7 +249,7 @@ const VrStoryPlayRunner = ({ Story, context }: VrStoryPlayRunnerProps) => {
       channel.off("playFunctionThrewException", onPlayException);
       channel.off("storyRenderPhaseChanged", onRenderPhase);
     };
-  }, [context.id, context.playFunction]);
+  }, [context.id, typeof context.playFunction]);
 
   return <Story />;
 };
@@ -241,5 +273,5 @@ export const withVrStoryPlay: Decorator = (Story, context) => {
   );
 };
 
-/** Decorators Storybook recommandés pour la capture VR (Reanimated freeze + play()). */
-export const vrPreviewDecorators: Decorator[] = [withVrReanimatedFreeze, withVrStoryPlay];
+/** Decorators Storybook recommandés pour la capture VR (focus, Reanimated freeze, play()). */
+export const vrPreviewDecorators: Decorator[] = [withVrCaptureFocusReset, withVrReanimatedFreeze, withVrStoryPlay];

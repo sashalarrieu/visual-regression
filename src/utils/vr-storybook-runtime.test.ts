@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -10,7 +10,10 @@ import {
   computeStorybookInputFingerprint,
   needsStaticStorybookBuild,
   resolveStorybookModeForCapture,
+  resolveVrStaticStorybookDir,
   STORYBOOK_INPUT_FINGERPRINT_VERSION,
+  stripHostVisibleStorybookStaticBuild,
+  VR_DOCKER_ISOLATED_STATIC_DIR,
   writeStoredStorybookInputFingerprint,
 } from "./vr-storybook-runtime";
 
@@ -118,5 +121,67 @@ describe("storybook input fingerprint", () => {
     expect(files.some(file => file.includes(`${path.join("packages", "ui", "src", "Button.tsx")}`))).toBe(true);
     expect(files).toContain(path.join("src", "icon.svg"));
     expect(files).toContain(path.join("src", "i18n.json"));
+  });
+});
+
+describe("isolated VR static storybook dir", () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.VR_DOCKER;
+    delete process.env.CI;
+    delete process.env.GITHUB_ACTIONS;
+    delete process.env.VR_STORYBOOK_STATIC_DIR;
+  });
+
+  it("writes into /tmp in Docker outside CI so host yarn storybook is untouched", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "vr-sb-iso-"));
+    process.env.VR_DOCKER = "1";
+    delete process.env.CI;
+    expect(resolveVrStaticStorybookDir(root)).toBe(VR_DOCKER_ISOLATED_STATIC_DIR);
+  });
+
+  it("keeps storybook-static in the project on GitHub Actions (cache)", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "vr-sb-gha-"));
+    process.env.VR_DOCKER = "1";
+    process.env.CI = "true";
+    process.env.GITHUB_ACTIONS = "true";
+    expect(resolveVrStaticStorybookDir(root)).toBe(path.join(root, "storybook-static"));
+  });
+
+  it("isolates even when Playwright sets CI=1 (not GitHub Actions)", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "vr-sb-pwci-"));
+    process.env.VR_DOCKER = "1";
+    process.env.CI = "1";
+    delete process.env.GITHUB_ACTIONS;
+    expect(resolveVrStaticStorybookDir(root)).toBe(VR_DOCKER_ISOLATED_STATIC_DIR);
+  });
+
+  it("still needs a rebuild if only the host storybook-static exists (Docker isolated)", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "vr-sb-host-"));
+    mkdirSync(path.join(root, "src"), { recursive: true });
+    mkdirSync(path.join(root, "storybook-static"), { recursive: true });
+    writeFileSync(path.join(root, "storybook-static", "index.html"), "<html></html>");
+    writeFileSync(path.join(root, "storybook-static", "preview-stats.json"), "{}");
+    writeFileSync(path.join(root, "src", "Button.stories.tsx"), "export const A = {};\n");
+    writeStoredStorybookInputFingerprint(root);
+    process.env.VR_DOCKER = "1";
+    process.env.CI = "1";
+    delete process.env.GITHUB_ACTIONS;
+    expect(needsStaticStorybookBuild(root, "storybook-static/preview-stats.json")).toBe(true);
+  });
+
+  it("strips iframe.html leftovers but keeps preview-stats.json", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "vr-sb-strip-"));
+    const staticDir = path.join(root, "storybook-static");
+    mkdirSync(staticDir, { recursive: true });
+    writeFileSync(path.join(staticDir, "iframe.html"), "<html>vr</html>");
+    writeFileSync(path.join(staticDir, "index.html"), "<html>vr</html>");
+    writeFileSync(path.join(staticDir, "preview-stats.json"), "{}");
+    stripHostVisibleStorybookStaticBuild(root);
+    expect(existsSync(path.join(staticDir, "iframe.html"))).toBe(false);
+    expect(existsSync(path.join(staticDir, "index.html"))).toBe(false);
+    expect(readFileSync(path.join(staticDir, "preview-stats.json"), "utf8")).toBe("{}");
   });
 });

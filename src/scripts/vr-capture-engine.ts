@@ -2,24 +2,11 @@
  * Moteur de capture VR : pool global borné, cache de contextes Playwright,
  * attente stable (fonts, root visible, freeze CSS) et comparaison d'images.
  */
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmdirSync,
-  rmSync,
-  unlinkSync,
-  writeFileSync,
-} from "fs";
+import { existsSync, mkdirSync, readdirSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
 
-import pixelmatch from "pixelmatch";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { chromium } from "playwright";
-import { PNG } from "pngjs";
 
 import {
   DIFF_SCREENSHOT_NAME,
@@ -35,10 +22,17 @@ import { isDockerCaptureBackend } from "../utils/vr-capture-backend";
 import {
   syncCaptureErrorsAfterBatch,
   syncCaptureErrorsFromBatch,
+  lastLogForStoryDevice,
+  truncateCaptureErrorMessage,
   type CaptureErrorItem,
 } from "../utils/vr-capture-errors";
 import { writeCaptureProgress } from "../utils/vr-capture-progress";
 import { runCaptureBatchRemote } from "../utils/vr-capture-remote";
+import {
+  compareScreenshots,
+  type CompareScreenshotOutcome,
+  type CompareScreenshotResult,
+} from "../utils/vr-compare-screenshots";
 import {
   formatDiffConfirmedLog,
   formatDiffVerifyRetryLog,
@@ -50,6 +44,7 @@ import {
   applyCaptureMotionPreference,
   captureStoryFrame,
   captureWithBurst,
+  expectsVrStoryPlay,
   getStoryTags,
   NetworkQuietTracker,
   shouldFreezeMotion,
@@ -74,6 +69,64 @@ const ignoredStoryIdsFromCache = (storybookUrl: string): Set<string> => {
 };
 
 const ABSOLUTE_MAX_CONCURRENCY = 16;
+
+/** Timeout : screenshot si ready=true, ou story sans play déjà peinte. String evaluate (tsx keepNames). */
+const STORY_CAPTURE_SALVAGEABLE_JS = `(expectsPlay) => {
+  const body = document.body;
+  const previewError = body?.classList.contains("sb-show-errordisplay")
+    ? (document.getElementById("error-message")?.textContent || "").trim()
+    : "";
+  if (previewError) return false;
+  if (body?.classList.contains("sb-show-preparing-story")) return false;
+  if (body?.classList.contains("sb-show-preparing-docs")) return false;
+  if (body?.classList.contains("sb-show-nopreview")) return false;
+  const preparing = document.querySelector(".sb-preparing-story, .sb-preparing-docs, .sb-nopreview");
+  if (preparing) {
+    const style = getComputedStyle(preparing);
+    const box = preparing.getBoundingClientRect();
+    if (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      Number(style.opacity) > 0 &&
+      box.width >= 1 &&
+      box.height >= 1
+    ) {
+      return false;
+    }
+  }
+  const root = document.querySelector("#storybook-root");
+  if (!root) return false;
+  const state = root.getAttribute("data-vr-ready");
+  if (state === "error") return false;
+  if (state === "true") return true;
+  if (expectsPlay) return false;
+  if (root.children.length === 0) return false;
+  const rootStyle = getComputedStyle(root);
+  const rootBox = root.getBoundingClientRect();
+  const rootPainted =
+    rootBox.width >= 1 &&
+    rootBox.height >= 1 &&
+    rootStyle.display !== "none" &&
+    rootStyle.visibility !== "hidden";
+  const rootText = (root.innerText || "").replace(/\\s+/g, " ").trim();
+  const rootHasContent =
+    rootText.length > 0 ||
+    Boolean(root.querySelector("img, svg, canvas, video, input, textarea, [role='img'], [role='button']"));
+  if (rootPainted && rootHasContent) return true;
+  return Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).some((el) => {
+    if (root.contains(el)) return false;
+    if (el.getAttribute("aria-hidden") === "true") return false;
+    const box = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    const text = (el.innerText || "").replace(/\\s+/g, " ").trim();
+    return (
+      box.width >= 1 &&
+      box.height >= 1 &&
+      style.display !== "none" &&
+      text.length > 0
+    );
+  });
+}`;
 
 /** Suppression récursive manuelle (fallback Windows ENOTEMPTY). */
 const recursiveDeleteDir = (dir: string): void => {
@@ -176,12 +229,15 @@ const CHROMIUM_DETERMINISTIC_ARGS = [
   "--font-render-hinting=none",
   "--disable-lcd-text",
   "--disable-background-networking",
+  // Overlay Chromium (Linux sidecar) : barres invisibles au PNG. CSS webkit-scrollbar insuffisant.
+  "--disable-features=OverlayScrollbar",
 ];
 
 /** Options de lancement Chromium : timeout augmenté et args Windows. */
 const CHROMIUM_LAUNCH_OPTIONS = {
   timeout: 300_000,
   headless: true,
+  ignoreDefaultArgs: ["--hide-scrollbars"],
   ...((process.platform === "win32" || process.platform === "linux") && {
     args: CHROMIUM_DETERMINISTIC_ARGS,
   }),
@@ -192,11 +248,14 @@ const DOCKER_LAUNCH_OPTIONS = {
   headless: true,
   timeout: 300_000,
   args: CHROMIUM_DETERMINISTIC_ARGS,
+  // Playwright ajoute --hide-scrollbars en headless : les barres n'apparaissent jamais au PNG.
+  ignoreDefaultArgs: ["--hide-scrollbars"],
 };
 
 const WINDOWS_CHANNEL_LAUNCH = {
   headless: true,
   timeout: 180_000,
+  ignoreDefaultArgs: ["--hide-scrollbars"],
   args: [
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -417,12 +476,7 @@ export const getStoryIframeUrl = (storybookUrl: string, storyId: string): string
   return appendVrCaptureParam(`${base}/iframe.html?id=${encodeURIComponent(storyId)}&viewMode=story`);
 };
 
-export type CompareScreenshotOutcome = "match" | "new" | "diff" | "missing_temp";
-
-export type CompareScreenshotResult = {
-  outcome: CompareScreenshotOutcome;
-  diffPixels: number;
-};
+export type { CompareScreenshotOutcome, CompareScreenshotResult } from "../utils/vr-compare-screenshots";
 
 /** Statut d’une tâche de capture — sert à l’emoji de progression (📸 n/t emoji story). */
 export type TaskCaptureStatus = "match" | "new" | "diff" | "error" | "ignored";
@@ -571,121 +625,26 @@ const closeContextCache = async (cache: Map<string, BrowserContext>): Promise<vo
   cache.clear();
 };
 
-const buffersEqual = (a: Buffer, b: Buffer): boolean => {
-  if (a.length !== b.length) return false;
-  return a.equals(b);
-};
-
-export const compareScreenshots = ({
-  storyId,
-  screenshotPath,
-  publicScreenshotPath,
-  newScreenshotPath,
-  tempScreenshotPath,
-  diffScreenshotPath,
-  storiesWithDiff,
-  logs,
-  threshold,
-}: {
-  storyId: string;
-  screenshotPath: string;
-  publicScreenshotPath: string;
-  newScreenshotPath: string;
-  tempScreenshotPath: string;
-  diffScreenshotPath: string;
-  storiesWithDiff: string[];
-  logs: LogsType;
-  threshold: number;
-}): CompareScreenshotResult => {
-  if (!existsSync(tempScreenshotPath)) {
-    addLogs({ log: `🚫 No temp screenshot found for ${tempScreenshotPath}`, logs });
-    return { outcome: "missing_temp", diffPixels: 0 };
-  }
-
-  if (!existsSync(screenshotPath)) {
-    renameSync(tempScreenshotPath, newScreenshotPath);
-    const displayPath = path.isAbsolute(screenshotPath)
-      ? path.relative(PROJECT_ROOT, screenshotPath).replace(/\\/g, "/")
-      : screenshotPath;
-    addLogs({ log: `❇️  New screenshot for ${displayPath}`, type: "new", logs });
-    return { outcome: "new", diffPixels: 0 };
-  }
-
-  const baselineBuffer = readFileSync(screenshotPath);
-  const tempBuffer = readFileSync(tempScreenshotPath);
-
-  if (buffersEqual(baselineBuffer, tempBuffer)) {
-    try {
-      unlinkSync(tempScreenshotPath);
-    } catch {
-      // ignore
-    }
-    console.log(`✅ No visual regression for ${storyId}`);
-    return { outcome: "match", diffPixels: 0 };
-  }
-
-  const img1 = PNG.sync.read(baselineBuffer);
-  const img2 = PNG.sync.read(tempBuffer);
-
-  if (img1.width !== img2.width || img1.height !== img2.height) {
-    mkdirSync(path.dirname(diffScreenshotPath), { recursive: true });
-    const width = Math.max(img1.width, img2.width);
-    const height = Math.max(img1.height, img2.height);
-    const diff = new PNG({ width, height });
-    const tmp1 = new PNG({ width, height });
-    PNG.bitblt(img1, tmp1, 0, 0, img1.width, img1.height, 0, 0);
-    const tmp2 = new PNG({ width, height });
-    PNG.bitblt(img2, tmp2, 0, 0, img2.width, img2.height, 0, 0);
-    pixelmatch(tmp1.data, tmp2.data, diff.data, width, height, { threshold });
-    writeFileSync(diffScreenshotPath, PNG.sync.write(diff));
-    copyFileSync(screenshotPath, publicScreenshotPath);
-    if (!storiesWithDiff.includes(diffScreenshotPath)) {
-      storiesWithDiff.push(diffScreenshotPath);
-    }
-    addLogs({ log: `⚠️  Visual regression for ${storyId} (size mismatch)`, type: "vr", logs });
-    return { outcome: "diff", diffPixels: Number.MAX_SAFE_INTEGER };
-  }
-
-  const diff = new PNG({ width: img1.width, height: img1.height });
-  const numDiffPixels = pixelmatch(img1.data, img2.data, diff.data, img1.width, img1.height, { threshold });
-
-  if (numDiffPixels > 0) {
-    mkdirSync(path.dirname(diffScreenshotPath), { recursive: true });
-    writeFileSync(diffScreenshotPath, PNG.sync.write(diff));
-    copyFileSync(screenshotPath, publicScreenshotPath);
-    if (!storiesWithDiff.includes(diffScreenshotPath)) {
-      storiesWithDiff.push(diffScreenshotPath);
-    }
-    addLogs({ log: `⚠️  Visual regression for ${storyId} (${numDiffPixels} pixels)`, type: "vr", logs });
-    return { outcome: "diff", diffPixels: numDiffPixels };
-  }
-
-  try {
-    unlinkSync(tempScreenshotPath);
-  } catch {
-    // ignore
-  }
-  console.log(`✅ No visual regression for ${storyId}`);
-  return { outcome: "match", diffPixels: 0 };
-};
-
 const writeStoryScreenshot = async ({
   page,
   tempScreenshotPath,
   config,
   useBurst,
+  clipMode,
 }: {
   page: Page;
   tempScreenshotPath: string;
   config: VrConfig;
   useBurst: boolean;
+  clipMode?: "auto" | "root";
 }): Promise<void> => {
   mkdirSync(path.dirname(tempScreenshotPath), { recursive: true });
+  const frameOptions = clipMode === "root" ? { clipMode: "root" as const } : undefined;
   if (useBurst) {
-    await captureWithBurst(page, config, tempScreenshotPath);
+    await captureWithBurst(page, config, tempScreenshotPath, frameOptions);
     return;
   }
-  writeFileSync(tempScreenshotPath, await captureStoryFrame(page));
+  writeFileSync(tempScreenshotPath, await captureStoryFrame(page, frameOptions));
 };
 
 const captureStoryScreenshot = async ({
@@ -700,6 +659,8 @@ const captureStoryScreenshot = async ({
   networkTracker,
   storyTags,
   skipGoto = false,
+  showScrollbars = false,
+  clipMode,
 }: {
   page: Page;
   storyId: string;
@@ -712,18 +673,15 @@ const captureStoryScreenshot = async ({
   networkTracker: NetworkQuietTracker;
   storyTags: string[];
   skipGoto?: boolean;
-}): Promise<boolean> => {
+  showScrollbars?: boolean;
+  clipMode?: "auto" | "root";
+}): Promise<{ ok: boolean; error?: string }> => {
   const maxTestTime = config.capture.maxTestTime;
-  let captureTimedOut = false;
-  const timer = setTimeout(() => {
-    captureTimedOut = true;
-    addLogs({
-      log: `⌛️ Waiting time expired for capture ${storyId} (${deviceName}) (${maxTestTime}ms)`,
-      logs,
-    });
-  }, maxTestTime);
+  const timeoutMessage = `⌛️ Waiting time expired for capture ${storyId} (${deviceName}) (${maxTestTime}ms)`;
+  const timeoutError = new Error(timeoutMessage);
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
-  try {
+  const run = async (): Promise<{ ok: boolean; error?: string }> => {
     if (!skipGoto) {
       networkTracker.attach(page);
       await applyCaptureMotionPreference(page, shouldFreezeMotion(config, storyTags));
@@ -733,30 +691,96 @@ const captureStoryScreenshot = async ({
       });
     }
 
-    await waitForStoryStable(page, config, networkTracker, storyTags);
+    await waitForStoryStable(page, config, networkTracker, storyTags, { showScrollbars });
 
     const storyNotFound = await page.getByText(/Couldn't find story/i).count();
     if (storyNotFound > 0) {
-      addLogs({
-        log: `📸 Storybook n'a pas rendu la story ${storyId} (${deviceName}) — index Storybook vide ou story introuvable`,
-        logs,
-      });
-      return false;
+      const log = `📸 Storybook n'a pas rendu la story ${storyId} (${deviceName}) — index Storybook vide ou story introuvable`;
+      addLogs({ log, logs });
+      return { ok: false, error: log };
     }
 
-    await writeStoryScreenshot({ page, tempScreenshotPath, config, useBurst });
-    return true;
+    await writeStoryScreenshot({ page, tempScreenshotPath, config, useBurst, clipMode });
+    return { ok: true };
+  };
+
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(timeoutError), maxTestTime);
+      }),
+    ]);
   } catch (error) {
-    const errMsg = error instanceof Error ? error.message : String(error);
-    if (!captureTimedOut) {
-      addLogs({
-        log: `📸 Failed to capture screenshot for ${storyId} (${deviceName}): ${errMsg}`,
-        logs,
-      });
+    const isTimeout = error === timeoutError;
+    if (isTimeout) {
+      try {
+        const expectsPlay = expectsVrStoryPlay(storyTags);
+        const salvageable = (await page.evaluate(
+          `(${STORY_CAPTURE_SALVAGEABLE_JS})(${JSON.stringify(expectsPlay)})`,
+        )) as boolean;
+        if (salvageable) {
+          await writeStoryScreenshot({ page, tempScreenshotPath, config, useBurst, clipMode });
+          return { ok: true };
+        }
+      } catch {
+        // overlay / page fermée — on conserve l’erreur timeout
+      }
     }
-    return false;
+    let log: string;
+    if (isTimeout) {
+      let diag = "";
+      try {
+        const snapshot = (await page.evaluate(`(() => {
+          const root = document.querySelector("#storybook-root");
+          const box = root?.getBoundingClientRect();
+          const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).map((el) => {
+            const r = el.getBoundingClientRect();
+            return {
+              role: el.getAttribute("role"),
+              w: Math.round(r.width),
+              h: Math.round(r.height),
+              inRoot: Boolean(root?.contains(el)),
+              display: getComputedStyle(el).display,
+            };
+          });
+          return {
+            ready: root?.getAttribute("data-vr-ready") ?? null,
+            err: root?.getAttribute("data-vr-error") ?? null,
+            children: root?.children.length ?? 0,
+            bodyClass: document.body.className,
+            previewError: (document.getElementById("error-message")?.textContent || "").trim(),
+            root: box
+              ? { w: Math.round(box.width), h: Math.round(box.height), vis: getComputedStyle(root).visibility }
+              : null,
+            dialogs,
+            text: (document.body.innerText || "").slice(0, 400),
+            rootHtml: (root?.innerHTML || "").slice(0, 200),
+          };
+        })()`)) as {
+          ready: string | null;
+          err: string | null;
+          children: number;
+          bodyClass?: string;
+          previewError?: string;
+          root: { w: number; h: number; vis: string } | null;
+          dialogs: { role: string | null; w: number; h: number; inRoot: boolean; display: string }[];
+          text: string;
+          rootHtml: string;
+        };
+        diag = ` | diag ready=${snapshot.ready} err=${snapshot.err ?? ""} children=${snapshot.children} body=${JSON.stringify(snapshot.bodyClass)} previewError=${JSON.stringify(snapshot.previewError)} root=${JSON.stringify(snapshot.root)} dialogs=${JSON.stringify(snapshot.dialogs)} text=${JSON.stringify(snapshot.text)} html=${JSON.stringify(snapshot.rootHtml)}`;
+      } catch {
+        diag = " | diag unavailable";
+      }
+      log = `${timeoutMessage}${diag}`;
+    } else {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      log = `📸 Failed to capture screenshot for ${storyId} (${deviceName}): ${errMsg}`;
+    }
+    addLogs({ log, logs });
+    return { ok: false, error: truncateCaptureErrorMessage(log) };
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 };
 
@@ -865,9 +889,11 @@ const runSingleTask = async ({
         networkTracker,
         storyTags,
         skipGoto: attempt === 1,
+        showScrollbars: storyVr?.showScrollbars === true,
+        clipMode: storyVr?.clipMode,
       });
 
-      if (!captured) return "error";
+      if (!captured.ok) return "error";
 
       compareResult = compareScreenshots({
         storyId: screenshotKey,
@@ -1010,24 +1036,25 @@ export const runCaptureBatch = async (
 
           done++;
           stats.completed = done;
-          stats.errors = logs.errors.length;
           stats.vrs = logs.vrs.length;
           stats.news = logs.news.length;
           const failed = taskStatus === "error";
           const status = captureProgressEmoji(taskStatus);
           if (failed) {
-            const message =
-              logs.errors[logs.errors.length - 1] ?? `Capture failed for ${task.storyId} (${task.deviceName})`;
+            const raw =
+              lastLogForStoryDevice(logs.errors, task.storyId, task.deviceName) ??
+              `Capture failed for ${task.storyId} (${task.deviceName})`;
             storiesWithErrors.push({
               storyId: task.storyId,
               deviceName: task.deviceName,
               componentDir: task.componentDir,
-              message,
+              message: truncateCaptureErrorMessage(raw),
               at: Date.now(),
             });
           } else {
             succeededTasks.push({ storyId: task.storyId, deviceName: task.deviceName });
           }
+          stats.errors = storiesWithErrors.length;
           // Progression live (fichier monté + stdout pour docker.showLogs).
           writeCaptureProgress(PROJECT_ROOT, {
             done,
@@ -1043,6 +1070,7 @@ export const runCaptureBatch = async (
     );
 
     stats.durationMs = Math.round(performance.now() - startedAt);
+    stats.errors = storiesWithErrors.length;
     if (!options.quietBatchLogs) {
       logCaptureTimerEnd(stats.durationMs, tasks.length);
     }
@@ -1062,6 +1090,7 @@ export const runCaptureBatch = async (
       console.log(`\n⏱️  Génération interrompue après ${formatDurationMs(stats.durationMs)}`);
     }
     const error = err instanceof Error ? err.message : String(err);
+    stats.errors = storiesWithErrors.length;
     // Ne met à jour que les tâches déjà résolues (succès / échec) — le reste reste inchangé.
     if (!process.env.VR_DOCKER) {
       syncCaptureErrorsAfterBatch(

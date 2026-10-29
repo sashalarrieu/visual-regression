@@ -57,6 +57,52 @@ export const shouldReplayVrStoryPlay = ({
   return true;
 };
 
+type PortalDocument = {
+  getElementById: (id: string) => { contains: (el: Element) => boolean } | null;
+  querySelectorAll: (selector: string) => ArrayLike<Element>;
+  defaultView?: {
+    innerWidth?: number;
+    innerHeight?: number;
+    getComputedStyle: (el: Element) => {
+      display: string;
+      visibility: string;
+      opacity?: string;
+      pointerEvents?: string;
+    };
+  } | null;
+};
+
+/**
+ * Dialog / aria-modal **hors** `#storybook-root`, réellement ouvert.
+ * Un nœud `[role=dialog]` à 0×0, opacity 0, aria-hidden, ou coquille full-viewport
+ * vide (Modal RNW fermée) ne compte pas — sinon on saute `play()` / on capture
+ * une page blanche classée en fail visuel.
+ */
+export const hasVisiblePortalDialogOutsideRoot = (doc?: PortalDocument): boolean => {
+  const resolved = doc ?? (typeof document === "undefined" ? undefined : document);
+  if (!resolved) return false;
+  const root = resolved.getElementById("storybook-root");
+  const view = resolved.defaultView;
+  const viewportW = view?.innerWidth ?? 0;
+  const viewportH = view?.innerHeight ?? 0;
+  return Array.from(resolved.querySelectorAll('[role="dialog"], [aria-modal="true"]')).some(el => {
+    if (root?.contains(el)) return false;
+    if (typeof el.getAttribute === "function" && el.getAttribute("aria-hidden") === "true") return false;
+    const box =
+      typeof (el as HTMLElement).getBoundingClientRect === "function"
+        ? (el as HTMLElement).getBoundingClientRect()
+        : { width: 0, height: 0 };
+    if (box.width < 1 || box.height < 1) return false;
+    const style = view?.getComputedStyle(el);
+    if (style && (style.display === "none" || style.visibility === "hidden")) return false;
+    if (style && Number(style.opacity) === 0) return false;
+    const innerText = typeof (el as HTMLElement).innerText === "string" ? (el as HTMLElement).innerText.trim() : "";
+    const coversViewport = viewportW > 0 && viewportH > 0 && box.width >= viewportW - 2 && box.height >= viewportH - 2;
+    if (coversViewport && innerText.length === 0) return false;
+    return true;
+  });
+};
+
 export const formatVrPlayError = (error: unknown): string => {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "string" && error) return error;

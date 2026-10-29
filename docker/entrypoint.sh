@@ -121,6 +121,7 @@ sync_linked_vr_sources() {
   rm -rf "$VR_PKG/src" "$VR_PKG/bin" "$VR_PKG/docker"
   cp -a /visual-regression/src "$VR_PKG/src"
   cp -a /visual-regression/bin "$VR_PKG/bin"
+  cp -a /visual-regression/package.json "$VR_PKG/package.json"
   if [ -d /visual-regression/docker ]; then
     cp -a /visual-regression/docker "$VR_PKG/docker"
   fi

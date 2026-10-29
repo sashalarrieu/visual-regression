@@ -277,6 +277,16 @@ export type VrConfig = {
 export type VrStoryParameters = {
   stabilize?: Partial<VrConfig["stabilize"]>;
   diffVerificationMaxAttempts?: number;
+  /**
+   * Capture : force des scrollbars classiques (Chromium overlay sinon invisible au PNG).
+   * N’affecte pas les autres stories — à activer seulement si la baseline doit montrer les barres.
+   */
+  showScrollbars?: boolean;
+  /**
+   * `root` : crop `#storybook-root` uniquement (ignore overlays hors root).
+   * `auto` (défaut) : élargit le clip si une Modal / dialog **ouverte** est portailée.
+   */
+  clipMode?: "auto" | "root";
 };
 
 /**

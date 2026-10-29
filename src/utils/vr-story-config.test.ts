@@ -26,6 +26,17 @@ describe("normalizeStoryVrParameters", () => {
     });
   });
 
+  it("keeps showScrollbars when true", () => {
+    expect(normalizeStoryVrParameters({ showScrollbars: true })).toEqual({ showScrollbars: true });
+    expect(normalizeStoryVrParameters({ showScrollbars: false })).toBeNull();
+  });
+
+  it("keeps clipMode root or auto", () => {
+    expect(normalizeStoryVrParameters({ clipMode: "root" })).toEqual({ clipMode: "root" });
+    expect(normalizeStoryVrParameters({ clipMode: "auto" })).toEqual({ clipMode: "auto" });
+    expect(normalizeStoryVrParameters({ clipMode: "nope" })).toBeNull();
+  });
+
   it("ignores non-positive numeric values", () => {
     expect(
       normalizeStoryVrParameters({

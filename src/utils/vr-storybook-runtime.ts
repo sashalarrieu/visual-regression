@@ -3,15 +3,27 @@
  * Utilisé par le daemon de capture (sidecar Docker) et réutilisable par le launcher.
  *
  * - mode "dev"    : `storybook dev` (HMR). Défaut local — identique à `yarn storybook`.
- * - mode "static" : build `storybook-static` (+ stats) puis serve. CI
- *   (`VR_STORYBOOK_MODE=static` / docker-compose.ci.yml). Rebuild si l'empreinte
- *   des sources change (pas le mtime Docker Desktop). Le daemon **surveille**
- *   ensuite les sources (dev : nudge inotify / static : rebuild).
+ * - mode "static" : build (+ stats) puis serve. En sidecar Docker (hors CI) le
+ *   dossier de sortie est **hors bind-mount** (`/tmp/vr-storybook-static`) pour
+ *   que `yarn storybook` hôte ne recharge pas `storybook-static/iframe.html`.
+ *   CI : `storybook-static/` dans le projet (cache GitHub Actions).
+ *   Rebuild si l'empreinte des sources change (pas le mtime Docker Desktop).
+ *   Le daemon **surveille** ensuite les sources (dev : nudge inotify / static : rebuild).
  */
 import { spawn } from "child_process";
 import type { ChildProcess } from "child_process";
 import { createHash } from "crypto";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -180,12 +192,69 @@ export const STORYBOOK_INPUT_FINGERPRINT_FILE = ".vr-cache/storybook-input.finge
 /** Bump si le pipeline de build change (wipe cache Vite, nouveaux roots). Les empreintes v1 sont ignorées. */
 export const STORYBOOK_INPUT_FINGERPRINT_VERSION = "2";
 
+export const DEFAULT_STORYBOOK_STATIC_DIRNAME = "storybook-static";
+/** Hors volume `/work` : `yarn storybook` hôte ne voit pas iframe.html. */
+export const VR_DOCKER_ISOLATED_STATIC_DIR = "/tmp/vr-storybook-static";
+
+const isGithubActionsCi = (): boolean => (process.env.GITHUB_ACTIONS || "").toLowerCase() === "true";
+
+/**
+ * Dossier de sortie du build static VR.
+ * Override : `VR_STORYBOOK_STATIC_DIR`. Docker local : `/tmp/vr-storybook-static`.
+ * CI : `storybook-static/` dans le projet (cache Actions).
+ */
+export const resolveVrStaticStorybookDir = (projectRoot: string): string => {
+  const override = process.env.VR_STORYBOOK_STATIC_DIR?.trim();
+  if (override) return path.resolve(projectRoot, override);
+  if (process.env.VR_DOCKER === "1" && !isGithubActionsCi()) {
+    return VR_DOCKER_ISOLATED_STATIC_DIR;
+  }
+  return path.join(projectRoot, DEFAULT_STORYBOOK_STATIC_DIRNAME);
+};
+
+export const isVrStaticStorybookIsolated = (projectRoot: string): boolean =>
+  path.resolve(resolveVrStaticStorybookDir(projectRoot)) !==
+  path.resolve(projectRoot, DEFAULT_STORYBOOK_STATIC_DIRNAME);
+
+/**
+ * Retire le build static visible par Vite hôte (`iframe.html` → full page reload / OOM).
+ * Conserve `preview-stats.json` (compare TurboSnap).
+ */
+export const stripHostVisibleStorybookStaticBuild = (projectRoot: string): void => {
+  const dir = path.join(projectRoot, DEFAULT_STORYBOOK_STATIC_DIRNAME);
+  if (!existsSync(dir)) return;
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "preview-stats.json") continue;
+      rmSync(path.join(dir, entry.name), { recursive: true, force: true });
+    }
+  } catch {
+    // best-effort
+  }
+};
+
+/** Recopie preview-stats.json vers le chemin hôte configuré (compare hors conteneur). */
+export const syncPreviewStatsToHost = (
+  projectRoot: string,
+  statsRelativePath = `${DEFAULT_STORYBOOK_STATIC_DIRNAME}/preview-stats.json`,
+): void => {
+  const from = path.join(resolveVrStaticStorybookDir(projectRoot), "preview-stats.json");
+  if (!existsSync(from)) return;
+  const to = path.join(projectRoot, statsRelativePath);
+  mkdirSync(path.dirname(to), { recursive: true });
+  if (path.resolve(from) === path.resolve(to)) return;
+  copyFileSync(from, to);
+};
+
 const storybookInputRoots = (projectRoot: string): string[] => [
   projectRoot,
   path.join(projectRoot, "node_modules", "@setshao", "visual-regression", "src", "storybook"),
   path.join(projectRoot, "node_modules", "@setshao", "visual-regression", "src", "utils"),
   path.join(projectRoot, "..", "visual-regression", "src", "storybook"),
   path.join(projectRoot, "..", "visual-regression", "src", "utils"),
+  // Sidecar : le volume file: est monté ici, pas toujours via ../visual-regression.
+  "/visual-regression/src/storybook",
+  "/visual-regression/src/utils",
 ];
 
 const shouldSkipStorybookInputDir = (name: string): boolean => {
@@ -336,12 +405,14 @@ export const writeStoredStorybookInputFingerprint = (projectRoot: string, finger
 };
 
 /**
- * Vide storybook-static + caches Vite/Storybook.
+ * Vide le dossier de sortie static VR + caches Vite/Storybook.
  * Sans ça, un rebuild Docker peut réémettre d'anciens chunks (mtime virtiofs).
+ * En sortie isolée, on ne wipe pas tout `storybook-static/` hôte (stats compare) :
+ * seulement les HTML/assets que Vite rechargerait.
  */
 export const clearStaleStorybookBuildCaches = (projectRoot: string): void => {
   const targets = [
-    path.join(projectRoot, "storybook-static"),
+    resolveVrStaticStorybookDir(projectRoot),
     path.join(projectRoot, "node_modules", ".cache", "storybook"),
     path.join(projectRoot, "node_modules", ".vite"),
   ];
@@ -351,6 +422,9 @@ export const clearStaleStorybookBuildCaches = (projectRoot: string): void => {
     } catch {
       // best-effort
     }
+  }
+  if (isVrStaticStorybookIsolated(projectRoot)) {
+    stripHostVisibleStorybookStaticBuild(projectRoot);
   }
 };
 
@@ -367,7 +441,7 @@ export const needsStaticStorybookBuild = (projectRoot: string, statsRelativePath
   } catch {
     // ignore
   }
-  const staticIndex = path.join(projectRoot, "storybook-static", "index.html");
+  const staticIndex = path.join(resolveVrStaticStorybookDir(projectRoot), "index.html");
   const statsPath = path.join(projectRoot, statsRelativePath);
   if (!existsSync(staticIndex) || !existsSync(statsPath)) return true;
 
@@ -385,7 +459,7 @@ export const needsStaticStorybookBuild = (projectRoot: string, statsRelativePath
  * (`fonts/`, …) — pas un `cp assets → assets` qui créerait `assets/assets/`.
  */
 export const ensureStorybookStaticAssets = (projectRoot: string): void => {
-  const staticDir = path.join(projectRoot, "storybook-static");
+  const staticDir = resolveVrStaticStorybookDir(projectRoot);
   const from = path.join(projectRoot, "assets");
   const to = path.join(staticDir, "assets");
   if (!existsSync(staticDir) || !existsSync(from)) return;
@@ -409,7 +483,12 @@ export const ensureStorybookStaticAssets = (projectRoot: string): void => {
 export const buildStaticStorybook = (projectRoot: string): Promise<number> =>
   new Promise((resolve, reject) => {
     clearStaleStorybookBuildCaches(projectRoot);
-    const { command, args } = getPackageScriptCommand(projectRoot, "storybook:build:stats");
+    const outputDir = resolveVrStaticStorybookDir(projectRoot);
+    mkdirSync(outputDir, { recursive: true });
+    const { command, args } = getPackageScriptCommand(projectRoot, "storybook:build:stats", [
+      "--output-dir",
+      outputDir,
+    ]);
     const proc = spawn(command, args, {
       stdio: "inherit",
       cwd: projectRoot,
@@ -427,13 +506,20 @@ const MAX_STATIC_BUILD_ATTEMPTS = 3;
  * Sans ça, un edit pendant un build de 10–20 min est hashé après coup :
  * le snapshot servi est périmé mais considéré à jour.
  */
-export const rebuildStaticStorybookUntilFingerprintStable = async (projectRoot: string): Promise<number> => {
+export const rebuildStaticStorybookUntilFingerprintStable = async (
+  projectRoot: string,
+  statsFile = `${DEFAULT_STORYBOOK_STATIC_DIRNAME}/preview-stats.json`,
+): Promise<number> => {
   let lastCode = 1;
   for (let attempt = 1; attempt <= MAX_STATIC_BUILD_ATTEMPTS; attempt += 1) {
     const builtFrom = computeStorybookInputFingerprint(projectRoot);
     lastCode = await buildStaticStorybook(projectRoot);
     if (lastCode !== 0) return lastCode;
     ensureStorybookStaticAssets(projectRoot);
+    syncPreviewStatsToHost(projectRoot, statsFile);
+    if (isVrStaticStorybookIsolated(projectRoot)) {
+      stripHostVisibleStorybookStaticBuild(projectRoot);
+    }
     writeStoredStorybookInputFingerprint(projectRoot, builtFrom);
     if (computeStorybookInputFingerprint(projectRoot) === builtFrom) return 0;
     console.log(
@@ -445,7 +531,7 @@ export const rebuildStaticStorybookUntilFingerprintStable = async (projectRoot: 
 
 /** Démarre le serveur static storybook-static (vr-static-server, pas `serve`). */
 export const startStaticStorybookServer = (projectRoot: string, port: number): ChildProcess => {
-  const staticDir = path.join(projectRoot, "storybook-static");
+  const staticDir = resolveVrStaticStorybookDir(projectRoot);
   ensureStorybookStaticAssets(projectRoot);
 
   // Ancien serve.json laissé pour compat / outils externes — plus utilisé par le serveur VR.
@@ -566,14 +652,18 @@ export const startStorybook = async (options: StartStorybookOptions): Promise<St
   const mode = options.mode ?? getStorybookMode();
 
   if (mode === "static") {
+    if (isVrStaticStorybookIsolated(projectRoot)) {
+      stripHostVisibleStorybookStaticBuild(projectRoot);
+    }
     if (needsStaticStorybookBuild(projectRoot, statsFile)) {
-      const code = await rebuildStaticStorybookUntilFingerprintStable(projectRoot);
+      const code = await rebuildStaticStorybookUntilFingerprintStable(projectRoot, statsFile);
       if (code !== 0) {
         throw new Error(`Build Storybook statique échoué (code ${code})`);
       }
     } else {
       // Build déjà là : quand même (re)copier fonts/assets (souvent oubliés hors staticDirs).
       ensureStorybookStaticAssets(projectRoot);
+      syncPreviewStatsToHost(projectRoot, statsFile);
     }
     const proc = startStaticStorybookServer(projectRoot, port);
     const ready = await waitForStorybookStories(1, waitMaxAttempts, projectRoot);
@@ -608,7 +698,7 @@ export const ensureStaticStorybookFresh = async (options: {
   console.log("🔄 [vr-storybook] Sources modifiées — rebuild Storybook statique…");
   stopStorybook(options.currentProcess);
 
-  const code = await rebuildStaticStorybookUntilFingerprintStable(projectRoot);
+  const code = await rebuildStaticStorybookUntilFingerprintStable(projectRoot, statsFile);
   if (code !== 0) {
     throw new Error(`Build Storybook statique échoué (code ${code})`);
   }

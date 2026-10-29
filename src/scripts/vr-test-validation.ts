@@ -327,6 +327,20 @@ const runStaticChecks = (): CheckResult[] => {
     ),
   );
 
+  const steadysnapSrc = readFileSync(path.join(SCRIPT_DIR, "..", "utils", "vr-steadysnap.ts"), "utf8");
+  results.push(
+    check(
+      steadysnapSrc.includes("STORY_CAPTURE_SURFACE_READY_JS") &&
+        steadysnapSrc.includes("sb-show-errordisplay") &&
+        steadysnapSrc.includes("sb-show-preparing-story") &&
+        steadysnapSrc.includes("isClosedOrEmptyPortal") &&
+        steadysnapSrc.includes("containsOpenPortalDialog") &&
+        !steadysnapSrc.includes("#storybook-root >> visible=true"),
+      "SteadySnap : surface capturable = root peint ou dialog ouvert (pas preparing / page blanche)",
+      "SteadySnap : waitForSelector visible=true sur #storybook-root (casse les modales)",
+    ),
+  );
+
   results.push(
     check(
       LIVE_ANIMATION_VR_TAG === "live-animation-vr",

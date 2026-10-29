@@ -1,0 +1,43 @@
+/* CSS global web */
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body > div,
+#root {
+  height: 100%;
+}
+
+*:focus,
+*:focus-visible {
+  outline: none !important;
+}
+
+/* Scrollbars globales web: style fin et discret proche mobile */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: #8d8d9d;
+  border-radius: 999px;
+}
+
+@media (prefers-color-scheme: dark) {
+  * {
+    scrollbar-color: #8d8d9d transparent;
+    scrollbar-width: thin;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: #8d8d9d;
+  }
+}
