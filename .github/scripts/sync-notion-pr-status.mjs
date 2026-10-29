@@ -448,8 +448,9 @@ async function ensureSectionAndUpsertPrLine(pageId, lineText, prNumber) {
     },
   });
 
+  // Notion API 2026-03-11 : append = PATCH (POST → « Invalid request URL »)
   await notionFetch(`/blocks/${pageId}/children`, {
-    method: "POST",
+    method: "PATCH",
     body: { children: toAppend },
   });
   console.log(`➕ Ligne PR #${prNumber} ajoutée sous « ${SECTION_TITLE} »`);
