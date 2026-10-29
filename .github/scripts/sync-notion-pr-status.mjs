@@ -19,10 +19,16 @@
  * - NOTION_VERSION       (défaut: 2026-03-11 — requis pour PAT Notion)
  */
 
-/** IDs des bases Notion de tickets à interroger (ordre = priorité). */
-const NOTION_DATABASE_IDS = [
-  // https://app.notion.com/p/4080420568508059b9b9c055311377cc
-  "40804205-6850-8059-b9b9-c055311377cc",
+/**
+ * Bases tickets Notion (database container + data_source).
+ * data_source_id = collection://… (voir fetch Notion de la base).
+ */
+const NOTION_TICKET_SOURCES = [
+  {
+    // https://app.notion.com/p/4080420568508059b9b9c055311377cc
+    databaseId: "40804205-6850-8059-b9b9-c055311377cc",
+    dataSourceId: "40804205-6850-806d-b489-000b8b09ba97",
+  },
 ];
 
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
@@ -45,7 +51,7 @@ const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY || "";
 const NOTION_URL_RE = /https?:\/\/(?:[a-z0-9-]+\.)*(?:notion\.so|notion\.site|notion\.com)\/[^\s)>\]"']+/gi;
 /** IDs type TAS-12, VR-3 (préfixe lettres/chiffres + tiret + numéro). */
 const TICKET_ID_RE = /\b([A-Za-z][A-Za-z0-9]{0,15})-(\d+)\b/g;
-const PR_LINE_RE = n => new RegExp(`⟦vr-pr:${n}⟧`);
+const PR_LINE_RE = n => new RegExp(`\\[\\[vr-pr:${n}\\]\\]`);
 
 const SECTION_TITLE = "GitHub PRs";
 
@@ -69,7 +75,7 @@ function statusEmoji(status) {
 }
 
 function formatPrLine({ prNumber, status, url }) {
-  return `${statusEmoji(status)} PR #${prNumber} · ${status} · ${url} ⟦vr-pr:${prNumber}⟧`;
+  return `${statusEmoji(status)} PR #${prNumber} · ${status} · ${url} [[vr-pr:${prNumber}]]`;
 }
 
 function notionHeaders(extra = {}) {
@@ -186,17 +192,22 @@ function pickPageForTicket(results, ticket, idPropertyName) {
   return match?.id ?? null;
 }
 
-/** Résout database_id → data_source_id (API Notion ≥ 2025-09-03). */
-async function resolveDataSource(databaseId) {
+/** Résout data_source_id (hardcodé ou via GET /databases). */
+async function resolveDataSource(source) {
+  const databaseId = formatDatabaseId(source.databaseId);
+  if (source.dataSourceId) {
+    const dataSourceId = formatDatabaseId(source.dataSourceId);
+    console.log(`📚 data_source=${dataSourceId} (hardcodé, base ${databaseId})`);
+    return { dataSourceId, databaseId };
+  }
   const db = await notionFetch(`/databases/${databaseId}`);
   const sources = db.data_sources || [];
   if (sources.length > 0) {
-    console.log(`📚 data_source=${sources[0].id} (base ${databaseId}, ${sources.length} source(s))`);
-    return { dataSourceId: sources[0].id, database: db };
+    console.log(`📚 data_source=${sources[0].id} (base ${databaseId})`);
+    return { dataSourceId: sources[0].id, databaseId };
   }
-  // Ancienne forme / fallback : l’UUID base sert encore de data source
-  console.log(`📚 Pas de data_sources[] — fallback query data_sources/${databaseId}`);
-  return { dataSourceId: databaseId, database: db };
+  console.log(`📚 Pas de data_sources[] — fallback ${databaseId}`);
+  return { dataSourceId: databaseId, databaseId };
 }
 
 function findIdPropertyMeta(properties) {
@@ -207,28 +218,33 @@ function findIdPropertyMeta(properties) {
       return { name, type: props[name].type };
     }
   }
-  const unique = Object.entries(props).find(([, p]) => p?.type === "unique_id");
-  if (unique) return { name: unique[0], type: "unique_id" };
+  const unique = Object.entries(props).find(([, p]) => p?.type === "unique_id" || p?.type === "auto_increment_id");
+  if (unique) return { name: unique[0], type: unique[1].type };
   return null;
 }
 
-function buildTicketFilter(idMeta, ticket) {
+function buildTicketFilters(idMeta, ticket) {
   if (!idMeta) {
-    throw new Error(`Aucune propriété ID trouvée (cherché: ${NOTION_ID_PROPERTY} / Identifiant / unique_id).`);
+    throw new Error(`Aucune propriété ID trouvée (cherché: ${NOTION_ID_PROPERTY} / Identifiant).`);
   }
-  if (idMeta.type === "unique_id") {
-    return { property: idMeta.name, unique_id: { equals: ticket.number } };
+  const name = idMeta.name;
+  // Notion REST: unique_id / auto_increment_id se filtrent souvent via unique_id
+  if (idMeta.type === "unique_id" || idMeta.type === "auto_increment_id") {
+    return [
+      { property: name, unique_id: { equals: ticket.number } },
+      { property: name, number: { equals: ticket.number } },
+    ];
   }
   if (idMeta.type === "rich_text") {
-    return { property: idMeta.name, rich_text: { equals: ticket.raw } };
+    return [{ property: name, rich_text: { equals: ticket.raw } }];
   }
   if (idMeta.type === "title") {
-    return { property: idMeta.name, title: { equals: ticket.raw } };
+    return [{ property: name, title: { equals: ticket.raw } }];
   }
   if (idMeta.type === "number") {
-    return { property: idMeta.name, number: { equals: ticket.number } };
+    return [{ property: name, number: { equals: ticket.number } }];
   }
-  throw new Error(`Type de propriété ID non supporté: ${idMeta.name} (${idMeta.type})`);
+  throw new Error(`Type de propriété ID non supporté: ${name} (${idMeta.type})`);
 }
 
 async function queryTicketInDataSource(dataSourceId, filter) {
@@ -240,33 +256,41 @@ async function queryTicketInDataSource(dataSourceId, filter) {
 
 /** Cherche le ticket dans chaque base listée ; retourne le premier hit. */
 async function findPageByUniqueId(ticket) {
-  if (!NOTION_DATABASE_IDS.length) {
-    throw new Error("NOTION_DATABASE_IDS est vide — ajoute au moins une base dans le script.");
+  if (!NOTION_TICKET_SOURCES.length) {
+    throw new Error("NOTION_TICKET_SOURCES est vide — ajoute au moins une base dans le script.");
   }
 
   let lastError = null;
-  for (const rawId of NOTION_DATABASE_IDS) {
-    const databaseId = formatDatabaseId(rawId);
+  for (const source of NOTION_TICKET_SOURCES) {
     try {
-      const { dataSourceId, database } = await resolveDataSource(databaseId);
-      // Schéma des propriétés : sur data_source (API récente) ou database (fallback)
-      let properties = database.properties;
-      if (!properties || Object.keys(properties).length === 0) {
-        try {
-          const ds = await notionFetch(`/data_sources/${dataSourceId}`);
-          properties = ds.properties || {};
-        } catch {
-          // ignore — on tentera quand même avec NOTION_ID_PROPERTY
-        }
+      const { dataSourceId } = await resolveDataSource(source);
+      let properties = {};
+      try {
+        const ds = await notionFetch(`/data_sources/${dataSourceId}`);
+        properties = ds.properties || {};
+        console.log(`🧩 Props data_source: ${Object.keys(properties).join(", ") || "(vide)"}`);
+      } catch (err) {
+        console.warn(
+          `⚠️  Impossible de lire le schéma data_source: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
       const idMeta = findIdPropertyMeta(properties) || {
         name: NOTION_ID_PROPERTY,
-        type: "unique_id",
+        type: "auto_increment_id",
       };
       console.log(`🏷️  Filtre ID: ${idMeta.name} (${idMeta.type}) = ${ticket.raw}`);
-      const filter = buildTicketFilter(idMeta, ticket);
-      const data = await queryTicketInDataSource(dataSourceId, filter);
-      const pageId = pickPageForTicket(data.results || [], ticket, idMeta.name);
+      const filters = buildTicketFilters(idMeta, ticket);
+      let data = null;
+      for (const filter of filters) {
+        try {
+          data = await queryTicketInDataSource(dataSourceId, filter);
+          if ((data.results || []).length > 0) break;
+        } catch (err) {
+          lastError = err;
+          console.warn(`⚠️  Filtre ${JSON.stringify(filter)}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      const pageId = pickPageForTicket(data?.results || [], ticket, idMeta.name);
       if (pageId) {
         console.log(`📂 Trouvé ${ticket.raw} → page ${pageId}`);
         return pageId;
@@ -274,7 +298,7 @@ async function findPageByUniqueId(ticket) {
       console.warn(`⚠️  Aucun résultat pour ${ticket.raw} dans data_source ${dataSourceId}`);
     } catch (err) {
       lastError = err;
-      console.warn(`⚠️  Base ${databaseId}: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`⚠️  Source ${source.databaseId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -308,7 +332,7 @@ function richTextLine(content) {
   if (!urlMatch) {
     return [{ type: "text", text: { content: chunk } }];
   }
-  const url = urlMatch[0].replace(/⟦.*$/, "").trim();
+  const url = urlMatch[0].replace(/\s*\[\[vr-pr:.*$/, "").trim();
   const before = chunk.slice(0, urlMatch.index);
   const after = chunk.slice(urlMatch.index + urlMatch[0].length);
   const parts = [];
@@ -431,6 +455,21 @@ async function main() {
   for (const [pageId, source] of targets) {
     console.log(`🔗 Page ${pageId} (via ${source}) → ${status}`);
     await ensureSectionAndUpsertPrLine(pageId, line, PR_NUMBER);
+    // Colonnes tableau (dernière PR gagnante si plusieurs)
+    try {
+      await notionFetch(`/pages/${pageId}`, {
+        method: "PATCH",
+        body: {
+          properties: {
+            PR: { url: PR_HTML_URL },
+            "PR status": { select: { name: status } },
+          },
+        },
+      });
+      console.log(`🧾 Propriétés PR / PR status → ${status}`);
+    } catch (err) {
+      console.warn(`⚠️  Update propriétés: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   console.log(`✅ Sync terminée (${targets.size} page(s) Notion)`);
