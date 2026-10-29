@@ -42,8 +42,7 @@ jobs:
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_API_VR }}
           NOTION_ID_PROPERTY: ID
-          # Décommente / renseigne si ton préfixe ID est fixe, ex. TAS :
-          # NOTION_ID_PREFIX: TAS
+          NOTION_ID_PREFIX: VR
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
