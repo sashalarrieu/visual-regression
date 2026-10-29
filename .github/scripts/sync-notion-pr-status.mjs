@@ -174,17 +174,22 @@ async function fetchPrCommitMessages() {
 function formatDatabaseId(raw) {
   const dbId = String(raw).replace(/-/g, "");
   if (dbId.length !== 32) {
-    throw new Error(`NOTION_DATABASE_IDS invalide: "${raw}" (attendu 32 hex)`);
+    throw new Error(`UUID Notion invalide: "${raw}" (attendu 32 hex)`);
   }
   return `${dbId.slice(0, 8)}-${dbId.slice(8, 12)}-${dbId.slice(12, 16)}-${dbId.slice(16, 20)}-${dbId.slice(20)}`;
+}
+
+function readIdPayload(prop) {
+  if (!prop) return null;
+  return prop.unique_id || prop.auto_increment_id || null;
 }
 
 function pickPageForTicket(results, ticket, idPropertyName) {
   if (!results.length) return null;
   if (!ticket.prefix) return results[0].id;
   const match = results.find(page => {
-    const prop = page.properties?.[idPropertyName];
-    const uid = prop?.unique_id;
+    const prop = page.properties?.[idPropertyName] || page.properties?.ID;
+    const uid = readIdPayload(prop);
     if (!uid) return true;
     const pagePrefix = (uid.prefix || "").toUpperCase();
     return !pagePrefix || pagePrefix === ticket.prefix;
@@ -247,11 +252,53 @@ function buildTicketFilters(idMeta, ticket) {
   throw new Error(`Type de propriété ID non supporté: ${name} (${idMeta.type})`);
 }
 
-async function queryTicketInDataSource(dataSourceId, filter) {
+async function queryTicketInDataSource(dataSourceId, body) {
   return notionFetch(`/data_sources/${dataSourceId}/query`, {
     method: "POST",
-    body: { page_size: 5, filter },
+    body,
   });
+}
+
+function readTicketNumberFromPage(page, idPropertyName) {
+  const prop = page.properties?.[idPropertyName] || page.properties?.ID;
+  if (!prop) return null;
+  const uid = readIdPayload(prop);
+  if (typeof uid?.number === "number") return uid.number;
+  if (typeof prop.number === "number") return prop.number;
+  // Certains payloads exposent juste un entier sous la clé du type
+  if (typeof prop.auto_increment_id === "number") return prop.auto_increment_id;
+  if (typeof prop.unique_id === "number") return prop.unique_id;
+  return null;
+}
+
+/** Fallback fiable : parcourt le data_source et matche le numéro ID en JS. */
+async function findPageByScanning(dataSourceId, ticket, idPropertyName) {
+  let cursor;
+  let scanned = 0;
+  let sampleLogged = false;
+  do {
+    const body = { page_size: 100 };
+    if (cursor) body.start_cursor = cursor;
+    const data = await queryTicketInDataSource(dataSourceId, body);
+    for (const page of data.results || []) {
+      scanned += 1;
+      const prop = page.properties?.[idPropertyName] || page.properties?.ID;
+      if (!sampleLogged) {
+        sampleLogged = true;
+        console.log(`🧪 Sample prop « ${idPropertyName} »: ${JSON.stringify(prop)}`);
+      }
+      const num = readTicketNumberFromPage(page, idPropertyName);
+      if (num !== ticket.number) continue;
+      const uid = readIdPayload(prop);
+      const prefix = (uid?.prefix || "").toUpperCase();
+      if (ticket.prefix && prefix && prefix !== ticket.prefix) continue;
+      console.log(`📂 Trouvé ${ticket.raw} par scan (${scanned} pages) → ${page.id}`);
+      return page.id;
+    }
+    cursor = data.has_more ? data.next_cursor : null;
+  } while (cursor);
+  console.warn(`⚠️  Scan data_source ${dataSourceId}: ${scanned} page(s), pas de ${ticket.raw}`);
+  return null;
 }
 
 /** Cherche le ticket dans chaque base listée ; retourne le premier hit. */
@@ -278,24 +325,24 @@ async function findPageByUniqueId(ticket) {
         name: NOTION_ID_PROPERTY,
         type: "auto_increment_id",
       };
-      console.log(`🏷️  Filtre ID: ${idMeta.name} (${idMeta.type}) = ${ticket.raw}`);
-      const filters = buildTicketFilters(idMeta, ticket);
-      let data = null;
-      for (const filter of filters) {
+      console.log(`🏷️  Lookup ID: ${idMeta.name} (${idMeta.type}) = ${ticket.raw}`);
+
+      for (const filter of buildTicketFilters(idMeta, ticket)) {
         try {
-          data = await queryTicketInDataSource(dataSourceId, filter);
-          if ((data.results || []).length > 0) break;
+          const data = await queryTicketInDataSource(dataSourceId, { page_size: 5, filter });
+          const pageId = pickPageForTicket(data.results || [], ticket, idMeta.name);
+          if (pageId) {
+            console.log(`📂 Trouvé ${ticket.raw} via filtre → page ${pageId}`);
+            return pageId;
+          }
         } catch (err) {
           lastError = err;
           console.warn(`⚠️  Filtre ${JSON.stringify(filter)}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-      const pageId = pickPageForTicket(data?.results || [], ticket, idMeta.name);
-      if (pageId) {
-        console.log(`📂 Trouvé ${ticket.raw} → page ${pageId}`);
-        return pageId;
-      }
-      console.warn(`⚠️  Aucun résultat pour ${ticket.raw} dans data_source ${dataSourceId}`);
+
+      const scannedId = await findPageByScanning(dataSourceId, ticket, idMeta.name);
+      if (scannedId) return scannedId;
     } catch (err) {
       lastError = err;
       console.warn(`⚠️  Source ${source.databaseId}: ${err instanceof Error ? err.message : String(err)}`);
