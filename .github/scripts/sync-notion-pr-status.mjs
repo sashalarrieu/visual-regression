@@ -60,9 +60,15 @@ const TICKET_ID_RE = /\b([A-Za-z][A-Za-z0-9]{0,15})-(\d+)\b/g;
 const PR_LINE_RE = n => new RegExp(`\\[\\[vr-pr:${n}\\]\\]`);
 /** Tag manuel dans un titre / toggle Notion, ex. #PR50 */
 const PR_TAG_RE = /#PR(\d+)\b/i;
+/**
+ * Titre dont le texte API est juste « PR51 » / « PR #51 »
+ * (Notion retire souvent le # du markdown heading).
+ */
+const PR_TAG_BARE_RE = /^PR\s*#?(\d+)\s*$/i;
 /** Label déjà synchronisé, ex. « 🔵 PR #50 · Open » — à re-sync si le statut change */
 const PR_LABEL_RE = /(?:^|\s)(?:[🔵⏹️✅📝]\s*)?PR\s*#(\d+)\s*·\s*(?:Open|Closed|Merged|Draft)\b/i;
-const PR_TAG_BLOCK_TYPES = new Set(["heading_1", "heading_2", "heading_3", "toggle"]);
+/** Titres / toggles + paragraphe (souvent `#PR51` collé sans passer en heading Notion). */
+const PR_TAG_BLOCK_TYPES = new Set(["heading_1", "heading_2", "heading_3", "toggle", "paragraph"]);
 
 const SECTION_TITLE = "GitHub PRs";
 
@@ -417,14 +423,22 @@ function richTextLine(content) {
   return parts;
 }
 
-function blockMatchesPrTag(block, prNumber) {
-  if (!PR_TAG_BLOCK_TYPES.has(block.type)) return false;
-  const text = blockPlainText(block);
+function extractPrNumberFromTaggedBlock(block) {
+  if (!PR_TAG_BLOCK_TYPES.has(block.type)) return null;
+  const text = blockPlainText(block).trim();
   const tagMatch = text.match(PR_TAG_RE);
-  if (tagMatch && String(tagMatch[1]) === String(prNumber)) return true;
+  if (tagMatch) return Number(tagMatch[1]);
+  const bareMatch = text.match(PR_TAG_BARE_RE);
+  if (bareMatch) return Number(bareMatch[1]);
   // Déjà taggé précédemment : on continue de rafraîchir le statut à chaque sync
   const labelMatch = text.match(PR_LABEL_RE);
-  return Boolean(labelMatch && String(labelMatch[1]) === String(prNumber));
+  if (labelMatch) return Number(labelMatch[1]);
+  return null;
+}
+
+function blockMatchesPrTag(block, prNumber) {
+  const found = extractPrNumberFromTaggedBlock(block);
+  return found !== null && String(found) === String(prNumber);
 }
 
 /**
