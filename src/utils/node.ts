@@ -129,13 +129,20 @@ export const resolvePackageRunner = (projectRoot: string): PackageRunner => {
 export const getPackageScriptCommand = (
   projectRoot: string,
   scriptName: string,
+  extraArgs: string[] = [],
 ): { command: string; args: string[] } => {
   const runner = resolvePackageRunner(projectRoot);
   if (runner === "yarn") {
-    return { command: "yarn", args: [scriptName] };
+    return {
+      command: "yarn",
+      args: extraArgs.length > 0 ? [scriptName, "--", ...extraArgs] : [scriptName],
+    };
   }
   const command = runner === "npm" && process.platform === "win32" ? "npm.cmd" : runner;
-  return { command, args: ["run", scriptName] };
+  return {
+    command,
+    args: extraArgs.length > 0 ? ["run", scriptName, "--", ...extraArgs] : ["run", scriptName],
+  };
 };
 
 /**

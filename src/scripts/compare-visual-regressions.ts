@@ -267,9 +267,9 @@ const buildTasksFromHistoryByType = async (
 
 const printLogsSummary = (
   logs: { errors: string[]; vrs: string[]; news: string[] },
-  options?: { durationMs?: number },
+  options?: { durationMs?: number; captureErrorCount?: number },
 ): void => {
-  const nbErrors = logs.errors.length;
+  const nbErrors = options?.captureErrorCount ?? logs.errors.length;
   if (nbErrors) {
     console.log(`\n\n   ============================`);
     console.log(`🚫  Errors (${nbErrors})`);
@@ -328,7 +328,10 @@ const printLogsSummary = (
 
 /** Affiche le résumé capture (erreurs / VR / new) après un batch lancé depuis l'UI VR. */
 const finalizeCaptureBatch = (result: CaptureBatchResult): { success: boolean; error?: string } => {
-  printLogsSummary(result.logs, { durationMs: result.stats.durationMs });
+  printLogsSummary(result.logs, {
+    durationMs: result.stats.durationMs,
+    captureErrorCount: result.storiesWithErrors.length,
+  });
   return { success: result.success, error: result.error };
 };
 
@@ -514,7 +517,10 @@ const compareVisualRegressions = async () => {
 
   if (!result.success || result.error) {
     console.error(`\n❌ Échec de la capture: ${result.error ?? "erreur inconnue"}`);
-    printLogsSummary(result.logs, { durationMs: result.stats.durationMs });
+    printLogsSummary(result.logs, {
+      durationMs: result.stats.durationMs,
+      captureErrorCount: result.storiesWithErrors.length,
+    });
     process.exit(1);
   }
 
@@ -523,15 +529,21 @@ const compareVisualRegressions = async () => {
       `\n❌ Aucune capture n'a été exécutée (${tasks.length} tâche(s) planifiées, durée ${result.stats.durationMs} ms).`,
     );
     console.error("   Vérifiez que le daemon Docker tourne (pnpm vr:capture:status) et que Storybook répond.");
-    printLogsSummary(result.logs, { durationMs: result.stats.durationMs });
+    printLogsSummary(result.logs, {
+      durationMs: result.stats.durationMs,
+      captureErrorCount: result.storiesWithErrors.length,
+    });
     process.exit(1);
   }
 
   updateManifest(PROJECT_ROOT, config);
 
-  printLogsSummary(result.logs, { durationMs: result.stats.durationMs });
+  printLogsSummary(result.logs, {
+    durationMs: result.stats.durationMs,
+    captureErrorCount: result.storiesWithErrors.length,
+  });
 
-  const nbErrors = result.logs.errors.length;
+  const nbErrors = result.storiesWithErrors.length;
   const nbVisualRegressions = result.logs.vrs.length;
   const nbNewScreenshot = result.logs.news.length;
 

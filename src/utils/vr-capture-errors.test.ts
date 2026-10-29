@@ -12,6 +12,8 @@ import {
   syncCaptureErrorsAfterBatch,
   syncCaptureErrorsAllFailed,
   syncCaptureErrorsFromBatch,
+  lastLogForStoryDevice,
+  truncateCaptureErrorMessage,
   withoutIgnoredCaptureErrors,
   writeCaptureErrors,
 } from "./vr-capture-errors";
@@ -251,5 +253,23 @@ describe("vr-capture-errors", () => {
 
     vi.restoreAllMocks();
     resetStorybookIndexCache(storybookUrl);
+  });
+});
+
+describe("lastLogForStoryDevice", () => {
+  it("picks the log that names this story×device, not the last concurrent one", () => {
+    const logs = [
+      "⌛️ Waiting time expired for capture atoms-a--one (desktop-fhd) (10000ms)",
+      "⌛️ Waiting time expired for capture atoms-b--two (iphone16) (10000ms)",
+    ];
+    expect(lastLogForStoryDevice(logs, "atoms-a--one", "desktop-fhd")).toContain("atoms-a--one (desktop-fhd)");
+    expect(lastLogForStoryDevice(logs, "atoms-b--two", "iphone16")).toContain("atoms-b--two (iphone16)");
+  });
+});
+
+describe("truncateCaptureErrorMessage", () => {
+  it("strips testing-library HTML dumps", () => {
+    const raw = "VR play() a échoué: expected 1824 to be greater than 1826\nIgnored nodes: comments\n<html>huge</html>";
+    expect(truncateCaptureErrorMessage(raw)).toBe("VR play() a échoué: expected 1824 to be greater than 1826");
   });
 });

@@ -27,6 +27,7 @@ import {
   useValidatedRegressions,
 } from "./hooks/useVisualRegressionData";
 import { DeviceConfigProvider } from "./providers/DeviceConfigProvider";
+import "./web-css";
 import { colors, spacing } from "./themes/theme";
 import type { DeviceDisplayConfig, Node, StoryScreenshotsPath } from "./types/types";
 import {

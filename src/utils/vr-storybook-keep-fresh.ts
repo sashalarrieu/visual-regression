@@ -39,6 +39,9 @@ export const syncLinkedVrSourcesIntoNodeModules = (projectRoot: string): boolean
     if (existsSync(path.join(linkedSrc, "bin"))) {
       cpSync(path.join(linkedSrc, "bin"), path.join(dest, "bin"), { recursive: true, force: true });
     }
+    if (existsSync(path.join(linkedSrc, "package.json"))) {
+      cpSync(path.join(linkedSrc, "package.json"), path.join(dest, "package.json"), { force: true });
+    }
     return true;
   } catch {
     return false;

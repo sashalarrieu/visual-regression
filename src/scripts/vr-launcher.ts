@@ -51,6 +51,7 @@ import {
   resolveStorybookModeForCapture,
   startStorybook,
   stopStorybook,
+  stripHostVisibleStorybookStaticBuild,
   usesNextJsViteStorybook,
 } from "../utils/vr-storybook-runtime";
 
@@ -336,7 +337,15 @@ const main = async () => {
     if (captureStorybookMode === "dev") {
       log("green", "📚", "Storybook live (HMR) — les stories suivent le disque comme yarn storybook");
     } else {
-      log("blue", "📚", "Storybook statique (launcher.storybookMode / VR_STORYBOOK_MODE) — build storybook-static");
+      log(
+        "blue",
+        "📚",
+        "Storybook statique (launcher.storybookMode / VR_STORYBOOK_MODE) — build isolé du yarn storybook hôte",
+      );
+      const ci = (process.env.CI || "").toLowerCase();
+      if (ci !== "true" && ci !== "1") {
+        stripHostVisibleStorybookStaticBuild(PROJECT_ROOT);
+      }
     }
     if (
       explicitStorybookMode !== "static" &&

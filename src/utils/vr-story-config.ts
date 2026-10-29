@@ -46,6 +46,10 @@ export const normalizeStoryVrParameters = (raw: unknown): VrStoryParameters | nu
   const diffAttempts = pickPositiveNumber(source.diffVerificationMaxAttempts);
   if (diffAttempts !== undefined) result.diffVerificationMaxAttempts = diffAttempts;
 
+  if (source.showScrollbars === true) result.showScrollbars = true;
+
+  if (source.clipMode === "root" || source.clipMode === "auto") result.clipMode = source.clipMode;
+
   return Object.keys(result).length > 0 ? result : null;
 };
 

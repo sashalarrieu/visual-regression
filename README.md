@@ -317,9 +317,9 @@ Stabilisation des captures inspirée de [Chromatic SteadySnap](https://www.chrom
 - `skip-play-vr` — n'exécute pas `play()` en capture (opt-out du decorator preview)
 - `ignore-vr` / `force-vr` — exclusion / inclusion forcée au compare
 
-**Storybook preview :** en capture (`vr-capture=1`), le decorator fige les animations CSS. Playwright emule `prefers-reduced-motion: reduce` **avant** le `goto` iframe — Reanimated web lit cette MQ au chargement du module, donc `withTiming` / `withRepeat` sautent à l'état final (sans importer Reanimated dans l'entry Storybook, incompatible Vite). Un second decorator exécute `play()` puis pose `data-vr-ready="true"` sur `#storybook-root`.
+**Storybook preview :** en capture (`vr-capture=1`), le decorator fige les animations CSS **et** neutralise l’anneau `:focus` via CSS (`outline: none`, `caret-color: transparent`) — sans `blur()`, pour ne pas fermer les autocompletes. Playwright emule `prefers-reduced-motion: reduce` **avant** le `goto` iframe — Reanimated web lit cette MQ au chargement du module, donc `withTiming` / `withRepeat` sautent à l'état final (sans importer Reanimated dans l'entry Storybook, incompatible Vite). Un second decorator exécute `play()` puis pose `data-vr-ready="true"` sur `#storybook-root`.
 
-**Modals / portals :** la capture cible `#storybook-root` (crop serré). Si un overlay est rendu **hors** du root (React portal, `Modal` RN Web, `[role="dialog"]`, `position: fixed|absolute` sibling), le clip est élargi à l’union root ∪ overlays — sinon on ne voit que le backdrop grisé sans le panneau modal.
+**Modals / portals :** la capture cible `#storybook-root` (crop serré). Si un overlay **ouvert** est rendu **hors** du root (React portal, `Modal` RN Web, `[role="dialog"]` avec contenu), le clip est élargi à l’union root ∪ overlays — sinon on ne voit que le backdrop grisé sans le panneau modal. L’hôte RNW a souvent une bbox 0×N (dialog en `position:fixed`) : il n’est **pas** masqué tant qu’un dialog ouvert est dedans. Les coquilles fermées / vides (Modal RNW `visible={false}`, overlay Storybook `sb-preparing-story`, page blanche full-viewport) sont masquées et **n’élargissent pas** le clip. Preview non chargée / root sans contenu → **erreur de capture**, pas un fail visuel. Override par story : `parameters.vr.clipMode: "root"` pour forcer le crop root (listes / overlays hors dialog).
 
 **Stories** `play()` **:** l'iframe de capture ajoute `embed=true` (autoplay Storybook off) pour que `play()` tourne dans le decorator, **après** les `useEffect` des demos (sync props → state). Sans ça, le clic Storybook est écrasé et le screenshot fige l'état initial. Le decorator attend `data-vr-ready="true"` (stories taguées `play-fn`) et ne rejoue `play()` que s'il n'a pas déjà tourné — un second play casse l'état (spies, DOM déjà muté).
 
@@ -327,10 +327,12 @@ Stabilisation des captures inspirée de [Chromatic SteadySnap](https://www.chrom
 
 **Overrides par story (**`parameters.vr`**)** — fusionnés sur `vr.config.cjs` (meta ou story CSF) :
 
-| Clé                                         | Rôle                                                                     |
-| ------------------------------------------- | ------------------------------------------------------------------------ |
-| `parameters.vr.stabilize.*`                 | Sous-ensemble de `stabilize` (ex. `burstIntervalMs`, `maxStabilizeTime`) |
-| `parameters.vr.diffVerificationMaxAttempts` | Recaptures max pour cette story uniquement                               |
+| Clé                                         | Rôle                                                                                                           |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `parameters.vr.stabilize.*`                 | Sous-ensemble de `stabilize` (ex. `burstIntervalMs`, `maxStabilizeTime`)                                       |
+| `parameters.vr.diffVerificationMaxAttempts` | Recaptures max pour cette story uniquement                                                                     |
+| `parameters.vr.showScrollbars`              | Force des scrollbars classiques sur **cette** story (overlay Chromium sinon absent du PNG)                     |
+| `parameters.vr.clipMode`                    | `"root"` : crop `#storybook-root` uniquement ; `"auto"` (défaut) : élargit si Modal / dialog ouverte hors root |
 
 Définir `burstIntervalMs` ou `burstFrames` active automatiquement le burst pour la story (sans tag `burst-vr`).
 
@@ -525,17 +527,18 @@ Un exemple complet GitHub Actions (cache `node_modules` + `storybook-static`, sh
 
 ### Variables d'environnement Docker
 
-| Variable                  | Défaut / `vr.config.cjs`         | Rôle                                                                                                   |
-| ------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `VR_CAPTURE_BACKEND`      | `capture.backend` → `docker`     | `docker` = capture déléguée au daemon ; `local` = capture directe (tests internes / dans le conteneur) |
-| `VR_CAPTURE_DAEMON_URL`   | `capture.daemonUrl`              | URL du daemon de capture                                                                               |
-| `VR_CAPTURE_REMOTE_CHUNK` | `capture.remoteChunkSize` → `20` | Taille des lots envoyés au daemon (évite les timeouts fetch)                                           |
-| `VR_STORYBOOK_MODE`       | `launcher.storybookMode` → `dev` | `dev` (HMR, défaut local) ou `static` (build + serve, CI)                                              |
-| `VR_STORYBOOK_STATIC`     | alias → `static`                 | Rétrocompat : équivalent à `VR_STORYBOOK_MODE=static`                                                  |
-| `VR_DOCKER_IMAGE`         | `docker.image`                   | Image du sidecar (tag aligné sur la version Playwright)                                                |
-| `VR_PLAYWRIGHT_IMAGE`     | `docker.playwrightImage`         | Image de base Playwright pour builder le sidecar                                                       |
-| `VR_DOCKER_SHOW_LOGS`     | `docker.showLogs` → `false`      | `1`/`true` = streamer les logs du sidecar dans le terminal hôte                                        |
-| `VR_DOCKER`               | `1` (dans le conteneur)          | Active les flags Chromium déterministes                                                                |
+| Variable                  | Défaut / `vr.config.cjs`                                             | Rôle                                                                                                   |
+| ------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `VR_CAPTURE_BACKEND`      | `capture.backend` → `docker`                                         | `docker` = capture déléguée au daemon ; `local` = capture directe (tests internes / dans le conteneur) |
+| `VR_CAPTURE_DAEMON_URL`   | `capture.daemonUrl`                                                  | URL du daemon de capture                                                                               |
+| `VR_CAPTURE_REMOTE_CHUNK` | `capture.remoteChunkSize` → `20`                                     | Taille des lots envoyés au daemon (évite les timeouts fetch)                                           |
+| `VR_STORYBOOK_MODE`       | `launcher.storybookMode` → `dev`                                     | `dev` (HMR, défaut local) ou `static` (build + serve, CI)                                              |
+| `VR_STORYBOOK_STATIC`     | alias → `static`                                                     | Rétrocompat : équivalent à `VR_STORYBOOK_MODE=static`                                                  |
+| `VR_STORYBOOK_STATIC_DIR` | Docker local : `/tmp/vr-storybook-static` ; CI : `storybook-static/` | Dossier de sortie du build static VR. Isolé du bind-mount pour ne pas parasiter `yarn storybook` hôte. |
+| `VR_DOCKER_IMAGE`         | `docker.image`                                                       | Image du sidecar (tag aligné sur la version Playwright)                                                |
+| `VR_PLAYWRIGHT_IMAGE`     | `docker.playwrightImage`                                             | Image de base Playwright pour builder le sidecar                                                       |
+| `VR_DOCKER_SHOW_LOGS`     | `docker.showLogs` → `false`                                          | `1`/`true` = streamer les logs du sidecar dans le terminal hôte                                        |
+| `VR_DOCKER`               | `1` (dans le conteneur)                                              | Active les flags Chromium déterministes                                                                |
 
 ### Utiliser son propre Docker (image maison)
 
@@ -560,12 +563,12 @@ L’UI VisualRegressions est entièrement embarquée dans le package.
 
 Le package expose les decorators, types et helpers utilisés par les stories VR :
 
-| Import                                 | Rôle                                                                                                                                    |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `@setshao/visual-regression`           | Tags VR (`LIVE_ANIMATION_VR_TAG`, `SKIP_PLAY_VR_TAG`, …), type `VrStoryParameters`, helper `defineVrParameters`                         |
-| `@setshao/visual-regression/types`     | Types seuls (`VrStoryParameters`, …) — idéal pour les `.d.ts` d’augmentation                                                            |
-| `@setshao/visual-regression/storybook` | Decorators `vrPreviewDecorators` (freeze Reanimated + exécution `play()`) + `vrStorybookAddons` (retire `addon-vitest` dans le sidecar) |
-| `@setshao/visual-regression/play`      | Helpers `play()` DOM pour React Native Web (`clickByLabel`, `expectText`, …)                                                            |
+| Import                                 | Rôle                                                                                                                                                |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@setshao/visual-regression`           | Tags VR (`LIVE_ANIMATION_VR_TAG`, `SKIP_PLAY_VR_TAG`, …), type `VrStoryParameters`, helper `defineVrParameters`                                     |
+| `@setshao/visual-regression/types`     | Types seuls (`VrStoryParameters`, …) — idéal pour les `.d.ts` d’augmentation                                                                        |
+| `@setshao/visual-regression/storybook` | Decorators `vrPreviewDecorators` (reset focus, freeze Reanimated, exécution `play()`) + `vrStorybookAddons` (retire `addon-vitest` dans le sidecar) |
+| `@setshao/visual-regression/play`      | Helpers `play()` DOM pour React Native Web (`clickByLabel`, `expectText`, …)                                                                        |
 
 `.storybook/preview.tsx` :
 

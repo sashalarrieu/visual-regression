@@ -4,8 +4,20 @@ Ce projet suit le format [Keep a Changelog](https://keepachangelog.com/fr/1.1.2/
 
 ## [Unreleased]
 
+### Added
+
+- Helpers play `findOverflowScroller` / `scrollElementToEnd` (nœud overflow RN Web souvent descendant du `testID`).
+- Capture Docker : `--disable-features=OverlayScrollbar` et `ignoreDefaultArgs: ["--hide-scrollbars"]` (Playwright les masquait). `parameters.vr.showScrollbars` force les barres classiques après `play()`. Helpers `findOverflowScroller` / `scrollElementToEnd` (contenu stable).
+- `parameters.vr.clipMode`: `"root"` force le crop `#storybook-root` (ignore les overlays hors root) ; `"auto"` (défaut) n’élargit le clip que pour une Modal / dialog **ouverte**.
+
 ### Fixed
 
+- `src/web.css` (outline, scrollbars, layout `#root`) est chargé par l’UI VR (Expo web) et le Storybook de démo de la lib.
+- Mode static Docker : le build VR n’écrit plus `storybook-static/iframe.html` dans le projet hôte (`/tmp/vr-storybook-static`). `yarn storybook` peut tourner en parallèle sans full-reload Vite ni OOM. `preview-stats.json` est recopié pour le compare. CI conserve `storybook-static/` (cache).
+- Capture : plus de `blur()` après `play()`. Le CSS (`outline: none` + `caret-color: transparent`) suffit à masquer l’anneau Chromium ; le blur fermait les listes d’autocomplete encore ouvertes (AddressField, CompanySearchField).
+- Capture : overlay Storybook `sb-show-preparing-story` / `nopreview` / root vide **ou sans contenu visible** → **erreur de capture** (plus de PNG blanc classé en fail). Les Modals RNW fermées (opacity 0, `aria-hidden`, coquille full-viewport sans contenu) ne forcent plus `opacity:1` et n’élargissent plus le clip. L’hôte RNW d’une Modal **ouverte** (bbox 0 car dialog `position:fixed`) n’est plus masqué — sinon le PNG n’a que le trigger, classé en fail. Un calque plein viewport **sans** dialog ouvert (page blanche hors story) est masqué et n’élargit plus le clip. Les bandes 100% blanches en bas du PNG (page hors story) sont rognées après capture — sans muter le layout (sinon RNW reset le scroll).
+- Capture : après `play()`, l’anneau `:focus` Chromium (bordure noire sur input / dialog) est neutralisé (`outline: none` + `caret-color: transparent`). `outline: unset` côté hôte rétablit l’anneau UA — la lib le force à `none` en capture.
+- Capture : `#storybook-root` n’a plus besoin d’être `visible` si une Modal / dialog portailée est déjà ouverte (`play()` masque souvent le root). Le compteur « Capture errors » du résumé CLI = les erreurs uniques story×device (plus de double log timeout + Playwright, plus d’attribution du dernier log concurrent). `play()` VR : plus d’attente 2,5 s ni de remount sur l’identité de `playFunction`. Overlay Storybook `sb-show-errordisplay` → échec immédiat avec le message preview (plus de timeout 10 s sur un root vide). Helper Vite `applyVrStorybookBrowserShims` : stub `expo-updates` + runtime winter Expo (`require is not defined` dans l’iframe). Timeout capture : screenshot de salvage si `data-vr-ready=true` (ou story sans play déjà peinte) — évite d’échouer alors que le `play()` a déjà consommé le budget.
 - Storybook du sidecar **reste à jour** en mode `dev` **et** `static` : keep-fresh poll **mtime+size** (~50 ms) au lieu d’un SHA1 de tout le repo (~7k fichiers / ~10 s, event loop bloquée → aucun nudge). En `dev`, `utimes` intra-conteneur débloque le HMR inotify ; en `static`, rebuild avec caches Vite/Storybook vidés. `index.json` n’est plus servi en `immutable`. Les sidecars sans `keepFresh` sont recréés.
 - `launcher.storybookMode` de `vr.config.cjs` est respecté en local (`static` ou `dev`). Plus d’override HMR silencieux. En static, l’attente daemon passe à 30 min (build Vite 10–20 min). Keep-fresh rebuild si les sources changent ; empreinte figée **avant** le compile.
 

@@ -86,10 +86,70 @@ export const VR_CAPTURE_ANIMATION_FREEZE_CSS = [
   "}",
 ].join("\n");
 
+/** Style tag injecté en capture (decorator iframe + Playwright). */
+export const VR_CAPTURE_FOCUS_RESET_STYLE_ID = "vr-capture-focus-reset";
+
+/**
+ * Playwright garde le focus après `play()` (clic, saisie) ; Chromium Linux dessine
+ * alors un outline noir. `outline: unset` côté hôte = `initial` = anneau UA.
+ * CSS only (`outline: none` + `caret-color: transparent`) — un `blur()` fermerait
+ * les autocompletes. Un focus-trap de Modal recapture le focus, d’où le CSS.
+ */
+export const VR_CAPTURE_FOCUS_RESET_CSS = [
+  "*, *::before, *::after {",
+  "  caret-color: transparent !important;",
+  "}",
+  "*:focus,",
+  "*:focus-visible,",
+  "*:focus-within,",
+  '[role="dialog"]:focus,',
+  '[aria-modal="true"]:focus {',
+  "  outline: none !important;",
+  "  outline-width: 0 !important;",
+  "  outline-style: none !important;",
+  "  outline-color: transparent !important;",
+  "  outline-offset: 0 !important;",
+  "}",
+].join("\n");
+
+/**
+ * Chromium Linux (sidecar) utilise des overlay scrollbars invisibles au screenshot.
+ * Forcer des barres classiques — uniquement si `parameters.vr.showScrollbars`.
+ */
+export const VR_CAPTURE_CLASSIC_SCROLLBAR_CSS = [
+  "* {",
+  "  scrollbar-width: thin !important;",
+  "  scrollbar-color: rgba(0, 0, 0, 0.45) rgba(0, 0, 0, 0.08) !important;",
+  "  -webkit-overflow-scrolling: auto !important;",
+  "}",
+  "*::-webkit-scrollbar {",
+  "  -webkit-appearance: none !important;",
+  "  width: 8px !important;",
+  "  height: 8px !important;",
+  "  display: block !important;",
+  "  background: rgba(0, 0, 0, 0.08) !important;",
+  "}",
+  "*::-webkit-scrollbar-thumb {",
+  "  background-color: rgba(0, 0, 0, 0.45) !important;",
+  "  border-radius: 4px !important;",
+  "}",
+  "*::-webkit-scrollbar-track {",
+  "  background: rgba(0, 0, 0, 0.08) !important;",
+  "}",
+].join("\n");
+
 /** En capture VR : n'exécute pas `play()` (opt-out du decorator preview). */
 export const SKIP_PLAY_VR_TAG = "skip-play-vr";
 /** Tag Storybook auto-appliqué aux stories avec `play()`. */
 export const PLAY_FN_TAG = "play-fn";
+/** Timeout du fallback `play()` dans le decorator preview (capture VR). */
+export const VR_PLAY_FALLBACK_TIMEOUT_MS = 8_000;
+/**
+ * Fenêtre pour laisser l’autoplay Storybook démarrer (embed=true le coupe).
+ * Doit rester court : un poll long mange `capture.maxTestTime` et laisse
+ * `play()` ouvrir une modale avant le waitForSelector Playwright.
+ */
+export const VR_PLAY_AUTOPLAY_GRACE_MS = 200;
 
 // --- Logs console (launcher) ---
 

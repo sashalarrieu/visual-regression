@@ -20,6 +20,23 @@ export type CaptureErrorsFile = {
 
 export const captureErrorKey = (storyId: string, deviceName: string): string => `${deviceName}::${storyId}`;
 
+/** Dernier log d’erreur qui mentionne explicitement cette story × device (pas `logs.at(-1)` concurrent). */
+export const lastLogForStoryDevice = (logs: string[], storyId: string, deviceName: string): string | undefined => {
+  const needle = `${storyId} (${deviceName})`;
+  for (let i = logs.length - 1; i >= 0; i--) {
+    if (logs[i]?.includes(needle)) return logs[i];
+  }
+  return undefined;
+};
+
+/** Compacte les dumps Playwright / testing-library (HTML) pour l’UI et le JSON. */
+export const truncateCaptureErrorMessage = (message: string, maxLen = 500): string => {
+  const withoutDom = (message.split(/\nIgnored nodes:/)[0] ?? message).trim();
+  const compact = withoutDom.replace(/\s+/g, " ");
+  if (compact.length <= maxLen) return compact;
+  return `${compact.slice(0, Math.max(0, maxLen - 1))}…`;
+};
+
 export const getCaptureErrorsPath = (projectRoot: string): string =>
   path.join(projectRoot, ".vr-cache", "capture-errors.json");
 
