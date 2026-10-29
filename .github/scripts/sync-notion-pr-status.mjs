@@ -9,8 +9,9 @@
  *    → requête sur la propriété "ID" (unique_id) de la base Notion
  *
  * Secrets GitHub :
- * - NOTION_API_VR       PAT Notion
- * - NOTION_DATABASE_ID  ID de la base de tickets (32 hex)
+ * - NOTION_API_VR  PAT Notion
+ *
+ * Bases tickets (pas secret) : ajouter un UUID ci-dessous pour chaque tableau.
  *
  * Env optionnelles :
  * - NOTION_ID_PROPERTY   nom propriété ID (défaut: "ID")
@@ -18,8 +19,10 @@
  * - NOTION_VERSION       (défaut: 2022-06-28)
  */
 
+/** IDs des bases Notion de tickets à interroger (ordre = priorité). */
+const NOTION_DATABASE_IDS = ["40804205-6850-8059-b9b9-c055311377cc"];
+
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
-const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID || "";
 const NOTION_ID_PROPERTY = process.env.NOTION_ID_PROPERTY || "ID";
 const NOTION_ID_PREFIX = (process.env.NOTION_ID_PREFIX || "").trim().toUpperCase();
 const NOTION_VERSION = process.env.NOTION_VERSION || "2022-06-28";
@@ -159,40 +162,62 @@ async function fetchPrCommitMessages() {
   return messages.join("\n");
 }
 
-async function findPageByUniqueId(ticket) {
-  if (!NOTION_DATABASE_ID) {
-    throw new Error("NOTION_DATABASE_ID manquant (secret GitHub) — requis pour résoudre l’ID ticket.");
+function formatDatabaseId(raw) {
+  const dbId = String(raw).replace(/-/g, "");
+  if (dbId.length !== 32) {
+    throw new Error(`NOTION_DATABASE_IDS invalide: "${raw}" (attendu 32 hex)`);
   }
-  const dbId = NOTION_DATABASE_ID.replace(/-/g, "");
-  const formatted = `${dbId.slice(0, 8)}-${dbId.slice(8, 12)}-${dbId.slice(12, 16)}-${dbId.slice(16, 20)}-${dbId.slice(20)}`;
+  return `${dbId.slice(0, 8)}-${dbId.slice(8, 12)}-${dbId.slice(12, 16)}-${dbId.slice(16, 20)}-${dbId.slice(20)}`;
+}
 
-  const data = await notionFetch(`/databases/${formatted}/query`, {
-    method: "POST",
-    body: {
-      page_size: 5,
-      filter: {
-        property: NOTION_ID_PROPERTY,
-        unique_id: { equals: ticket.number },
-      },
-    },
+function pickPageForTicket(results, ticket) {
+  if (!results.length) return null;
+  if (!ticket.prefix) return results[0].id;
+  const match = results.find(page => {
+    const prop = page.properties?.[NOTION_ID_PROPERTY];
+    const uid = prop?.unique_id;
+    if (!uid) return true;
+    const pagePrefix = (uid.prefix || "").toUpperCase();
+    return !pagePrefix || pagePrefix === ticket.prefix;
   });
+  return match?.id ?? null;
+}
 
-  const results = data.results || [];
-  if (results.length === 0) return null;
-
-  // Si un préfixe est attendu, vérifier que la page match (unique_id.prefix)
-  if (ticket.prefix) {
-    const match = results.find(page => {
-      const prop = page.properties?.[NOTION_ID_PROPERTY];
-      const uid = prop?.unique_id;
-      if (!uid) return true;
-      const pagePrefix = (uid.prefix || "").toUpperCase();
-      return !pagePrefix || pagePrefix === ticket.prefix;
-    });
-    if (match) return match.id;
-    return null;
+/** Cherche le ticket dans chaque base listée ; retourne le premier hit. */
+async function findPageByUniqueId(ticket) {
+  if (!NOTION_DATABASE_IDS.length) {
+    throw new Error("NOTION_DATABASE_IDS est vide — ajoute au moins une base dans le script.");
   }
-  return results[0].id;
+
+  let lastError = null;
+  for (const rawId of NOTION_DATABASE_IDS) {
+    const databaseId = formatDatabaseId(rawId);
+    try {
+      const data = await notionFetch(`/databases/${databaseId}/query`, {
+        method: "POST",
+        body: {
+          page_size: 5,
+          filter: {
+            property: NOTION_ID_PROPERTY,
+            unique_id: { equals: ticket.number },
+          },
+        },
+      });
+      const pageId = pickPageForTicket(data.results || [], ticket);
+      if (pageId) {
+        console.log(`📂 Trouvé ${ticket.raw} dans la base ${databaseId}`);
+        return pageId;
+      }
+    } catch (err) {
+      lastError = err;
+      console.warn(`⚠️  Base ${databaseId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (lastError && NOTION_DATABASE_IDS.length === 1) {
+    throw lastError;
+  }
+  return null;
 }
 
 function blockPlainText(block) {
