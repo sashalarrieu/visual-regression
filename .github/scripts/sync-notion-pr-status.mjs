@@ -10,8 +10,9 @@
  *
  * Sur le ticket résolu :
  * - section « GitHub PRs » (ligne avec lien + marqueur [[vr-pr:N]])
- * - si un titre / titre dépliant / liste dépliante contient #PRN → remplacé par
- *   « ⏹️ PR #N · Closed » (emoji+statut courants, sans lien), type de block inchangé
+ * - si un titre / titre dépliant / liste dépliante contient #PRN (ou un label
+ *   déjà sync « 🔵 PR #N · Open ») → remplacé/rafraîchi par le statut courant
+ *   (sans lien), type de block inchangé — re-sync à chaque event PR
  *
  * Secrets GitHub :
  * - NOTION_API_VR  PAT Notion
@@ -59,6 +60,8 @@ const TICKET_ID_RE = /\b([A-Za-z][A-Za-z0-9]{0,15})-(\d+)\b/g;
 const PR_LINE_RE = n => new RegExp(`\\[\\[vr-pr:${n}\\]\\]`);
 /** Tag manuel dans un titre / toggle Notion, ex. #PR50 */
 const PR_TAG_RE = /#PR(\d+)\b/i;
+/** Label déjà synchronisé, ex. « 🔵 PR #50 · Open » — à re-sync si le statut change */
+const PR_LABEL_RE = /(?:^|\s)(?:[🔵⏹️✅📝]\s*)?PR\s*#(\d+)\s*·\s*(?:Open|Closed|Merged|Draft)\b/i;
 const PR_TAG_BLOCK_TYPES = new Set(["heading_1", "heading_2", "heading_3", "toggle"]);
 
 const SECTION_TITLE = "GitHub PRs";
@@ -416,19 +419,25 @@ function richTextLine(content) {
 
 function blockMatchesPrTag(block, prNumber) {
   if (!PR_TAG_BLOCK_TYPES.has(block.type)) return false;
-  const match = blockPlainText(block).match(PR_TAG_RE);
-  return Boolean(match && String(match[1]) === String(prNumber));
+  const text = blockPlainText(block);
+  const tagMatch = text.match(PR_TAG_RE);
+  if (tagMatch && String(tagMatch[1]) === String(prNumber)) return true;
+  // Déjà taggé précédemment : on continue de rafraîchir le statut à chaque sync
+  const labelMatch = text.match(PR_LABEL_RE);
+  return Boolean(labelMatch && String(labelMatch[1]) === String(prNumber));
 }
 
 /**
  * Remplace le texte d’un titre / titre dépliant / liste dépliante
- * qui contient #PRn par « ⏹️ PR #n · Closed » (sans lien), sans changer le type.
+ * qui contient #PRn (ou un label déjà sync) par « ⏹️ PR #n · Closed »
+ * (sans lien), sans changer le type. Re-sync à chaque event PR.
  */
 async function updatePrTaggedBlocks(pageId, prNumber, status) {
   const label = formatPrTagLabel({ prNumber, status });
   const richText = [{ type: "text", text: { content: label } }];
   const queue = [pageId];
   let updated = 0;
+  let skipped = 0;
 
   while (queue.length) {
     const parentId = queue.shift();
@@ -437,18 +446,26 @@ async function updatePrTaggedBlocks(pageId, prNumber, status) {
       if (block.has_children) queue.push(block.id);
       if (!blockMatchesPrTag(block, prNumber)) continue;
 
+      const current = blockPlainText(block).trim();
+      if (current === label) {
+        skipped += 1;
+        continue;
+      }
+
       const type = block.type;
       await notionFetch(`/blocks/${block.id}`, {
         method: "PATCH",
         body: { [type]: { rich_text: richText } },
       });
       updated += 1;
-      console.log(`🏷️  Tag #PR${prNumber} → « ${label} » (${type} ${block.id})`);
+      console.log(`🏷️  Tag PR #${prNumber} → « ${label} » (${type} ${block.id})`);
     }
   }
 
-  if (!updated) {
+  if (!updated && !skipped) {
     console.log(`ℹ️  Aucun tag #PR${prNumber} (titre / toggle) à remplacer`);
+  } else if (!updated && skipped) {
+    console.log(`ℹ️  Tag(s) PR #${prNumber} déjà à jour (${skipped})`);
   }
 }
 
