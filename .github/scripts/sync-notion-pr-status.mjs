@@ -8,6 +8,11 @@
  * 2. ID ticket (ex. TAS-12) dans : titre PR, description, branche, messages de commit
  *    → requête sur la propriété "ID" (unique_id) de la base Notion
  *
+ * Sur le ticket résolu :
+ * - section « GitHub PRs » (ligne avec lien + marqueur [[vr-pr:N]])
+ * - si un titre / titre dépliant / liste dépliante contient #PRN → remplacé par
+ *   « ⏹️ PR #N · Closed » (emoji+statut courants, sans lien), type de block inchangé
+ *
  * Secrets GitHub :
  * - NOTION_API_VR  PAT Notion
  *
@@ -52,6 +57,9 @@ const NOTION_URL_RE = /https?:\/\/(?:[a-z0-9-]+\.)*(?:notion\.so|notion\.site|no
 /** IDs type TAS-12, VR-3 (préfixe lettres/chiffres + tiret + numéro). */
 const TICKET_ID_RE = /\b([A-Za-z][A-Za-z0-9]{0,15})-(\d+)\b/g;
 const PR_LINE_RE = n => new RegExp(`\\[\\[vr-pr:${n}\\]\\]`);
+/** Tag manuel dans un titre / toggle Notion, ex. #PR50 */
+const PR_TAG_RE = /#PR(\d+)\b/i;
+const PR_TAG_BLOCK_TYPES = new Set(["heading_1", "heading_2", "heading_3", "toggle"]);
 
 const SECTION_TITLE = "GitHub PRs";
 
@@ -76,6 +84,11 @@ function statusEmoji(status) {
 
 function formatPrLine({ prNumber, status, url }) {
   return `${statusEmoji(status)} PR #${prNumber} · ${status} · ${url} [[vr-pr:${prNumber}]]`;
+}
+
+/** Label court pour remplacer un tag #PRn (pas de lien). */
+function formatPrTagLabel({ prNumber, status }) {
+  return `${statusEmoji(status)} PR #${prNumber} · ${status}`;
 }
 
 function notionHeaders(extra = {}) {
@@ -401,6 +414,44 @@ function richTextLine(content) {
   return parts;
 }
 
+function blockMatchesPrTag(block, prNumber) {
+  if (!PR_TAG_BLOCK_TYPES.has(block.type)) return false;
+  const match = blockPlainText(block).match(PR_TAG_RE);
+  return Boolean(match && String(match[1]) === String(prNumber));
+}
+
+/**
+ * Remplace le texte d’un titre / titre dépliant / liste dépliante
+ * qui contient #PRn par « ⏹️ PR #n · Closed » (sans lien), sans changer le type.
+ */
+async function updatePrTaggedBlocks(pageId, prNumber, status) {
+  const label = formatPrTagLabel({ prNumber, status });
+  const richText = [{ type: "text", text: { content: label } }];
+  const queue = [pageId];
+  let updated = 0;
+
+  while (queue.length) {
+    const parentId = queue.shift();
+    const children = await listAllChildren(parentId);
+    for (const block of children) {
+      if (block.has_children) queue.push(block.id);
+      if (!blockMatchesPrTag(block, prNumber)) continue;
+
+      const type = block.type;
+      await notionFetch(`/blocks/${block.id}`, {
+        method: "PATCH",
+        body: { [type]: { rich_text: richText } },
+      });
+      updated += 1;
+      console.log(`🏷️  Tag #PR${prNumber} → « ${label} » (${type} ${block.id})`);
+    }
+  }
+
+  if (!updated) {
+    console.log(`ℹ️  Aucun tag #PR${prNumber} (titre / toggle) à remplacer`);
+  }
+}
+
 async function ensureSectionAndUpsertPrLine(pageId, lineText, prNumber) {
   const children = await listAllChildren(pageId);
   const marker = PR_LINE_RE(prNumber);
@@ -514,6 +565,7 @@ async function main() {
 
   for (const [pageId, source] of targets) {
     console.log(`🔗 Page ${pageId} (via ${source}) → ${status}`);
+    await updatePrTaggedBlocks(pageId, PR_NUMBER, status);
     await ensureSectionAndUpsertPrLine(pageId, line, PR_NUMBER);
     // Colonnes tableau (dernière PR gagnante si plusieurs)
     try {
