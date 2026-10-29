@@ -9,8 +9,8 @@
 # Secret GitHub requis :
 # - NOTION_API_VR  PAT Notion (Développeur)
 #
-# Bases tickets : tableau NOTION_DATABASE_IDS dans
-# .github/scripts/sync-notion-pr-status.mjs (pas un secret).
+# Bases tickets : tableau NOTION_TICKET_SOURCES dans
+# .github/scripts/sync-notion-pr-status.mjs (databaseId + dataSourceId).
 #
 # Optionnel (env ci-dessous) :
 # - NOTION_ID_PREFIX=TAS  pour n’accepter que TAS-123 (ignorer d’autres PREFIX-n)
