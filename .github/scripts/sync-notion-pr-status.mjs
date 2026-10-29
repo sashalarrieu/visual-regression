@@ -233,10 +233,11 @@ function buildTicketFilters(idMeta, ticket) {
     throw new Error(`Aucune propriété ID trouvée (cherché: ${NOTION_ID_PROPERTY} / Identifiant).`);
   }
   const name = idMeta.name;
-  // Notion REST: unique_id / auto_increment_id se filtrent souvent via unique_id
+  // Notion REST: formes possibles selon version / type (unique_id vs auto_increment_id)
   if (idMeta.type === "unique_id" || idMeta.type === "auto_increment_id") {
     return [
       { property: name, unique_id: { equals: ticket.number } },
+      { property: name, auto_increment_id: { equals: ticket.number } },
       { property: name, number: { equals: ticket.number } },
     ];
   }
@@ -259,16 +260,27 @@ async function queryTicketInDataSource(dataSourceId, body) {
   });
 }
 
+function parseTicketNumberValue(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const m = value.trim().match(/^(?:[A-Za-z][A-Za-z0-9]{0,15}-)?(\d+)$/);
+    if (m) return Number(m[1]);
+  }
+  if (value && typeof value === "object" && typeof value.number === "number") return value.number;
+  return null;
+}
+
 function readTicketNumberFromPage(page, idPropertyName) {
   const prop = page.properties?.[idPropertyName] || page.properties?.ID;
   if (!prop) return null;
   const uid = readIdPayload(prop);
-  if (typeof uid?.number === "number") return uid.number;
-  if (typeof prop.number === "number") return prop.number;
-  // Certains payloads exposent juste un entier sous la clé du type
-  if (typeof prop.auto_increment_id === "number") return prop.auto_increment_id;
-  if (typeof prop.unique_id === "number") return prop.unique_id;
-  return null;
+  return (
+    parseTicketNumberValue(uid) ??
+    parseTicketNumberValue(prop.number) ??
+    parseTicketNumberValue(prop.auto_increment_id) ??
+    parseTicketNumberValue(prop.unique_id) ??
+    null
+  );
 }
 
 /** Fallback fiable : parcourt le data_source et matche le numéro ID en JS. */
