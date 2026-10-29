@@ -10,9 +10,9 @@
  *
  * Sur le ticket résolu :
  * - section « GitHub PRs » (ligne avec lien + marqueur [[vr-pr:N]])
- * - si un titre / titre dépliant / liste dépliante contient #PRN (ou un label
- *   déjà sync « 🔵 PR #N · Open ») → remplacé/rafraîchi par le statut courant
- *   (sans lien), type de block inchangé — re-sync à chaque event PR
+ * - partout dans le contenu : chaque #PRN (ou label déjà sync « 🔵 PR #N · Open »)
+ *   est remplacé/rafraîchi par le statut courant (sans lien), type de block
+ *   inchangé — plusieurs tags possibles dans le même ticket ; re-sync à chaque event
  *
  * Secrets GitHub :
  * - NOTION_API_VR  PAT Notion
@@ -58,17 +58,8 @@ const NOTION_URL_RE = /https?:\/\/(?:[a-z0-9-]+\.)*(?:notion\.so|notion\.site|no
 /** IDs type TAS-12, VR-3 (préfixe lettres/chiffres + tiret + numéro). */
 const TICKET_ID_RE = /\b([A-Za-z][A-Za-z0-9]{0,15})-(\d+)\b/g;
 const PR_LINE_RE = n => new RegExp(`\\[\\[vr-pr:${n}\\]\\]`);
-/** Tag manuel dans un titre / toggle Notion, ex. #PR50 */
-const PR_TAG_RE = /#PR(\d+)\b/i;
-/**
- * Titre dont le texte API est juste « PR51 » / « PR #51 »
- * (Notion retire souvent le # du markdown heading).
- */
-const PR_TAG_BARE_RE = /^PR\s*#?(\d+)\s*$/i;
-/** Label déjà synchronisé, ex. « 🔵 PR #50 · Open » — à re-sync si le statut change */
-const PR_LABEL_RE = /(?:^|\s)(?:[🔵⏹️✅📝]\s*)?PR\s*#(\d+)\s*·\s*(?:Open|Closed|Merged|Draft)\b/i;
-/** Titres / toggles + paragraphe (souvent `#PR51` collé sans passer en heading Notion). */
-const PR_TAG_BLOCK_TYPES = new Set(["heading_1", "heading_2", "heading_3", "toggle", "paragraph"]);
+/** Statuts affichés dans les labels courts « 🔵 PR #n · Open » */
+const PR_LABEL_STATUS = "Open|Closed|Merged|Draft";
 
 const SECTION_TITLE = "GitHub PRs";
 
@@ -423,32 +414,50 @@ function richTextLine(content) {
   return parts;
 }
 
-function extractPrNumberFromTaggedBlock(block) {
-  if (!PR_TAG_BLOCK_TYPES.has(block.type)) return null;
-  const text = blockPlainText(block).trim();
-  const tagMatch = text.match(PR_TAG_RE);
-  if (tagMatch) return Number(tagMatch[1]);
-  const bareMatch = text.match(PR_TAG_BARE_RE);
-  if (bareMatch) return Number(bareMatch[1]);
-  // Déjà taggé précédemment : on continue de rafraîchir le statut à chaque sync
-  const labelMatch = text.match(PR_LABEL_RE);
-  if (labelMatch) return Number(labelMatch[1]);
-  return null;
+function blockRichTextPayload(block) {
+  const payload = block?.[block.type];
+  if (!payload || !Array.isArray(payload.rich_text)) return null;
+  return payload;
 }
 
-function blockMatchesPrTag(block, prNumber) {
-  const found = extractPrNumberFromTaggedBlock(block);
-  return found !== null && String(found) === String(prNumber);
+/** Lignes auto « GitHub PRs » (avec lien / [[vr-pr:N]]) — ne pas les écraser ici. */
+function isGithubPrSectionLine(text) {
+  return /\[\[vr-pr:\d+\]\]/i.test(text) || /https?:\/\/(?:www\.)?github\.com\//i.test(text);
 }
 
 /**
- * Remplace le texte d’un titre / titre dépliant / liste dépliante
- * qui contient #PRn (ou un label déjà sync) par « ⏹️ PR #n · Closed »
- * (sans lien), sans changer le type. Re-sync à chaque event PR.
+ * Remplace dans un texte toutes les occurrences liées à prNumber
+ * (#PR50, « 🔵 PR #50 · Open », ou block entier « PR50 »).
+ * Les tags d’autres PR (#PR51…) sont laissés intacts.
+ */
+function replacePrTagsInText(text, prNumber, label) {
+  const n = String(prNumber);
+  const labelForN = new RegExp(`(?:[🔵⏹️✅📝]\\s*)?PR\\s*#${n}\\s*·\\s*(?:${PR_LABEL_STATUS})\\b`, "gi");
+  const tagForN = new RegExp(`#PR${n}\\b`, "gi");
+  let next = text.replace(labelForN, label).replace(tagForN, label);
+  if (new RegExp(`^PR\\s*#?${n}\\s*$`, "i").test(next.trim())) {
+    next = label;
+  }
+  return next;
+}
+
+function textMentionsPr(text, prNumber) {
+  const n = String(prNumber);
+  if (new RegExp(`#PR${n}\\b`, "i").test(text)) return true;
+  if (new RegExp(`(?:[🔵⏹️✅📝]\\s*)?PR\\s*#${n}\\s*·\\s*(?:${PR_LABEL_STATUS})\\b`, "i").test(text)) {
+    return true;
+  }
+  return new RegExp(`^PR\\s*#?${n}\\s*$`, "i").test(text.trim());
+}
+
+/**
+ * Remplace chaque #PRn / label déjà sync n’importe où dans le ticket
+ * par « ⏹️ PR #n · Closed » (sans lien), sans changer le type de block.
+ * Plusieurs tags possibles (même PR ou PR différentes) ; seule la PR
+ * de l’event courant est rafraîchie. Re-sync à chaque event.
  */
 async function updatePrTaggedBlocks(pageId, prNumber, status) {
   const label = formatPrTagLabel({ prNumber, status });
-  const richText = [{ type: "text", text: { content: label } }];
   const queue = [pageId];
   let updated = 0;
   let skipped = 0;
@@ -458,10 +467,16 @@ async function updatePrTaggedBlocks(pageId, prNumber, status) {
     const children = await listAllChildren(parentId);
     for (const block of children) {
       if (block.has_children) queue.push(block.id);
-      if (!blockMatchesPrTag(block, prNumber)) continue;
 
-      const current = blockPlainText(block).trim();
-      if (current === label) {
+      const payload = blockRichTextPayload(block);
+      if (!payload) continue;
+
+      const current = blockPlainText(block);
+      if (isGithubPrSectionLine(current)) continue;
+      if (!textMentionsPr(current, prNumber)) continue;
+
+      const next = replacePrTagsInText(current, prNumber, label);
+      if (next === current) {
         skipped += 1;
         continue;
       }
@@ -469,7 +484,11 @@ async function updatePrTaggedBlocks(pageId, prNumber, status) {
       const type = block.type;
       await notionFetch(`/blocks/${block.id}`, {
         method: "PATCH",
-        body: { [type]: { rich_text: richText } },
+        body: {
+          [type]: {
+            rich_text: [{ type: "text", text: { content: next.slice(0, 1900) } }],
+          },
+        },
       });
       updated += 1;
       console.log(`🏷️  Tag PR #${prNumber} → « ${label} » (${type} ${block.id})`);
@@ -477,9 +496,11 @@ async function updatePrTaggedBlocks(pageId, prNumber, status) {
   }
 
   if (!updated && !skipped) {
-    console.log(`ℹ️  Aucun tag #PR${prNumber} (titre / toggle) à remplacer`);
+    console.log(`ℹ️  Aucun tag #PR${prNumber} à remplacer dans le contenu`);
   } else if (!updated && skipped) {
     console.log(`ℹ️  Tag(s) PR #${prNumber} déjà à jour (${skipped})`);
+  } else {
+    console.log(`🏷️  ${updated} occurrence(s) #PR${prNumber} mise(s) à jour`);
   }
 }
 
