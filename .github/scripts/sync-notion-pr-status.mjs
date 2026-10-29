@@ -1,35 +1,47 @@
 #!/usr/bin/env node
 /**
- * POC — synchronise l’état d’une PR GitHub vers une page Notion.
+ * POC — synchronise l’état d’une PR GitHub dans le *contenu* d’un ticket Notion
+ * (plusieurs PR par ticket possibles).
  *
- * Entrées (env) :
- * - NOTION_TOKEN              secret API Notion (GitHub secret NOTION_API_VR)
- * - PR_BODY                   corps de la PR (où coller l’URL Notion du ticket)
- * - PR_HTML_URL               URL de la PR GitHub
- * - PR_STATE                  open | closed
- * - PR_DRAFT                  true | false
- * - PR_MERGED                 true | false
- * - NOTION_PR_URL_PROPERTY    nom propriété URL (défaut: "PR")
- * - NOTION_PR_STATUS_PROPERTY nom propriété statut (défaut: "PR status")
- * - NOTION_PR_STATUS_TYPE     select | status (défaut: select)
- * - NOTION_VERSION            header API (défaut: 2022-06-28)
+ * Résolution du ticket (dans l’ordre) :
+ * 1. URL Notion dans le body de la PR
+ * 2. ID ticket (ex. TAS-12) dans : titre PR, description, branche, messages de commit
+ *    → requête sur la propriété "ID" (unique_id) de la base Notion
  *
- * Convention : coller l’URL de la page Notion ticket dans la description de la PR.
+ * Secrets GitHub :
+ * - NOTION_API_VR       PAT Notion
+ * - NOTION_DATABASE_ID  ID de la base de tickets (32 hex)
+ *
+ * Env optionnelles :
+ * - NOTION_ID_PROPERTY   nom propriété ID (défaut: "ID")
+ * - NOTION_ID_PREFIX     si défini, n’accepte que PREFIX-123 (ex. TAS)
+ * - NOTION_VERSION       (défaut: 2022-06-28)
  */
 
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
+const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID || "";
+const NOTION_ID_PROPERTY = process.env.NOTION_ID_PROPERTY || "ID";
+const NOTION_ID_PREFIX = (process.env.NOTION_ID_PREFIX || "").trim().toUpperCase();
+const NOTION_VERSION = process.env.NOTION_VERSION || "2022-06-28";
+
+const PR_NUMBER = process.env.PR_NUMBER || "";
+const PR_TITLE = process.env.PR_TITLE || "";
 const PR_BODY = process.env.PR_BODY || "";
+const PR_HEAD_REF = process.env.PR_HEAD_REF || "";
 const PR_HTML_URL = process.env.PR_HTML_URL || "";
 const PR_STATE = process.env.PR_STATE || "open";
 const PR_DRAFT = process.env.PR_DRAFT === "true";
 const PR_MERGED = process.env.PR_MERGED === "true";
-const URL_PROP = process.env.NOTION_PR_URL_PROPERTY || "PR";
-const STATUS_PROP = process.env.NOTION_PR_STATUS_PROPERTY || "PR status";
-const STATUS_TYPE = process.env.NOTION_PR_STATUS_TYPE || "select";
-const NOTION_VERSION = process.env.NOTION_VERSION || "2022-06-28";
 
-// Couvre notion.so, www.notion.so, app.notion.com, etc.
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
+const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY || "";
+
 const NOTION_URL_RE = /https?:\/\/(?:[a-z0-9-]+\.)*(?:notion\.so|notion\.site|notion\.com)\/[^\s)>\]"']+/gi;
+/** IDs type TAS-12, VR-3 (préfixe lettres/chiffres + tiret + numéro). */
+const TICKET_ID_RE = /\b([A-Za-z][A-Za-z0-9]{0,15})-(\d+)\b/g;
+const PR_LINE_RE = n => new RegExp(`⟦vr-pr:${n}⟧`);
+
+const SECTION_TITLE = "GitHub PRs";
 
 function fail(message, code = 1) {
   console.error(`❌ ${message}`);
@@ -43,36 +55,31 @@ function resolvePrStatus() {
   return "Open";
 }
 
-/** Extrait l’UUID 32 hex d’une URL Notion (avec ou sans tirets). */
-function extractNotionPageId(url) {
-  const cleaned = url.split("?")[0].split("#")[0];
-  const match = cleaned.match(/([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
-  if (!match) return null;
-  const raw = match[1].replace(/-/g, "").toLowerCase();
-  if (raw.length !== 32) return null;
-  return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`;
+function statusEmoji(status) {
+  if (status === "Merged") return "✅";
+  if (status === "Closed") return "⏹️";
+  if (status === "Draft") return "📝";
+  return "🔵";
 }
 
-function findNotionPageId(body) {
-  const urls = body.match(NOTION_URL_RE) || [];
-  for (const url of urls) {
-    const id = extractNotionPageId(url);
-    if (id) {
-      return { id, url };
-    }
-  }
-  return null;
+function formatPrLine({ prNumber, status, url }) {
+  return `${statusEmoji(status)} PR #${prNumber} · ${status} · ${url} ⟦vr-pr:${prNumber}⟧`;
 }
 
-async function patchNotionPage(pageId, properties) {
-  const res = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${NOTION_TOKEN}`,
-      "Notion-Version": NOTION_VERSION,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ properties }),
+function notionHeaders(extra = {}) {
+  return {
+    Authorization: `Bearer ${NOTION_TOKEN}`,
+    "Notion-Version": NOTION_VERSION,
+    "Content-Type": "application/json",
+    ...extra,
+  };
+}
+
+async function notionFetch(path, { method = "GET", body } = {}) {
+  const res = await fetch(`https://api.notion.com/v1${path}`, {
+    method,
+    headers: notionHeaders(),
+    body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
   let json;
@@ -83,35 +90,254 @@ async function patchNotionPage(pageId, properties) {
   }
   if (!res.ok) {
     const detail = json.message || text;
-    fail(`Notion API ${res.status}: ${detail}`);
+    throw new Error(`Notion API ${res.status} ${method} ${path}: ${detail}`);
   }
   return json;
+}
+
+function extractNotionPageIdFromUrl(url) {
+  const cleaned = url.split("?")[0].split("#")[0];
+  const match = cleaned.match(/([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+  if (!match) return null;
+  const raw = match[1].replace(/-/g, "").toLowerCase();
+  if (raw.length !== 32) return null;
+  return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`;
+}
+
+function findNotionUrls(text) {
+  const urls = text.match(NOTION_URL_RE) || [];
+  const out = [];
+  for (const url of urls) {
+    const id = extractNotionPageIdFromUrl(url);
+    if (id) out.push({ pageId: id, source: `url:${url}` });
+  }
+  return out;
+}
+
+function extractTicketIds(text) {
+  const found = new Map(); // key: PREFIX-num upper → { prefix, number, raw }
+  TICKET_ID_RE.lastIndex = 0;
+  let m;
+  while ((m = TICKET_ID_RE.exec(text)) !== null) {
+    const prefix = m[1].toUpperCase();
+    const number = Number(m[2]);
+    if (!Number.isFinite(number)) continue;
+    if (NOTION_ID_PREFIX && prefix !== NOTION_ID_PREFIX) continue;
+    const raw = `${prefix}-${number}`;
+    found.set(raw, { prefix, number, raw });
+  }
+  return [...found.values()];
+}
+
+async function fetchPrCommitMessages() {
+  if (!GITHUB_TOKEN || !GITHUB_REPOSITORY || !PR_NUMBER) return "";
+  const messages = [];
+  let page = 1;
+  while (page <= 5) {
+    const res = await fetch(
+      `https://api.github.com/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits?per_page=100&page=${page}`,
+      {
+        headers: {
+          Authorization: `Bearer ${GITHUB_TOKEN}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      },
+    );
+    if (!res.ok) {
+      console.warn(`⚠️  Impossible de lire les commits PR (${res.status})`);
+      break;
+    }
+    const commits = await res.json();
+    if (!Array.isArray(commits) || commits.length === 0) break;
+    for (const c of commits) {
+      if (c?.commit?.message) messages.push(c.commit.message);
+    }
+    if (commits.length < 100) break;
+    page++;
+  }
+  return messages.join("\n");
+}
+
+async function findPageByUniqueId(ticket) {
+  if (!NOTION_DATABASE_ID) {
+    throw new Error("NOTION_DATABASE_ID manquant (secret GitHub) — requis pour résoudre l’ID ticket.");
+  }
+  const dbId = NOTION_DATABASE_ID.replace(/-/g, "");
+  const formatted = `${dbId.slice(0, 8)}-${dbId.slice(8, 12)}-${dbId.slice(12, 16)}-${dbId.slice(16, 20)}-${dbId.slice(20)}`;
+
+  const data = await notionFetch(`/databases/${formatted}/query`, {
+    method: "POST",
+    body: {
+      page_size: 5,
+      filter: {
+        property: NOTION_ID_PROPERTY,
+        unique_id: { equals: ticket.number },
+      },
+    },
+  });
+
+  const results = data.results || [];
+  if (results.length === 0) return null;
+
+  // Si un préfixe est attendu, vérifier que la page match (unique_id.prefix)
+  if (ticket.prefix) {
+    const match = results.find(page => {
+      const prop = page.properties?.[NOTION_ID_PROPERTY];
+      const uid = prop?.unique_id;
+      if (!uid) return true;
+      const pagePrefix = (uid.prefix || "").toUpperCase();
+      return !pagePrefix || pagePrefix === ticket.prefix;
+    });
+    if (match) return match.id;
+    return null;
+  }
+  return results[0].id;
+}
+
+function blockPlainText(block) {
+  const type = block.type;
+  const payload = block[type];
+  if (!payload?.rich_text) return "";
+  return payload.rich_text.map(t => t.plain_text || "").join("");
+}
+
+async function listAllChildren(blockId) {
+  const blocks = [];
+  let cursor;
+  do {
+    const q = cursor ? `?start_cursor=${encodeURIComponent(cursor)}&page_size=100` : "?page_size=100";
+    const data = await notionFetch(`/blocks/${blockId}/children${q}`);
+    blocks.push(...(data.results || []));
+    cursor = data.has_more ? data.next_cursor : null;
+  } while (cursor);
+  return blocks;
+}
+
+function richTextLine(content) {
+  // Notion limite ~2000 chars par text item
+  const chunk = content.slice(0, 1900);
+  const urlMatch = chunk.match(/https?:\/\/\S+/);
+  if (!urlMatch) {
+    return [{ type: "text", text: { content: chunk } }];
+  }
+  const url = urlMatch[0].replace(/⟦.*$/, "").trim();
+  const before = chunk.slice(0, urlMatch.index);
+  const after = chunk.slice(urlMatch.index + urlMatch[0].length);
+  const parts = [];
+  if (before) parts.push({ type: "text", text: { content: before } });
+  parts.push({ type: "text", text: { content: url, link: { url } } });
+  if (after) parts.push({ type: "text", text: { content: after } });
+  return parts;
+}
+
+async function ensureSectionAndUpsertPrLine(pageId, lineText, prNumber) {
+  const children = await listAllChildren(pageId);
+  const marker = PR_LINE_RE(prNumber);
+
+  const existing = children.find(b => {
+    if (!["paragraph", "bulleted_list_item", "to_do", "quote", "callout"].includes(b.type)) {
+      return false;
+    }
+    return marker.test(blockPlainText(b));
+  });
+
+  if (existing) {
+    const type = existing.type;
+    await notionFetch(`/blocks/${existing.id}`, {
+      method: "PATCH",
+      body: {
+        [type]: {
+          rich_text: richTextLine(lineText),
+        },
+      },
+    });
+    console.log(`✏️  Ligne PR #${prNumber} mise à jour (block ${existing.id})`);
+    return;
+  }
+
+  let hasHeading = children.some(
+    b => (b.type === "heading_2" || b.type === "heading_3") && blockPlainText(b).trim() === SECTION_TITLE,
+  );
+
+  const toAppend = [];
+  if (!hasHeading) {
+    toAppend.push({
+      object: "block",
+      type: "heading_2",
+      heading_2: {
+        rich_text: [{ type: "text", text: { content: SECTION_TITLE } }],
+      },
+    });
+  }
+  toAppend.push({
+    object: "block",
+    type: "bulleted_list_item",
+    bulleted_list_item: {
+      rich_text: richTextLine(lineText),
+    },
+  });
+
+  await notionFetch(`/blocks/${pageId}/children`, {
+    method: "POST",
+    body: { children: toAppend },
+  });
+  console.log(`➕ Ligne PR #${prNumber} ajoutée sous « ${SECTION_TITLE} »`);
+}
+
+async function resolveTargetPages(haystack) {
+  const targets = new Map(); // pageId → source
+
+  for (const hit of findNotionUrls(haystack)) {
+    targets.set(hit.pageId, hit.source);
+  }
+
+  const tickets = extractTicketIds(haystack);
+  for (const ticket of tickets) {
+    console.log(`🔎 Ticket ID détecté: ${ticket.raw}`);
+    try {
+      const pageId = await findPageByUniqueId(ticket);
+      if (!pageId) {
+        console.warn(`⚠️  Aucune page Notion pour ${ticket.raw} (propriété ${NOTION_ID_PROPERTY})`);
+        continue;
+      }
+      if (!targets.has(pageId)) targets.set(pageId, `id:${ticket.raw}`);
+    } catch (err) {
+      console.warn(`⚠️  Lookup ${ticket.raw}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return targets;
 }
 
 async function main() {
   if (!NOTION_TOKEN) fail("NOTION_TOKEN manquant (secret GitHub NOTION_API_VR).");
   if (!PR_HTML_URL) fail("PR_HTML_URL manquant.");
+  if (!PR_NUMBER) fail("PR_NUMBER manquant.");
 
-  const found = findNotionPageId(PR_BODY);
-  if (!found) {
-    console.log("ℹ️  Aucune URL Notion trouvée dans la description de la PR — skip.");
+  const commitMessages = await fetchPrCommitMessages();
+  const haystack = [PR_TITLE, PR_BODY, PR_HEAD_REF, commitMessages].filter(Boolean).join("\n");
+
+  console.log(`📌 PR #${PR_NUMBER} — ${PR_HTML_URL}`);
+  console.log(`🌿 Branche: ${PR_HEAD_REF || "(n/a)"}`);
+
+  const targets = await resolveTargetPages(haystack);
+  if (targets.size === 0) {
+    console.log(
+      "ℹ️  Aucun ticket Notion trouvé (ni URL Notion, ni ID type PREFIX-123 dans titre/description/branche/commits) — skip.",
+    );
     process.exit(0);
   }
 
-  const statusName = resolvePrStatus();
-  console.log(`🔗 Notion page: ${found.id} (depuis ${found.url})`);
-  console.log(`📌 PR: ${PR_HTML_URL}`);
-  console.log(`📊 Status → ${statusName}`);
+  const status = resolvePrStatus();
+  const line = formatPrLine({ prNumber: PR_NUMBER, status, url: PR_HTML_URL });
 
-  const statusValue = STATUS_TYPE === "status" ? { status: { name: statusName } } : { select: { name: statusName } };
+  for (const [pageId, source] of targets) {
+    console.log(`🔗 Page ${pageId} (via ${source}) → ${status}`);
+    await ensureSectionAndUpsertPrLine(pageId, line, PR_NUMBER);
+  }
 
-  const properties = {
-    [URL_PROP]: { url: PR_HTML_URL },
-    [STATUS_PROP]: statusValue,
-  };
-
-  await patchNotionPage(found.id, properties);
-  console.log(`✅ Notion mis à jour (${URL_PROP} + ${STATUS_PROP}=${statusName})`);
+  console.log(`✅ Sync terminée (${targets.size} page(s) Notion)`);
 }
 
 main().catch(err => {
