@@ -10,7 +10,7 @@
  * - découvrir toutes les PR liées (tags flexibles + lignes « PR #N » + PR courante)
  * - fetch GitHub de chaque PR → tags contenu, section « GitHub PRs » (+ commits ticket),
  *   colonnes « PR status » / « PR done » (terminées/total)
- * Résolution pages : ID/URL côté GitHub + pages Notion qui taguent déjà cette PR (sens inverse)
+ * Résolution pages : ID/URL côté GitHub + Search Notion « PR #N » (sens inverse, pas de scan full DB)
  *
  * Tags acceptés : #PR50, #PR 50, PR #50, PR#50, #50PR, #50 PR, 50#PR, 50 #PR
  * → hors section : « 🟢 PR #50 » (icône = état, sans texte) + lien sur « PR #50 »
@@ -269,7 +269,24 @@ function notionHeaders(extra = {}) {
   };
 }
 
-async function notionFetch(path, { method = "GET", body } = {}) {
+const NOTION_MIN_INTERVAL_MS = 350;
+const NOTION_MAX_429_RETRIES = 6;
+/** Scan ID fallback : plafond pages (évite de vider le quota sur d’énormes boards). */
+const MAX_ID_SCAN_PAGES = 300;
+let notionNextSlotMs = 0;
+/** data_source_id + database_id des boards suivis (cache). */
+let trackedParentIdsPromise = null;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function notionFetch(path, { method = "GET", body } = {}, attempt = 0) {
+  const now = Date.now();
+  const wait = Math.max(0, notionNextSlotMs - now);
+  if (wait) await sleep(wait);
+  notionNextSlotMs = Date.now() + NOTION_MIN_INTERVAL_MS;
+
   const res = await fetch(`https://api.notion.com/v1${path}`, {
     method,
     headers: notionHeaders(),
@@ -282,11 +299,68 @@ async function notionFetch(path, { method = "GET", body } = {}) {
   } catch {
     json = { message: text };
   }
+  if (res.status === 429 && attempt < NOTION_MAX_429_RETRIES) {
+    const headerSec = Number(res.headers.get("retry-after"));
+    const retryAfterSec = Number.isFinite(headerSec) && headerSec > 0 ? headerSec : Math.min(60, 2 ** attempt);
+    console.warn(
+      `⏳ Notion 429 ${method} ${path} — retry dans ${retryAfterSec}s (${attempt + 1}/${NOTION_MAX_429_RETRIES})`,
+    );
+    await sleep(retryAfterSec * 1000);
+    return notionFetch(path, { method, body }, attempt + 1);
+  }
   if (!res.ok) {
     const detail = json.message || text;
     throw new Error(`Notion API ${res.status} ${method} ${path}: ${detail}`);
   }
   return json;
+}
+
+async function ensureTrackedParentIds() {
+  if (trackedParentIdsPromise) return trackedParentIdsPromise;
+  trackedParentIdsPromise = (async () => {
+    const ids = new Set();
+    for (const rawId of NOTION_DATA_SOURCE_IDS) {
+      const dataSourceId = formatNotionId(rawId);
+      ids.add(dataSourceId);
+      try {
+        const ds = await notionFetch(`/data_sources/${dataSourceId}`);
+        if (ds?.id) ids.add(formatNotionId(ds.id));
+        if (ds?.database_id) ids.add(formatNotionId(ds.database_id));
+        if (ds?.parent?.database_id) ids.add(formatNotionId(ds.parent.database_id));
+        if (ds?.parent?.data_source_id) ids.add(formatNotionId(ds.parent.data_source_id));
+      } catch (err) {
+        console.warn(`⚠️  Parent ids data_source ${dataSourceId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return ids;
+  })();
+  return trackedParentIdsPromise;
+}
+
+function pageBelongsToTrackedSources(page, trackedIds) {
+  const parent = page?.parent || {};
+  const candidates = [parent.database_id, parent.data_source_id].filter(Boolean).map(formatNotionId);
+  return candidates.some(id => trackedIds.has(id));
+}
+
+/** Search workspace (pages accessibles à l’intégration), paginé. */
+async function searchNotionPages(query) {
+  const pages = [];
+  let cursor;
+  do {
+    const body = {
+      query,
+      page_size: 25,
+      filter: { property: "object", value: "page" },
+    };
+    if (cursor) body.start_cursor = cursor;
+    const data = await notionFetch("/search", { method: "POST", body });
+    for (const r of data.results || []) {
+      if (r.object === "page") pages.push(r);
+    }
+    cursor = data.has_more ? data.next_cursor : null;
+  } while (cursor);
+  return pages;
 }
 
 async function githubFetch(path) {
@@ -556,6 +630,31 @@ function readTicketRawFromPage(page, idPropertyName) {
   return prefix ? `${prefix}-${num}` : String(num);
 }
 
+/** Fallback léger : Search « VR-3 » puis match propriété ID (pas de full DB). */
+async function findPageBySearch(ticket, idPropertyName) {
+  const trackedIds = await ensureTrackedParentIds();
+  const queries = [ticket.raw, String(ticket.number)];
+  if (ticket.prefix) queries.push(`${ticket.prefix}-${ticket.number}`);
+
+  for (const q of [...new Set(queries.filter(Boolean))]) {
+    const pages = await searchNotionPages(q);
+    for (const page of pages) {
+      if (page.archived) continue;
+      if (!pageBelongsToTrackedSources(page, trackedIds)) continue;
+      const prop = page.properties?.[idPropertyName] || page.properties?.ID;
+      const num = readTicketNumberFromPage(page, idPropertyName);
+      if (num !== ticket.number) continue;
+      const uid = readIdPayload(prop);
+      const prefix = (uid?.prefix || "").toUpperCase();
+      if (ticket.prefix && prefix && prefix !== ticket.prefix) continue;
+      console.log(`📂 Trouvé ${ticket.raw} via search « ${q} » → ${page.id}`);
+      return page.id;
+    }
+  }
+  return null;
+}
+
+/** Dernier recours plafonné (props query only, sans lire le body des pages). */
 async function findPageByScanning(dataSourceId, ticket, idPropertyName) {
   let cursor;
   let scanned = 0;
@@ -576,12 +675,18 @@ async function findPageByScanning(dataSourceId, ticket, idPropertyName) {
       const uid = readIdPayload(prop);
       const prefix = (uid?.prefix || "").toUpperCase();
       if (ticket.prefix && prefix && prefix !== ticket.prefix) continue;
-      console.log(`📂 Trouvé ${ticket.raw} par scan (${scanned} pages) → ${page.id}`);
+      console.log(`📂 Trouvé ${ticket.raw} par scan plafonné (${scanned} pages) → ${page.id}`);
       return page.id;
     }
     cursor = data.has_more ? data.next_cursor : null;
-  } while (cursor);
-  console.warn(`⚠️  Scan data_source ${dataSourceId}: ${scanned} page(s), pas de ${ticket.raw}`);
+  } while (cursor && scanned < MAX_ID_SCAN_PAGES);
+  if (cursor) {
+    console.warn(
+      `⚠️  Scan data_source ${dataSourceId}: stop après ${scanned} page(s) (plafond ${MAX_ID_SCAN_PAGES}), pas de ${ticket.raw}`,
+    );
+  } else {
+    console.warn(`⚠️  Scan data_source ${dataSourceId}: ${scanned} page(s), pas de ${ticket.raw}`);
+  }
   return null;
 }
 
@@ -591,6 +696,9 @@ async function findPageByUniqueId(ticket) {
   }
 
   let lastError = null;
+  let idMetaFallback = { name: NOTION_ID_PROPERTY, type: "auto_increment_id" };
+  const sources = [];
+
   for (const rawId of NOTION_DATA_SOURCE_IDS) {
     const dataSourceId = formatNotionId(rawId);
     try {
@@ -605,10 +713,9 @@ async function findPageByUniqueId(ticket) {
           `⚠️  Impossible de lire le schéma data_source: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-      const idMeta = findIdPropertyMeta(properties) || {
-        name: NOTION_ID_PROPERTY,
-        type: "auto_increment_id",
-      };
+      const idMeta = findIdPropertyMeta(properties) || idMetaFallback;
+      idMetaFallback = idMeta;
+      sources.push({ dataSourceId, idMeta });
       console.log(`🏷️  Lookup ID: ${idMeta.name} (${idMeta.type}) = ${ticket.raw}`);
 
       for (const filter of buildTicketFilters(idMeta, ticket)) {
@@ -624,12 +731,22 @@ async function findPageByUniqueId(ticket) {
           console.warn(`⚠️  Filtre ${JSON.stringify(filter)}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
+    } catch (err) {
+      lastError = err;
+      console.warn(`⚠️  data_source ${dataSourceId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
+  const searchedId = await findPageBySearch(ticket, idMetaFallback.name);
+  if (searchedId) return searchedId;
+
+  for (const { dataSourceId, idMeta } of sources) {
+    try {
       const scannedId = await findPageByScanning(dataSourceId, ticket, idMeta.name);
       if (scannedId) return scannedId;
     } catch (err) {
       lastError = err;
-      console.warn(`⚠️  data_source ${dataSourceId}: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`⚠️  scan ${dataSourceId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1046,36 +1163,37 @@ async function discoverPrNumbersOnPage(pageId) {
 }
 
 /**
- * Sens inverse : tickets Notion qui mentionnent déjà cette PR (tag / section),
- * même si l’event GitHub ne cite que d’autres tickets (ex. close #50 → VR-1 + VR-2).
+ * Sens inverse (léger) : Search Notion « PR #N » / « #PRN », filtré aux data sources suivies.
+ * Vérifie le contenu uniquement sur les hits (pas de parcours de tout le board).
  */
 async function findPagesReferencingPr(prNumber) {
   const n = Number(prNumber);
   if (!Number.isFinite(n) || n <= 0) return [];
 
-  const found = [];
-  for (const rawId of NOTION_DATA_SOURCE_IDS) {
-    const dataSourceId = formatNotionId(rawId);
-    let cursor;
-    let scanned = 0;
-    do {
-      const body = { page_size: 50 };
-      if (cursor) body.start_cursor = cursor;
-      const data = await queryTicketInDataSource(dataSourceId, body);
-      for (const page of data.results || []) {
-        if (page.archived) continue;
-        scanned += 1;
-        try {
-          const nums = await collectPrNumbersFromPageContent(page.id);
-          if (nums.has(n)) found.push(page.id);
-        } catch (err) {
-          console.warn(`⚠️  Scan reverse page ${page.id}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-      cursor = data.has_more ? data.next_cursor : null;
-    } while (cursor);
-    console.log(`🔎 Reverse PR #${n}: ${scanned} page(s) scannée(s), ${found.length} lien(s)`);
+  const trackedIds = await ensureTrackedParentIds();
+  const queries = [`PR #${n}`, `#PR${n}`, `PR#${n}`];
+  const candidateIds = new Set();
+
+  for (const q of queries) {
+    const pages = await searchNotionPages(q);
+    for (const page of pages) {
+      if (page.archived) continue;
+      if (!pageBelongsToTrackedSources(page, trackedIds)) continue;
+      candidateIds.add(page.id);
+    }
   }
+
+  const found = [];
+  for (const pageId of candidateIds) {
+    try {
+      const nums = await collectPrNumbersFromPageContent(pageId);
+      if (nums.has(n)) found.push(pageId);
+    } catch (err) {
+      console.warn(`⚠️  Reverse verify ${pageId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  console.log(`🔎 Reverse PR #${n}: ${candidateIds.size} candidat(s) search, ${found.length} lien(s) confirmé(s)`);
   return found;
 }
 
