@@ -1,7 +1,7 @@
 # POC : refresh complet du ticket Notion à chaque event PR.
 # - tags flexibles (#PR50, PR #50, …) → label statut
 # - section « GitHub PRs » (titre + lien + commits liés au ticket)
-# - colonnes « PR status » / « PR remaining » (schéma auto si absent)
+# - colonnes « PR status » / « PR done » (schéma auto si absent)
 #
 # Détection ticket : URL Notion ou ID (ex. VR-3) dans titre/body/branche/commits.
 # Secret : NOTION_API_VR
