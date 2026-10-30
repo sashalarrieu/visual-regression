@@ -12,7 +12,7 @@
  *   colonnes « PR status » / « PR done » (terminées/total)
  *
  * Tags acceptés : #PR50, #PR 50, PR #50, PR#50, #50PR, #50 PR, 50#PR, 50 #PR
- * → hors section : « 🔵 PR #50 · Open » avec « PR #50 » = lien GitHub si URL connue
+ * → hors section : « 🔵 PR #50 » (icône = état, sans texte) + lien sur « PR #50 »
  * → section « GitHub PRs » : « 🔵 PR #50 · Open · titre · JJ/MM/AA - HHhMM »
  *   commits : « sha · message · JJ/MM/AA - HHhMM » (sha + PR #N = liens)
  *
@@ -53,18 +53,17 @@ const TICKET_ID_RE = /\b([A-Za-z][A-Za-z0-9]{0,15})-(\d+)\b/g;
 const PR_LABEL_STATUS = "Open|Closed|Merged|Draft";
 /** Formes flexibles de tag PR (capture le numéro). */
 const FLEX_PR_TAG_RE = /#PR\s*(\d+)\b|PR\s*#\s*(\d+)\b|#\s*(\d+)\s*PR\b|(\d+)\s*#PR\b/gi;
-const PR_LABEL_RE = /(?:[🔵⏹️✅📝]\s*)?PR\s*#(\d+)\s*·\s*(?:Open|Closed|Merged|Draft)\b/gi;
+/** Label sync contenu (avec ou sans ancien « · Open ») ou section. */
+const PR_LABEL_RE = /(?:[🔵⏹️✅📝]\s*)?PR\s*#(\d+)(?:\s*·\s*(?:Open|Closed|Merged|Draft))?/gi;
 /** Commit sous une PR dans la section. */
 const SECTION_COMMIT_LINE_RE = /^[a-f0-9]{7}\s*·/i;
-/** Ligne section complète : « 🔵 PR #50 · Open · titre » (≥ 2 ·) — pas le tag court « 🔵 PR #50 · Open ». */
+/** Ligne section complète : « 🔵 PR #50 · Open · titre » (≥ 2 ·) — pas le tag court « 🔵 PR #50 ». */
 const SECTION_PR_FULL_LINE_RE = /^(?:[🔵⏹️✅📝]\s*)?(?:PR\s*#|#PR)\s*\d+\s*·\s*(?:Open|Closed|Merged|Draft)\s*·/i;
 
 const SECTION_TITLE = "GitHub PRs";
 const PROP_PR_STATUS = "PR status";
 const PROP_PR_DONE = "PR done";
-/** Ancien nom — on continue de le remplir si la colonne existe encore. */
-const PROP_PR_REMAINING_LEGACY = "PR remaining";
-const PR_STATUS_OPTIONS = ["None", "All merged", "All draft", "All open", "All closed", "All done", "Remaining"];
+const PR_STATUS_OPTIONS = ["None", "Remaining", "All open", "All draft", "All merged", "All closed", "All done"];
 const DONE_PR_STATUSES = new Set(["Merged", "Closed"]);
 
 function fail(message, code = 1) {
@@ -94,7 +93,7 @@ function statusEmoji(status) {
 }
 
 function formatPrTagLabel({ prNumber, status }) {
-  return `${statusEmoji(status)} PR #${prNumber} · ${status}`;
+  return `${statusEmoji(status)} PR #${prNumber}`;
 }
 
 /** « 10/12/26 - 10h23 » (Europe/Paris). */
@@ -308,12 +307,6 @@ function collectPrNumbersFromText(text, into = new Set()) {
     const n = Number(m[1]);
     if (Number.isFinite(n)) into.add(n);
   }
-  // Ancien marqueur [[vr-pr:N]] encore présent sur des pages déjà sync
-  const legacyMarker = /\[\[vr-pr:(\d+)\]\]/gi;
-  for (const m of text.matchAll(legacyMarker)) {
-    const n = Number(m[1]);
-    if (Number.isFinite(n)) into.add(n);
-  }
   return into;
 }
 
@@ -321,9 +314,9 @@ function replacePrTagsInText(text, prNumber, label) {
   const n = String(prNumber);
   // Placeholder : évite que « PR #50 » dans un label déjà sync soit re-matché par le flex
   const ph = `\u0000PR${n}\u0000`;
-  // Accepte aussi les labels doublonnés (🔵 🔵 PR #n · Open · Open)
+  // Labels sync : « 🔵 PR #n » ou ancien « 🔵 PR #n · Open » (doublons inclus)
   const labelForN = new RegExp(
-    `(?:[🔵⏹️✅📝]\\s*)*PR\\s*#${n}\\s*·\\s*(?:${PR_LABEL_STATUS})(?:\\s*·\\s*(?:${PR_LABEL_STATUS}))*`,
+    `(?:[🔵⏹️✅📝]\\s*)*PR\\s*#${n}(?:\\s*·\\s*(?:${PR_LABEL_STATUS})(?:\\s*·\\s*(?:${PR_LABEL_STATUS}))*)?\\b`,
     "gi",
   );
   const flexForN = new RegExp(`#PR\\s*${n}\\b|PR\\s*#\\s*${n}\\b|#\\s*${n}\\s*PR\\b|${n}\\s*#PR\\b`, "gi");
@@ -347,7 +340,7 @@ function replaceAllPrTagsInText(text, prInfos) {
 
 function isGithubPrSectionManagedLine(text) {
   const t = text.trim();
-  return SECTION_COMMIT_LINE_RE.test(t) || SECTION_PR_FULL_LINE_RE.test(t) || /\[\[vr-pr:\d+\]\]/i.test(t);
+  return SECTION_COMMIT_LINE_RE.test(t) || SECTION_PR_FULL_LINE_RE.test(t);
 }
 
 async function fetchPrCommitMessages() {
@@ -829,25 +822,16 @@ async function rebuildGithubPrsSection(pageId, prInfos, ticketKeys) {
 
 async function updatePageGlobalProperties(pageId, prInfos) {
   const { status, done } = computeGlobalPrStatus(prInfos);
-  const richDone = { rich_text: [{ type: "text", text: { content: done } }] };
-  const properties = {
-    [PROP_PR_STATUS]: { select: { name: status } },
-    [PROP_PR_DONE]: richDone,
-  };
-
-  // Compat : ancienne colonne « PR remaining » si encore présente
-  try {
-    const page = await notionFetch(`/pages/${pageId}`);
-    if (page.properties?.[PROP_PR_REMAINING_LEGACY]) {
-      properties[PROP_PR_REMAINING_LEGACY] = richDone;
-    }
-  } catch (err) {
-    console.warn(`⚠️  Lecture props page ${pageId}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
   await notionFetch(`/pages/${pageId}`, {
     method: "PATCH",
-    body: { properties },
+    body: {
+      properties: {
+        [PROP_PR_STATUS]: { select: { name: status } },
+        [PROP_PR_DONE]: {
+          rich_text: [{ type: "text", text: { content: done } }],
+        },
+      },
+    },
   });
   console.log(`🧾 ${PROP_PR_STATUS}=${status} · ${PROP_PR_DONE}=${done}`);
 }
