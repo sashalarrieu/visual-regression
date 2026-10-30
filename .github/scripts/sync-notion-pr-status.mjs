@@ -25,7 +25,6 @@
  * - NOTION_ID_PROPERTY, NOTION_ID_PREFIX, NOTION_VERSION
  */
 
-// https://app.notion.com/p/4080420568508059b9b9c055311377cc
 const NOTION_DATA_SOURCE_IDS = ["40804205-6850-806d-b489-000b8b09ba97"];
 
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
@@ -63,7 +62,16 @@ const SECTION_PR_FULL_LINE_RE = /(?:PR\s*#|#PR)\s*\d+\s*·\s*(?:Open|Closed|Merg
 const SECTION_TITLE = "GitHub PRs";
 const PROP_PR_STATUS = "PR status";
 const PROP_PR_DONE = "PR done";
-const PR_STATUS_OPTIONS = ["None", "Remaining", "All open", "All draft", "All merged", "All closed", "All done"];
+/** Couleurs select Notion : default | gray | brown | orange | yellow | green | blue | purple | pink | red */
+const PR_STATUS_OPTIONS = [
+  { name: "None", color: "default" },
+  { name: "Remaining", color: "yellow" },
+  { name: "All open", color: "green" },
+  { name: "All draft", color: "brown" },
+  { name: "All merged", color: "purple" },
+  { name: "All closed", color: "red" },
+  { name: "All done", color: "blue" },
+];
 const DONE_PR_STATUSES = new Set(["Merged", "Closed"]);
 
 function fail(message, code = 1) {
@@ -629,7 +637,32 @@ async function findPageByUniqueId(ticket) {
   return null;
 }
 
-/** Crée PR status / PR done (+ options) si absents. */
+function buildPrStatusSelectOptions(existingOpts = []) {
+  const byName = new Map(existingOpts.map(o => [o.name, o]));
+  const merged = PR_STATUS_OPTIONS.map(({ name, color }) => {
+    const ex = byName.get(name);
+    if (ex?.id) return { id: ex.id, name, color };
+    return { name, color };
+  });
+  // Conserver d’éventuelles options custom hors liste
+  for (const o of existingOpts) {
+    if (!PR_STATUS_OPTIONS.some(p => p.name === o.name)) {
+      merged.push(o.id ? { id: o.id, name: o.name, color: o.color } : { name: o.name, color: o.color });
+    }
+  }
+  return merged;
+}
+
+function prStatusOptionsNeedUpdate(existingOpts = []) {
+  const byName = new Map(existingOpts.map(o => [o.name, o]));
+  for (const { name, color } of PR_STATUS_OPTIONS) {
+    const ex = byName.get(name);
+    if (!ex || ex.color !== color) return true;
+  }
+  return false;
+}
+
+/** Crée PR status / PR done (+ options/couleurs) si absents ou désalignés. */
 async function ensurePrSchema(dataSourceId) {
   const ds = await notionFetch(`/data_sources/${dataSourceId}`);
   const props = ds.properties || {};
@@ -637,20 +670,14 @@ async function ensurePrSchema(dataSourceId) {
 
   if (!props[PROP_PR_STATUS]) {
     patch[PROP_PR_STATUS] = {
-      select: {
-        options: PR_STATUS_OPTIONS.map(name => ({ name })),
-      },
+      select: { options: buildPrStatusSelectOptions() },
     };
   } else if (props[PROP_PR_STATUS].type === "select") {
-    const existing = new Set((props[PROP_PR_STATUS].select?.options || []).map(o => o.name));
-    const missing = PR_STATUS_OPTIONS.filter(n => !existing.has(n));
-    if (missing.length) {
-      // Notion : re-déclarer les options pour en ajouter (merge côté API)
-      const merged = [
-        ...(props[PROP_PR_STATUS].select?.options || []).map(o => ({ name: o.name, color: o.color })),
-        ...missing.map(name => ({ name })),
-      ];
-      patch[PROP_PR_STATUS] = { select: { options: merged } };
+    const existingOpts = props[PROP_PR_STATUS].select?.options || [];
+    if (prStatusOptionsNeedUpdate(existingOpts)) {
+      patch[PROP_PR_STATUS] = {
+        select: { options: buildPrStatusSelectOptions(existingOpts) },
+      };
     }
   }
 
