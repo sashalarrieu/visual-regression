@@ -50,7 +50,7 @@ const PR_LABEL_STATUS = "Open|Closed|Merged|Draft";
 /** Formes flexibles de tag PR (capture le numéro). */
 const FLEX_PR_TAG_RE = /#PR\s*(\d+)\b|PR\s*#\s*(\d+)\b|#\s*(\d+)\s*PR\b|(\d+)\s*#PR\b/gi;
 /** Label sync contenu (avec ou sans ancien « · Open ») ou section. */
-const PR_LABEL_RE = /(?:[🟢🆑💟📝]\s*)?PR\s*#(\d+)(?:\s*·\s*(?:Open|Closed|Merged|Draft))?/gi;
+const PR_LABEL_RE = /(?:[🟢🔴💟📝]\s*)?PR\s*#(\d+)(?:\s*·\s*(?:Open|Closed|Merged|Draft))?/gi;
 /** Commit sous une PR dans la section. */
 const SECTION_COMMIT_LINE_RE = /^[a-f0-9]{7}\s*·/i;
 /**
@@ -95,7 +95,7 @@ function statusFromGithubPr(pr) {
 
 function statusEmoji(status) {
   if (status === "Merged") return "💟";
-  if (status === "Closed") return "🆑";
+  if (status === "Closed") return "🔴";
   if (status === "Draft") return "📝";
   return "🟢";
 }
@@ -374,7 +374,7 @@ function replacePrTagsInText(text, prNumber, label) {
   const ph = `\u0000PR${n}\u0000`;
   // Labels sync : « 🟢 PR #n » ou ancien « 🟢 PR #n · Open » (doublons inclus)
   const labelForN = new RegExp(
-    `(?:[🟢🆑💟📝]\\s*)*PR\\s*#${n}(?:\\s*·\\s*(?:${PR_LABEL_STATUS})(?:\\s*·\\s*(?:${PR_LABEL_STATUS}))*)?\\b`,
+    `(?:[🟢🔴💟📝]\\s*)*PR\\s*#${n}(?:\\s*·\\s*(?:${PR_LABEL_STATUS})(?:\\s*·\\s*(?:${PR_LABEL_STATUS}))*)?\\b`,
     "gi",
   );
   const flexForN = new RegExp(`#PR\\s*${n}\\b|PR\\s*#\\s*${n}\\b|#\\s*${n}\\s*PR\\b|${n}\\s*#PR\\b`, "gi");
