@@ -1,34 +1,26 @@
 #!/usr/bin/env node
 /**
- * POC — synchronise l’état d’une PR GitHub dans le *contenu* d’un ticket Notion
- * (plusieurs PR par ticket possibles).
+ * POC — synchronise l’état des PRs GitHub dans un ticket Notion.
  *
  * Résolution du ticket (dans l’ordre) :
  * 1. URL Notion dans le body de la PR
- * 2. ID ticket (ex. TAS-12) dans : titre PR, description, branche, messages de commit
- *    → requête sur la propriété "ID" (unique_id) de la base Notion
+ * 2. ID ticket (ex. VR-3) dans : titre PR, description, branche, messages de commit
  *
- * Sur le ticket résolu :
- * - section « GitHub PRs » (ligne avec lien + marqueur [[vr-pr:N]])
- * - partout dans le contenu : chaque #PRN (ou label déjà sync « 🔵 PR #N · Open »)
- *   est remplacé/rafraîchi par le statut courant (sans lien), type de block
- *   inchangé — plusieurs tags possibles dans le même ticket ; re-sync à chaque event
+ * Sur chaque ticket résolu (refresh complet) :
+ * - découvrir toutes les PR liées (tags flexibles + section [[vr-pr:N]] + PR courante)
+ * - fetch GitHub de chaque PR → tags contenu, section « GitHub PRs » (+ commits ticket),
+ *   colonnes « PR status » / « PR remaining »
  *
- * Secrets GitHub :
- * - NOTION_API_VR  PAT Notion
+ * Tags acceptés : #PR50, #PR 50, PR #50, PR#50, #50PR, #50 PR, 50#PR, 50 #PR
+ * → remplacés par « 🔵 PR #50 · Open » (sans lien)
  *
- * Bases tickets (pas secret) : ajouter un UUID ci-dessous pour chaque tableau.
+ * Secrets GitHub : NOTION_API_VR
+ * Bases : NOTION_TICKET_SOURCES ci-dessous
  *
  * Env optionnelles :
- * - NOTION_ID_PROPERTY   nom propriété ID (défaut: "ID")
- * - NOTION_ID_PREFIX     si défini, n’accepte que PREFIX-123 (ex. TAS)
- * - NOTION_VERSION       (défaut: 2026-03-11 — requis pour PAT Notion)
+ * - NOTION_ID_PROPERTY, NOTION_ID_PREFIX, NOTION_VERSION
  */
 
-/**
- * Bases tickets Notion (database container + data_source).
- * data_source_id = collection://… (voir fetch Notion de la base).
- */
 const NOTION_TICKET_SOURCES = [
   {
     // https://app.notion.com/p/4080420568508059b9b9c055311377cc
@@ -55,23 +47,35 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY || "";
 
 const NOTION_URL_RE = /https?:\/\/(?:[a-z0-9-]+\.)*(?:notion\.so|notion\.site|notion\.com)\/[^\s)>\]"']+/gi;
-/** IDs type TAS-12, VR-3 (préfixe lettres/chiffres + tiret + numéro). */
 const TICKET_ID_RE = /\b([A-Za-z][A-Za-z0-9]{0,15})-(\d+)\b/g;
 const PR_LINE_RE = n => new RegExp(`\\[\\[vr-pr:${n}\\]\\]`);
-/** Statuts affichés dans les labels courts « 🔵 PR #n · Open » */
+const PR_MARKER_RE = /\[\[vr-pr:(\d+)\]\]/gi;
 const PR_LABEL_STATUS = "Open|Closed|Merged|Draft";
+/** Formes flexibles de tag PR (capture le numéro). */
+const FLEX_PR_TAG_RE = /#PR\s*(\d+)\b|PR\s*#\s*(\d+)\b|#\s*(\d+)\s*PR\b|(\d+)\s*#PR\b/gi;
+const PR_LABEL_RE = /(?:[🔵⏹️✅📝]\s*)?PR\s*#(\d+)\s*·\s*(?:Open|Closed|Merged|Draft)\b/gi;
 
 const SECTION_TITLE = "GitHub PRs";
+const PROP_PR_STATUS = "PR status";
+const PROP_PR_REMAINING = "PR remaining";
+const PR_STATUS_OPTIONS = ["None", "All merged", "All draft", "All open", "All closed", "Remaining"];
 
 function fail(message, code = 1) {
   console.error(`❌ ${message}`);
   process.exit(code);
 }
 
-function resolvePrStatus() {
+function resolveEventPrStatus() {
   if (PR_MERGED) return "Merged";
   if (PR_STATE === "closed") return "Closed";
   if (PR_DRAFT) return "Draft";
+  return "Open";
+}
+
+function statusFromGithubPr(pr) {
+  if (pr.merged_at || pr.merged) return "Merged";
+  if (pr.state === "closed") return "Closed";
+  if (pr.draft) return "Draft";
   return "Open";
 }
 
@@ -82,13 +86,42 @@ function statusEmoji(status) {
   return "🔵";
 }
 
-function formatPrLine({ prNumber, status, url }) {
-  return `${statusEmoji(status)} PR #${prNumber} · ${status} · ${url} [[vr-pr:${prNumber}]]`;
-}
-
-/** Label court pour remplacer un tag #PRn (pas de lien). */
 function formatPrTagLabel({ prNumber, status }) {
   return `${statusEmoji(status)} PR #${prNumber} · ${status}`;
+}
+
+function formatPrSectionLine({ prNumber, status, title, url }) {
+  const safeTitle = String(title || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  const titlePart = safeTitle ? ` · ${safeTitle}` : "";
+  return `${statusEmoji(status)} #PR${prNumber} · ${status}${titlePart} · ${url} [[vr-pr:${prNumber}]]`;
+}
+
+function formatCommitLine({ sha, message, url }) {
+  const short = String(sha || "").slice(0, 7);
+  const msg = String(message || "")
+    .split("\n")[0]
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 100);
+  return `${short} · ${msg} · ${url}`;
+}
+
+function computeGlobalPrStatus(prs) {
+  const total = prs.length;
+  if (total === 0) return { status: "None", remaining: "0/0" };
+
+  const remainingCount = prs.filter(p => p.status === "Open" || p.status === "Draft").length;
+  const remaining = `${remainingCount}/${total}`;
+
+  const all = status => prs.every(p => p.status === status);
+  if (all("Merged")) return { status: "All merged", remaining };
+  if (all("Draft")) return { status: "All draft", remaining };
+  if (all("Open")) return { status: "All open", remaining };
+  if (all("Closed")) return { status: "All closed", remaining };
+  return { status: "Remaining", remaining };
 }
 
 function notionHeaders(extra = {}) {
@@ -120,6 +153,31 @@ async function notionFetch(path, { method = "GET", body } = {}) {
   return json;
 }
 
+async function githubFetch(path) {
+  if (!GITHUB_TOKEN || !GITHUB_REPOSITORY) {
+    throw new Error("GITHUB_TOKEN / GITHUB_REPOSITORY manquants");
+  }
+  const res = await fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}${path}`, {
+    headers: {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "notion-pr-status-sync",
+    },
+  });
+  const text = await res.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = { message: text };
+  }
+  if (!res.ok) {
+    throw new Error(`GitHub API ${res.status} GET ${path}: ${json.message || text}`);
+  }
+  return json;
+}
+
 function extractNotionPageIdFromUrl(url) {
   const cleaned = url.split("?")[0].split("#")[0];
   const match = cleaned.match(/([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
@@ -140,7 +198,7 @@ function findNotionUrls(text) {
 }
 
 function extractTicketIds(text) {
-  const found = new Map(); // key: PREFIX-num upper → { prefix, number, raw }
+  const found = new Map();
   TICKET_ID_RE.lastIndex = 0;
   let m;
   while ((m = TICKET_ID_RE.exec(text)) !== null) {
@@ -154,34 +212,110 @@ function extractTicketIds(text) {
   return [...found.values()];
 }
 
+function textMentionsTicket(text, ticketKeys) {
+  if (!ticketKeys?.size) return false;
+  const ids = extractTicketIds(text);
+  return ids.some(t => ticketKeys.has(t.raw));
+}
+
+function collectPrNumbersFromText(text, into = new Set()) {
+  FLEX_PR_TAG_RE.lastIndex = 0;
+  for (const m of text.matchAll(FLEX_PR_TAG_RE)) {
+    const n = Number(m[1] || m[2] || m[3] || m[4]);
+    if (Number.isFinite(n)) into.add(n);
+  }
+  PR_LABEL_RE.lastIndex = 0;
+  for (const m of text.matchAll(PR_LABEL_RE)) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n)) into.add(n);
+  }
+  PR_MARKER_RE.lastIndex = 0;
+  for (const m of text.matchAll(PR_MARKER_RE)) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n)) into.add(n);
+  }
+  return into;
+}
+
+function replacePrTagsInText(text, prNumber, label) {
+  const n = String(prNumber);
+  const labelForN = new RegExp(`(?:[🔵⏹️✅📝]\\s*)?PR\\s*#${n}\\s*·\\s*(?:${PR_LABEL_STATUS})\\b`, "gi");
+  // Formes flexibles pour ce numéro uniquement
+  const flexForN = new RegExp(`#PR\\s*${n}\\b|PR\\s*#\\s*${n}\\b|#\\s*${n}\\s*PR\\b|${n}\\s*#PR\\b`, "gi");
+  let next = text.replace(labelForN, label).replace(flexForN, label);
+  if (new RegExp(`^PR\\s*#?${n}\\s*$`, "i").test(next.trim())) {
+    next = label;
+  }
+  return next;
+}
+
+function replaceAllPrTagsInText(text, prInfos) {
+  let next = text;
+  // Plus grands numéros d’abord pour éviter 5 vs 50
+  const sorted = [...prInfos].sort((a, b) => b.prNumber - a.prNumber);
+  for (const pr of sorted) {
+    next = replacePrTagsInText(next, pr.prNumber, formatPrTagLabel(pr));
+  }
+  return next;
+}
+
+function isGithubPrSectionManagedLine(text) {
+  return /\[\[vr-pr:\d+\]\]/i.test(text) || /^[a-f0-9]{7}\s*·/i.test(text.trim());
+}
+
 async function fetchPrCommitMessages() {
   if (!GITHUB_TOKEN || !GITHUB_REPOSITORY || !PR_NUMBER) return "";
-  const messages = [];
+  try {
+    const commits = await fetchAllPrCommits(PR_NUMBER);
+    return commits.map(c => c.message).join("\n");
+  } catch (err) {
+    console.warn(`⚠️  Impossible de lire les commits PR: ${err instanceof Error ? err.message : String(err)}`);
+    return "";
+  }
+}
+
+async function fetchAllPrCommits(prNumber) {
+  const out = [];
   let page = 1;
   while (page <= 5) {
-    const res = await fetch(
-      `https://api.github.com/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits?per_page=100&page=${page}`,
-      {
-        headers: {
-          Authorization: `Bearer ${GITHUB_TOKEN}`,
-          Accept: "application/vnd.github+json",
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
-      },
-    );
-    if (!res.ok) {
-      console.warn(`⚠️  Impossible de lire les commits PR (${res.status})`);
-      break;
-    }
-    const commits = await res.json();
+    const commits = await githubFetch(`/pulls/${prNumber}/commits?per_page=100&page=${page}`);
     if (!Array.isArray(commits) || commits.length === 0) break;
     for (const c of commits) {
-      if (c?.commit?.message) messages.push(c.commit.message);
+      out.push({
+        sha: c.sha,
+        message: c.commit?.message || "",
+        url: c.html_url || `https://github.com/${GITHUB_REPOSITORY}/commit/${c.sha}`,
+      });
     }
     if (commits.length < 100) break;
     page++;
   }
-  return messages.join("\n");
+  return out;
+}
+
+async function fetchPrInfo(prNumber) {
+  // PR de l’event : pas besoin d’un round-trip si c’est la même
+  if (String(prNumber) === String(PR_NUMBER) && PR_HTML_URL) {
+    const status = resolveEventPrStatus();
+    const commits = await fetchAllPrCommits(prNumber).catch(() => []);
+    return {
+      prNumber: Number(prNumber),
+      status,
+      title: PR_TITLE || `PR #${prNumber}`,
+      url: PR_HTML_URL,
+      commits,
+    };
+  }
+
+  const pr = await githubFetch(`/pulls/${prNumber}`);
+  const commits = await fetchAllPrCommits(prNumber).catch(() => []);
+  return {
+    prNumber: Number(prNumber),
+    status: statusFromGithubPr(pr),
+    title: pr.title || `PR #${prNumber}`,
+    url: pr.html_url || `https://github.com/${GITHUB_REPOSITORY}/pull/${prNumber}`,
+    commits,
+  };
 }
 
 function formatDatabaseId(raw) {
@@ -210,7 +344,6 @@ function pickPageForTicket(results, ticket, idPropertyName) {
   return match?.id ?? null;
 }
 
-/** Résout data_source_id (hardcodé ou via GET /databases). */
 async function resolveDataSource(source) {
   const databaseId = formatDatabaseId(source.databaseId);
   if (source.dataSourceId) {
@@ -246,7 +379,6 @@ function buildTicketFilters(idMeta, ticket) {
     throw new Error(`Aucune propriété ID trouvée (cherché: ${NOTION_ID_PROPERTY} / Identifiant).`);
   }
   const name = idMeta.name;
-  // Notion REST: formes possibles selon version / type (unique_id vs auto_increment_id)
   if (idMeta.type === "unique_id" || idMeta.type === "auto_increment_id") {
     return [
       { property: name, unique_id: { equals: ticket.number } },
@@ -296,7 +428,16 @@ function readTicketNumberFromPage(page, idPropertyName) {
   );
 }
 
-/** Fallback fiable : parcourt le data_source et matche le numéro ID en JS. */
+function readTicketRawFromPage(page, idPropertyName) {
+  const prop = page.properties?.[idPropertyName] || page.properties?.ID;
+  if (!prop) return null;
+  const uid = readIdPayload(prop);
+  const num = readTicketNumberFromPage(page, idPropertyName);
+  if (num == null) return null;
+  const prefix = (uid?.prefix || NOTION_ID_PREFIX || "").toUpperCase();
+  return prefix ? `${prefix}-${num}` : String(num);
+}
+
 async function findPageByScanning(dataSourceId, ticket, idPropertyName) {
   let cursor;
   let scanned = 0;
@@ -326,7 +467,6 @@ async function findPageByScanning(dataSourceId, ticket, idPropertyName) {
   return null;
 }
 
-/** Cherche le ticket dans chaque base listée ; retourne le premier hit. */
 async function findPageByUniqueId(ticket) {
   if (!NOTION_TICKET_SOURCES.length) {
     throw new Error("NOTION_TICKET_SOURCES est vide — ajoute au moins une base dans le script.");
@@ -378,6 +518,58 @@ async function findPageByUniqueId(ticket) {
   return null;
 }
 
+/** Crée PR status / PR remaining (+ options) si absents. */
+async function ensurePrSchema(dataSourceId) {
+  const ds = await notionFetch(`/data_sources/${dataSourceId}`);
+  const props = ds.properties || {};
+  const patch = {};
+
+  if (!props[PROP_PR_STATUS]) {
+    patch[PROP_PR_STATUS] = {
+      select: {
+        options: PR_STATUS_OPTIONS.map(name => ({ name })),
+      },
+    };
+  } else if (props[PROP_PR_STATUS].type === "select") {
+    const existing = new Set((props[PROP_PR_STATUS].select?.options || []).map(o => o.name));
+    const missing = PR_STATUS_OPTIONS.filter(n => !existing.has(n));
+    if (missing.length) {
+      // Notion : re-déclarer les options pour en ajouter (merge côté API)
+      const merged = [
+        ...(props[PROP_PR_STATUS].select?.options || []).map(o => ({ name: o.name, color: o.color })),
+        ...missing.map(name => ({ name })),
+      ];
+      patch[PROP_PR_STATUS] = { select: { options: merged } };
+    }
+  }
+
+  if (!props[PROP_PR_REMAINING]) {
+    patch[PROP_PR_REMAINING] = { rich_text: {} };
+  }
+
+  if (Object.keys(patch).length === 0) {
+    console.log(`🧾 Schéma OK (${PROP_PR_STATUS}, ${PROP_PR_REMAINING})`);
+    return;
+  }
+
+  await notionFetch(`/data_sources/${dataSourceId}`, {
+    method: "PATCH",
+    body: { properties: patch },
+  });
+  console.log(`🧾 Schéma mis à jour: ${Object.keys(patch).join(", ")}`);
+}
+
+async function ensurePrSchemaForAllSources() {
+  for (const source of NOTION_TICKET_SOURCES) {
+    try {
+      const { dataSourceId } = await resolveDataSource(source);
+      await ensurePrSchema(dataSourceId);
+    } catch (err) {
+      console.warn(`⚠️  ensure schema ${source.databaseId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+}
+
 function blockPlainText(block) {
   const type = block.type;
   const payload = block[type];
@@ -397,8 +589,21 @@ async function listAllChildren(blockId) {
   return blocks;
 }
 
-function richTextLine(content) {
-  // Notion limite ~2000 chars par text item
+async function walkAllBlocks(pageId) {
+  const out = [];
+  const queue = [pageId];
+  while (queue.length) {
+    const parentId = queue.shift();
+    const children = await listAllChildren(parentId);
+    for (const block of children) {
+      out.push(block);
+      if (block.has_children) queue.push(block.id);
+    }
+  }
+  return out;
+}
+
+function richTextWithOptionalLink(content) {
   const chunk = content.slice(0, 1900);
   const urlMatch = chunk.match(/https?:\/\/\S+/);
   if (!urlMatch) {
@@ -420,147 +625,201 @@ function blockRichTextPayload(block) {
   return payload;
 }
 
-/** Lignes auto « GitHub PRs » (avec lien / [[vr-pr:N]]) — ne pas les écraser ici. */
-function isGithubPrSectionLine(text) {
-  return /\[\[vr-pr:\d+\]\]/i.test(text) || /https?:\/\/(?:www\.)?github\.com\//i.test(text);
-}
-
-/**
- * Remplace dans un texte toutes les occurrences liées à prNumber
- * (#PR50, « 🔵 PR #50 · Open », ou block entier « PR50 »).
- * Les tags d’autres PR (#PR51…) sont laissés intacts.
- */
-function replacePrTagsInText(text, prNumber, label) {
-  const n = String(prNumber);
-  const labelForN = new RegExp(`(?:[🔵⏹️✅📝]\\s*)?PR\\s*#${n}\\s*·\\s*(?:${PR_LABEL_STATUS})\\b`, "gi");
-  const tagForN = new RegExp(`#PR${n}\\b`, "gi");
-  let next = text.replace(labelForN, label).replace(tagForN, label);
-  if (new RegExp(`^PR\\s*#?${n}\\s*$`, "i").test(next.trim())) {
-    next = label;
-  }
-  return next;
-}
-
-function textMentionsPr(text, prNumber) {
-  const n = String(prNumber);
-  if (new RegExp(`#PR${n}\\b`, "i").test(text)) return true;
-  if (new RegExp(`(?:[🔵⏹️✅📝]\\s*)?PR\\s*#${n}\\s*·\\s*(?:${PR_LABEL_STATUS})\\b`, "i").test(text)) {
-    return true;
-  }
-  return new RegExp(`^PR\\s*#?${n}\\s*$`, "i").test(text.trim());
-}
-
-/**
- * Remplace chaque #PRn / label déjà sync n’importe où dans le ticket
- * par « ⏹️ PR #n · Closed » (sans lien), sans changer le type de block.
- * Plusieurs tags possibles (même PR ou PR différentes) ; seule la PR
- * de l’event courant est rafraîchie. Re-sync à chaque event.
- */
-async function updatePrTaggedBlocks(pageId, prNumber, status) {
-  const label = formatPrTagLabel({ prNumber, status });
-  const queue = [pageId];
+async function updateAllPrTaggedBlocks(pageId, prInfos) {
+  const blocks = await walkAllBlocks(pageId);
   let updated = 0;
   let skipped = 0;
 
-  while (queue.length) {
-    const parentId = queue.shift();
-    const children = await listAllChildren(parentId);
-    for (const block of children) {
-      if (block.has_children) queue.push(block.id);
+  for (const block of blocks) {
+    const payload = blockRichTextPayload(block);
+    if (!payload) continue;
+    const current = blockPlainText(block);
+    if (isGithubPrSectionManagedLine(current)) continue;
+    // Ne pas toucher le titre de section
+    if (current.trim() === SECTION_TITLE) continue;
 
-      const payload = blockRichTextPayload(block);
-      if (!payload) continue;
-
-      const current = blockPlainText(block);
-      if (isGithubPrSectionLine(current)) continue;
-      if (!textMentionsPr(current, prNumber)) continue;
-
-      const next = replacePrTagsInText(current, prNumber, label);
-      if (next === current) {
-        skipped += 1;
-        continue;
-      }
-
-      const type = block.type;
-      await notionFetch(`/blocks/${block.id}`, {
-        method: "PATCH",
-        body: {
-          [type]: {
-            rich_text: [{ type: "text", text: { content: next.slice(0, 1900) } }],
-          },
-        },
-      });
-      updated += 1;
-      console.log(`🏷️  Tag PR #${prNumber} → « ${label} » (${type} ${block.id})`);
+    const next = replaceAllPrTagsInText(current, prInfos);
+    if (next === current) {
+      if (collectPrNumbersFromText(current).size) skipped += 1;
+      continue;
     }
-  }
 
-  if (!updated && !skipped) {
-    console.log(`ℹ️  Aucun tag #PR${prNumber} à remplacer dans le contenu`);
-  } else if (!updated && skipped) {
-    console.log(`ℹ️  Tag(s) PR #${prNumber} déjà à jour (${skipped})`);
-  } else {
-    console.log(`🏷️  ${updated} occurrence(s) #PR${prNumber} mise(s) à jour`);
-  }
-}
-
-async function ensureSectionAndUpsertPrLine(pageId, lineText, prNumber) {
-  const children = await listAllChildren(pageId);
-  const marker = PR_LINE_RE(prNumber);
-
-  const existing = children.find(b => {
-    if (!["paragraph", "bulleted_list_item", "to_do", "quote", "callout"].includes(b.type)) {
-      return false;
-    }
-    return marker.test(blockPlainText(b));
-  });
-
-  if (existing) {
-    const type = existing.type;
-    await notionFetch(`/blocks/${existing.id}`, {
+    await notionFetch(`/blocks/${block.id}`, {
       method: "PATCH",
       body: {
-        [type]: {
-          rich_text: richTextLine(lineText),
+        [block.type]: {
+          rich_text: [{ type: "text", text: { content: next.slice(0, 1900) } }],
         },
       },
     });
-    console.log(`✏️  Ligne PR #${prNumber} mise à jour (block ${existing.id})`);
-    return;
+    updated += 1;
   }
 
-  let hasHeading = children.some(
+  console.log(`🏷️  Tags contenu: ${updated} maj, ${skipped} inchangé(s)`);
+}
+
+async function deleteBlock(blockId) {
+  await notionFetch(`/blocks/${blockId}`, { method: "DELETE" });
+}
+
+/**
+ * Reconstruit la section « GitHub PRs » :
+ * - une puce par PR (tag + statut + titre + lien)
+ * - sous-puces = commits qui mentionnent le ticket
+ */
+async function rebuildGithubPrsSection(pageId, prInfos, ticketKeys) {
+  const children = await listAllChildren(pageId);
+  let headingIdx = children.findIndex(
     b => (b.type === "heading_2" || b.type === "heading_3") && blockPlainText(b).trim() === SECTION_TITLE,
   );
+  let afterId = null;
 
-  const toAppend = [];
-  if (!hasHeading) {
-    toAppend.push({
-      object: "block",
-      type: "heading_2",
-      heading_2: {
-        rich_text: [{ type: "text", text: { content: SECTION_TITLE } }],
+  if (headingIdx >= 0) {
+    afterId = children[headingIdx].id;
+    const toDelete = [];
+    for (let i = headingIdx + 1; i < children.length; i++) {
+      const b = children[i];
+      if (b.type === "heading_2" || b.type === "heading_3") break;
+      toDelete.push(b.id);
+    }
+    for (const id of toDelete) {
+      try {
+        await deleteBlock(id);
+      } catch (err) {
+        console.warn(`⚠️  Delete block ${id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  } else {
+    const createdHeading = await notionFetch(`/blocks/${pageId}/children`, {
+      method: "PATCH",
+      body: {
+        children: [
+          {
+            object: "block",
+            type: "heading_2",
+            heading_2: {
+              rich_text: [{ type: "text", text: { content: SECTION_TITLE } }],
+            },
+          },
+        ],
       },
     });
+    afterId = createdHeading.results?.[0]?.id || null;
   }
-  toAppend.push({
-    object: "block",
-    type: "bulleted_list_item",
-    bulleted_list_item: {
-      rich_text: richTextLine(lineText),
+
+  const sorted = [...prInfos].sort((a, b) => a.prNumber - b.prNumber);
+  for (const pr of sorted) {
+    const line = formatPrSectionLine(pr);
+    const body = {
+      children: [
+        {
+          object: "block",
+          type: "bulleted_list_item",
+          bulleted_list_item: {
+            rich_text: richTextWithOptionalLink(line),
+          },
+        },
+      ],
+    };
+    if (afterId) {
+      body.position = { type: "after_block", after_block: { id: afterId } };
+    }
+    const created = await notionFetch(`/blocks/${pageId}/children`, {
+      method: "PATCH",
+      body,
+    });
+    const prBlockId = created.results?.[0]?.id;
+    if (prBlockId) afterId = prBlockId;
+
+    const ticketCommits = (pr.commits || []).filter(c => textMentionsTicket(c.message, ticketKeys));
+    if (!prBlockId || !ticketCommits.length) continue;
+
+    await notionFetch(`/blocks/${prBlockId}/children`, {
+      method: "PATCH",
+      body: {
+        children: ticketCommits.map(c => ({
+          object: "block",
+          type: "bulleted_list_item",
+          bulleted_list_item: {
+            rich_text: richTextWithOptionalLink(formatCommitLine(c)),
+          },
+        })),
+      },
+    });
+    console.log(`📝 PR #${pr.prNumber}: ${ticketCommits.length} commit(s) ticket`);
+  }
+
+  console.log(`📚 Section « ${SECTION_TITLE} » reconstruite (${sorted.length} PR)`);
+}
+
+async function updatePageGlobalProperties(pageId, prInfos) {
+  const { status, remaining } = computeGlobalPrStatus(prInfos);
+  await notionFetch(`/pages/${pageId}`, {
+    method: "PATCH",
+    body: {
+      properties: {
+        [PROP_PR_STATUS]: { select: { name: status } },
+        [PROP_PR_REMAINING]: {
+          rich_text: [{ type: "text", text: { content: remaining } }],
+        },
+      },
     },
   });
+  console.log(`🧾 ${PROP_PR_STATUS}=${status} · ${PROP_PR_REMAINING}=${remaining}`);
+}
 
-  // Notion API 2026-03-11 : append = PATCH (POST → « Invalid request URL »)
-  await notionFetch(`/blocks/${pageId}/children`, {
-    method: "PATCH",
-    body: { children: toAppend },
-  });
-  console.log(`➕ Ligne PR #${prNumber} ajoutée sous « ${SECTION_TITLE} »`);
+async function discoverPrNumbersOnPage(pageId) {
+  const nums = new Set();
+  if (PR_NUMBER) nums.add(Number(PR_NUMBER));
+  const blocks = await walkAllBlocks(pageId);
+  for (const block of blocks) {
+    collectPrNumbersFromText(blockPlainText(block), nums);
+  }
+  return [...nums].filter(n => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
+}
+
+async function resolveTicketKeysForPage(pageId, sourceHint) {
+  const keys = new Set();
+  if (sourceHint?.startsWith("id:")) {
+    keys.add(sourceHint.slice(3));
+  }
+  try {
+    const page = await notionFetch(`/pages/${pageId}`);
+    const raw = readTicketRawFromPage(page, NOTION_ID_PROPERTY);
+    if (raw) keys.add(raw);
+  } catch (err) {
+    console.warn(`⚠️  Lecture page ${pageId}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return keys;
+}
+
+async function syncPage(pageId, source) {
+  console.log(`🔗 Page ${pageId} (via ${source}) — refresh complet`);
+
+  const ticketKeys = await resolveTicketKeysForPage(pageId, source);
+  console.log(`🎫 Tickets page: ${[...ticketKeys].join(", ") || "(aucun)"}`);
+
+  const prNumbers = await discoverPrNumbersOnPage(pageId);
+  console.log(`🔍 PR découvertes: ${prNumbers.map(n => `#${n}`).join(", ") || "(aucune)"}`);
+
+  const prInfos = [];
+  for (const n of prNumbers) {
+    try {
+      const info = await fetchPrInfo(n);
+      prInfos.push(info);
+      console.log(`📦 PR #${n} → ${info.status} · ${info.title}`);
+    } catch (err) {
+      console.warn(`⚠️  Fetch PR #${n}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  await updateAllPrTaggedBlocks(pageId, prInfos);
+  await rebuildGithubPrsSection(pageId, prInfos, ticketKeys);
+  await updatePageGlobalProperties(pageId, prInfos);
 }
 
 async function resolveTargetPages(haystack) {
-  const targets = new Map(); // pageId → source
+  const targets = new Map();
 
   for (const hit of findNotionUrls(haystack)) {
     targets.set(hit.pageId, hit.source);
@@ -584,7 +843,6 @@ async function resolveTargetPages(haystack) {
     }
   }
 
-  // Si on a détecté des IDs mais aucune page résolue → échec explicite (évite un faux vert)
   if (tickets.length > 0 && targets.size === 0) {
     const detail = lookupErrors.length ? lookupErrors.join(" | ") : "aucun résultat Notion";
     throw new Error(`Impossible de résoudre le(s) ticket(s) Notion (${detail})`);
@@ -598,10 +856,12 @@ async function main() {
   if (!PR_HTML_URL) fail("PR_HTML_URL manquant.");
   if (!PR_NUMBER) fail("PR_NUMBER manquant.");
 
+  await ensurePrSchemaForAllSources();
+
   const commitMessages = await fetchPrCommitMessages();
   const haystack = [PR_TITLE, PR_BODY, PR_HEAD_REF, commitMessages].filter(Boolean).join("\n");
 
-  console.log(`📌 PR #${PR_NUMBER} — ${PR_HTML_URL}`);
+  console.log(`📌 Event PR #${PR_NUMBER} — ${PR_HTML_URL}`);
   console.log(`🌿 Branche: ${PR_HEAD_REF || "(n/a)"}`);
 
   const targets = await resolveTargetPages(haystack);
@@ -612,28 +872,8 @@ async function main() {
     process.exit(0);
   }
 
-  const status = resolvePrStatus();
-  const line = formatPrLine({ prNumber: PR_NUMBER, status, url: PR_HTML_URL });
-
   for (const [pageId, source] of targets) {
-    console.log(`🔗 Page ${pageId} (via ${source}) → ${status}`);
-    await updatePrTaggedBlocks(pageId, PR_NUMBER, status);
-    await ensureSectionAndUpsertPrLine(pageId, line, PR_NUMBER);
-    // Colonnes tableau (dernière PR gagnante si plusieurs)
-    try {
-      await notionFetch(`/pages/${pageId}`, {
-        method: "PATCH",
-        body: {
-          properties: {
-            PR: { url: PR_HTML_URL },
-            "PR status": { select: { name: status } },
-          },
-        },
-      });
-      console.log(`🧾 Propriétés PR / PR status → ${status}`);
-    } catch (err) {
-      console.warn(`⚠️  Update propriétés: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    await syncPage(pageId, source);
   }
 
   console.log(`✅ Sync terminée (${targets.size} page(s) Notion)`);
