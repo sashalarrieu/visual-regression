@@ -10,6 +10,7 @@
  * - découvrir toutes les PR liées (tags flexibles + lignes « PR #N » + PR courante)
  * - fetch GitHub de chaque PR → tags contenu, section « GitHub PRs » (+ commits ticket),
  *   colonnes « PR status » / « PR done » (terminées/total)
+ * Résolution pages : ID/URL côté GitHub + pages Notion qui taguent déjà cette PR (sens inverse)
  *
  * Tags acceptés : #PR50, #PR 50, PR #50, PR#50, #50PR, #50 PR, 50#PR, 50 #PR
  * → hors section : « 🟢 PR #50 » (icône = état, sans texte) + lien sur « PR #50 »
@@ -53,8 +54,11 @@ const FLEX_PR_TAG_RE = /#PR\s*(\d+)\b|PR\s*#\s*(\d+)\b|#\s*(\d+)\s*PR\b|(\d+)\s*
 const PR_LABEL_RE = /(?:[🟢🆑💟📝]\s*)?PR\s*#(\d+)(?:\s*·\s*(?:Open|Closed|Merged|Draft))?/gi;
 /** Commit sous une PR dans la section. */
 const SECTION_COMMIT_LINE_RE = /^[a-f0-9]{7}\s*·/i;
-/** Ligne section complète : « 🟢 PR #50 · Open · titre » (≥ 2 ·) — pas le tag court « 🟢 PR #50 ». */
-const SECTION_PR_FULL_LINE_RE = /^(?:[🟢🆑💟📝]\s*)?(?:PR\s*#|#PR)\s*\d+\s*·\s*(?:Open|Closed|Merged|Draft)\s*·/i;
+/**
+ * Ligne section complète : « 🟢 PR #50 · Open · titre/date » (≥ 2 séparateurs · après le n°)
+ * — pas le tag court contenu « 🟢 PR #50 ».
+ */
+const SECTION_PR_FULL_LINE_RE = /(?:PR\s*#|#PR)\s*\d+\s*·\s*(?:Open|Closed|Merged|Draft)\s*·\s*\S/i;
 
 const SECTION_TITLE = "GitHub PRs";
 const PROP_PR_STATUS = "PR status";
@@ -140,6 +144,16 @@ function richTextToPlain(parts) {
   return (parts || []).map(p => p?.text?.content || "").join("");
 }
 
+/** Normalise pour comparer Notion ↔ attendu (espaces, variation selectors emoji). */
+function normalizeSectionPlain(text) {
+  return String(text || "")
+    .normalize("NFC")
+    .replace(/\uFE0F/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** rich_text section : « 🟢 PR #50 · Open · titre · 10/12/26 - 10h23 » (lien sur « PR #50 »). */
 function richTextPrSectionLine({ prNumber, status, title, url, updatedAt }) {
   const titlePart = safePrTitle(title);
@@ -190,7 +204,13 @@ function buildExpectedSectionEntries(prInfos, ticketKeys) {
 }
 
 function sectionFingerprint(entries) {
-  return entries.map(e => `${e.linePlain}\n${e.commits.map(c => c.linePlain).join("\n")}`).join("\n---\n");
+  return entries
+    .map(e => {
+      const line = normalizeSectionPlain(e.linePlain);
+      const commits = (e.commits || []).map(c => normalizeSectionPlain(c.linePlain)).join("\n");
+      return `${line}\n${commits}`;
+    })
+    .join("\n---\n");
 }
 
 /**
@@ -369,7 +389,7 @@ function replaceAllPrTagsInText(text, prInfos) {
 }
 
 function isGithubPrSectionManagedLine(text) {
-  const t = text.trim();
+  const t = normalizeSectionPlain(text);
   return SECTION_COMMIT_LINE_RE.test(t) || SECTION_PR_FULL_LINE_RE.test(t);
 }
 
@@ -811,7 +831,7 @@ async function syncCommitLines(prBlockId, expectedCommits, currentCommits) {
     const exp = expectedCommits[i];
     const cur = currentCommits[i];
     if (exp && cur) {
-      if (cur.linePlain !== exp.linePlain) {
+      if (normalizeSectionPlain(cur.linePlain) !== normalizeSectionPlain(exp.linePlain)) {
         await notionFetch(`/blocks/${cur.id}`, {
           method: "PATCH",
           body: { bulleted_list_item: { rich_text: exp.lineRich } },
@@ -923,7 +943,7 @@ async function rebuildGithubPrsSection(pageId, prInfos, ticketKeys) {
     const cur = byPr.get(entry.prNumber);
     if (cur) {
       byPr.delete(entry.prNumber);
-      if (cur.linePlain !== entry.linePlain) {
+      if (normalizeSectionPlain(cur.linePlain) !== normalizeSectionPlain(entry.linePlain)) {
         await notionFetch(`/blocks/${cur.id}`, {
           method: "PATCH",
           body: { bulleted_list_item: { rich_text: entry.lineRich } },
@@ -983,14 +1003,53 @@ async function updatePageGlobalProperties(pageId, prInfos) {
   console.log(`🧾 ${PROP_PR_STATUS}=${status} · ${PROP_PR_DONE}=${done}`);
 }
 
-async function discoverPrNumbersOnPage(pageId) {
+async function collectPrNumbersFromPageContent(pageId) {
   const nums = new Set();
-  if (PR_NUMBER) nums.add(Number(PR_NUMBER));
   const blocks = await walkAllBlocks(pageId);
   for (const block of blocks) {
     collectPrNumbersFromText(blockPlainText(block), nums);
   }
+  return nums;
+}
+
+async function discoverPrNumbersOnPage(pageId) {
+  const nums = await collectPrNumbersFromPageContent(pageId);
+  if (PR_NUMBER) nums.add(Number(PR_NUMBER));
   return [...nums].filter(n => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
+}
+
+/**
+ * Sens inverse : tickets Notion qui mentionnent déjà cette PR (tag / section),
+ * même si l’event GitHub ne cite que d’autres tickets (ex. close #50 → VR-1 + VR-2).
+ */
+async function findPagesReferencingPr(prNumber) {
+  const n = Number(prNumber);
+  if (!Number.isFinite(n) || n <= 0) return [];
+
+  const found = [];
+  for (const rawId of NOTION_DATA_SOURCE_IDS) {
+    const dataSourceId = formatNotionId(rawId);
+    let cursor;
+    let scanned = 0;
+    do {
+      const body = { page_size: 50 };
+      if (cursor) body.start_cursor = cursor;
+      const data = await queryTicketInDataSource(dataSourceId, body);
+      for (const page of data.results || []) {
+        if (page.archived) continue;
+        scanned += 1;
+        try {
+          const nums = await collectPrNumbersFromPageContent(page.id);
+          if (nums.has(n)) found.push(page.id);
+        } catch (err) {
+          console.warn(`⚠️  Scan reverse page ${page.id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      cursor = data.has_more ? data.next_cursor : null;
+    } while (cursor);
+    console.log(`🔎 Reverse PR #${n}: ${scanned} page(s) scannée(s), ${found.length} lien(s)`);
+  }
+  return found;
 }
 
 async function resolveTicketKeysForPage(pageId, sourceHint) {
@@ -1080,10 +1139,17 @@ async function main() {
   console.log(`🌿 Branche: ${PR_HEAD_REF || "(n/a)"}`);
 
   const targets = await resolveTargetPages(haystack);
+
+  // Pages qui taguent / listent déjà cette PR (ex. VR-1 a #50 alors que l’event ne cite que VR-2)
+  for (const pageId of await findPagesReferencingPr(PR_NUMBER)) {
+    if (!targets.has(pageId)) {
+      targets.set(pageId, `pr-ref:#${PR_NUMBER}`);
+      console.log(`🔗 Page liée via mention PR #${PR_NUMBER} → ${pageId}`);
+    }
+  }
+
   if (targets.size === 0) {
-    console.log(
-      "ℹ️  Aucun ticket Notion trouvé (ni URL Notion, ni ID type PREFIX-123 dans titre/description/branche/commits) — skip.",
-    );
+    console.log("ℹ️  Aucun ticket Notion trouvé (ni ID/URL côté Git, ni mention de cette PR dans Notion) — skip.");
     process.exit(0);
   }
 
