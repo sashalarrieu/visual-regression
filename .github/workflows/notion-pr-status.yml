@@ -5,7 +5,7 @@
 #
 # Détection ticket : URL Notion ou ID (ex. VR-3) dans titre/body/branche/commits.
 # Secret : NOTION_API_VR
-# Bases : NOTION_TICKET_SOURCES dans sync-notion-pr-status.mjs
+# Data sources : NOTION_DATA_SOURCE_IDS dans sync-notion-pr-status.mjs
 name: Notion PR status
 
 on:
