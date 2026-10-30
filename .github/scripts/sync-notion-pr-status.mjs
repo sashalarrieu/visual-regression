@@ -12,8 +12,9 @@
  *   colonnes « PR status » / « PR remaining »
  *
  * Tags acceptés : #PR50, #PR 50, PR #50, PR#50, #50PR, #50 PR, 50#PR, 50 #PR
- * → hors section : « 🔵 PR #50 · Open » (sans lien)
- * → section « GitHub PRs » : « 🔵 PR #50 · Open · titre » avec « PR #50 » = lien GitHub
+ * → hors section : « 🔵 PR #50 · Open » avec « PR #50 » = lien GitHub si URL connue
+ * → section « GitHub PRs » : « 🔵 PR #50 · Open · titre · JJ/MM/AA - HHhMM »
+ *   commits : « sha · message · JJ/MM/AA - HHhMM » (sha + PR #N = liens)
  *
  * Secrets GitHub : NOTION_API_VR
  * Bases : NOTION_TICKET_SOURCES ci-dessous
@@ -93,6 +94,29 @@ function formatPrTagLabel({ prNumber, status }) {
   return `${statusEmoji(status)} PR #${prNumber} · ${status}`;
 }
 
+/** « 10/12/26 - 10h23 » (Europe/Paris). */
+function formatFrDateTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("fr-FR", {
+      timeZone: "Europe/Paris",
+      day: "2-digit",
+      month: "2-digit",
+      year: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+      .formatToParts(d)
+      .filter(p => p.type !== "literal")
+      .map(p => [p.type, p.value]),
+  );
+  if (!parts.day || !parts.month || !parts.year || parts.hour == null || parts.minute == null) return "";
+  return `${parts.day}/${parts.month}/${parts.year} - ${parts.hour}h${parts.minute}`;
+}
+
 function safePrTitle(title) {
   return String(title || "")
     .replace(/\s+/g, " ")
@@ -108,32 +132,55 @@ function safeCommitMessage(message) {
     .slice(0, 100);
 }
 
-/** rich_text section : « 🔵 PR #50 · Open · titre » avec lien sur « PR #50 ». */
-function richTextPrSectionLine({ prNumber, status, title, url }) {
-  const titlePart = safePrTitle(title);
-  const suffix = ` · ${status}${titlePart ? ` · ${titlePart}` : ""}`;
-  const prLabel = url
-    ? { type: "text", text: { content: `PR #${prNumber}`, link: { url } } }
-    : { type: "text", text: { content: `PR #${prNumber}` } };
-  return [
-    { type: "text", text: { content: `${statusEmoji(status)} ` } },
-    prLabel,
-    { type: "text", text: { content: suffix } },
-  ];
+function textSeg(content, url) {
+  if (!content) return null;
+  if (url) return { type: "text", text: { content, link: { url } } };
+  return { type: "text", text: { content } };
 }
 
-/** rich_text commit : sha court cliquable + message (sans URL affichée). */
-function richTextCommitLine({ sha, message, url }) {
+/** rich_text section : « 🔵 PR #50 · Open · titre · 10/12/26 - 10h23 » (lien sur « PR #50 »). */
+function richTextPrSectionLine({ prNumber, status, title, url, updatedAt }) {
+  const titlePart = safePrTitle(title);
+  const when = formatFrDateTime(updatedAt);
+  let suffix = ` · ${status}`;
+  if (titlePart) suffix += ` · ${titlePart}`;
+  if (when) suffix += ` · ${when}`;
+  return [textSeg(`${statusEmoji(status)} `), textSeg(`PR #${prNumber}`, url), textSeg(suffix)].filter(Boolean);
+}
+
+/** rich_text commit : sha cliquable + message + datetime. */
+function richTextCommitLine({ sha, message, url, date }) {
   const short = String(sha || "").slice(0, 7);
   const msg = safeCommitMessage(message);
-  const parts = [
-    {
-      type: "text",
-      text: url ? { content: short, link: { url } } : { content: short },
-    },
-  ];
-  if (msg) parts.push({ type: "text", text: { content: ` · ${msg}` } });
+  const when = formatFrDateTime(date);
+  const parts = [textSeg(short, url)].filter(Boolean);
+  let rest = "";
+  if (msg) rest += ` · ${msg}`;
+  if (when) rest += ` · ${when}`;
+  if (rest) parts.push(textSeg(rest));
   return parts;
+}
+
+/**
+ * rich_text contenu : conserve le texte, pose un lien sur chaque « PR #N » connu.
+ * Tronque à ~1900 caractères (limite Notion).
+ */
+function richTextContentWithPrLinks(text, prInfos) {
+  const chunk = text.slice(0, 1900);
+  const byNumber = new Map(prInfos.map(p => [Number(p.prNumber), p]));
+  const re = /PR\s*#(\d+)/gi;
+  const parts = [];
+  let last = 0;
+  for (const m of chunk.matchAll(re)) {
+    const n = Number(m[1]);
+    const pr = byNumber.get(n);
+    const start = m.index ?? 0;
+    if (start > last) parts.push(textSeg(chunk.slice(last, start)));
+    parts.push(textSeg(`PR #${n}`, pr?.url || null));
+    last = start + m[0].length;
+  }
+  if (last < chunk.length) parts.push(textSeg(chunk.slice(last)));
+  return parts.filter(Boolean);
 }
 
 function computeGlobalPrStatus(prs) {
@@ -320,6 +367,7 @@ async function fetchAllPrCommits(prNumber) {
         sha: c.sha,
         message: c.commit?.message || "",
         url: c.html_url || `https://github.com/${GITHUB_REPOSITORY}/commit/${c.sha}`,
+        date: c.commit?.committer?.date || c.commit?.author?.date || null,
       });
     }
     if (commits.length < 100) break;
@@ -329,26 +377,22 @@ async function fetchAllPrCommits(prNumber) {
 }
 
 async function fetchPrInfo(prNumber) {
-  // PR de l’event : pas besoin d’un round-trip si c’est la même
-  if (String(prNumber) === String(PR_NUMBER) && PR_HTML_URL) {
-    const status = resolveEventPrStatus();
-    const commits = await fetchAllPrCommits(prNumber).catch(() => []);
-    return {
-      prNumber: Number(prNumber),
-      status,
-      title: PR_TITLE || `PR #${prNumber}`,
-      url: PR_HTML_URL,
-      commits,
-    };
+  const isEvent = String(prNumber) === String(PR_NUMBER);
+  let pr = null;
+  try {
+    pr = await githubFetch(`/pulls/${prNumber}`);
+  } catch (err) {
+    if (!isEvent || !PR_HTML_URL) throw err;
+    console.warn(`⚠️  Fetch PR #${prNumber}: ${err instanceof Error ? err.message : String(err)} — fallback event`);
   }
 
-  const pr = await githubFetch(`/pulls/${prNumber}`);
   const commits = await fetchAllPrCommits(prNumber).catch(() => []);
   return {
     prNumber: Number(prNumber),
-    status: statusFromGithubPr(pr),
-    title: pr.title || `PR #${prNumber}`,
-    url: pr.html_url || `https://github.com/${GITHUB_REPOSITORY}/pull/${prNumber}`,
+    status: pr ? statusFromGithubPr(pr) : resolveEventPrStatus(),
+    title: pr?.title || (isEvent ? PR_TITLE : "") || `PR #${prNumber}`,
+    url: pr?.html_url || (isEvent ? PR_HTML_URL : "") || `https://github.com/${GITHUB_REPOSITORY}/pull/${prNumber}`,
+    updatedAt: pr?.updated_at || null,
     commits,
   };
 }
@@ -658,16 +702,24 @@ async function updateAllPrTaggedBlocks(pageId, prInfos) {
     if (current.trim() === SECTION_TITLE) continue;
 
     const next = replaceAllPrTagsInText(current, prInfos);
-    if (next === current) {
-      if (collectPrNumbersFromText(current).size) skipped += 1;
-      continue;
+    const prNums = collectPrNumbersFromText(next);
+    // Texte inchangé et aucun tag PR → rien à faire
+    if (next === current && prNums.size === 0) continue;
+    // Texte inchangé mais labels déjà sync → on rafraîchit quand même les liens
+    if (next === current && prNums.size > 0) {
+      const alreadyLinked = (payload.rich_text || []).some(t => t?.href || t?.text?.link?.url);
+      const canLink = [...prNums].some(n => prInfos.find(p => p.prNumber === n)?.url);
+      if (alreadyLinked || !canLink) {
+        skipped += 1;
+        continue;
+      }
     }
 
     await notionFetch(`/blocks/${block.id}`, {
       method: "PATCH",
       body: {
         [block.type]: {
-          rich_text: [{ type: "text", text: { content: next.slice(0, 1900) } }],
+          rich_text: richTextContentWithPrLinks(next, prInfos),
         },
       },
     });
