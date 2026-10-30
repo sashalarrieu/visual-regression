@@ -1,0 +1,48 @@
+# POC : refresh complet du ticket Notion à chaque event PR.
+# - tags flexibles (#PR50, PR #50, …) → label statut
+# - section « GitHub PRs » (titre + lien + commits liés au ticket)
+# - colonnes « PR status » / « PR done » (schéma auto si absent)
+#
+# Détection ticket : URL Notion ou ID (ex. VR-3) dans titre/body/branche/commits.
+# Secret : NOTION_API_VR
+# Data sources : NOTION_DATA_SOURCE_IDS dans sync-notion-pr-status.mjs
+name: Notion PR status
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - edited
+      - synchronize
+      - ready_for_review
+      - converted_to_draft
+      - closed
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync PR status into Notion ticket content
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_API_VR }}
+          NOTION_ID_PROPERTY: ID
+          NOTION_ID_PREFIX: VR
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HTML_URL: ${{ github.event.pull_request.html_url }}
+          PR_STATE: ${{ github.event.pull_request.state }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+        run: node .github/scripts/sync-notion-pr-status.mjs
