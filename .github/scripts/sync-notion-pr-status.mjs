@@ -9,7 +9,7 @@
  * Sur chaque ticket résolu (refresh complet) :
  * - découvrir toutes les PR liées (tags flexibles + lignes « PR #N » + PR courante)
  * - fetch GitHub de chaque PR → tags contenu, section « GitHub PRs » (+ commits ticket),
- *   colonnes « PR status » / « PR remaining »
+ *   colonnes « PR status » / « PR done » (terminées/total)
  *
  * Tags acceptés : #PR50, #PR 50, PR #50, PR#50, #50PR, #50 PR, 50#PR, 50 #PR
  * → hors section : « 🔵 PR #50 · Open » avec « PR #50 » = lien GitHub si URL connue
@@ -61,8 +61,11 @@ const SECTION_PR_FULL_LINE_RE = /^(?:[🔵⏹️✅📝]\s*)?(?:PR\s*#|#PR)\s*\d
 
 const SECTION_TITLE = "GitHub PRs";
 const PROP_PR_STATUS = "PR status";
-const PROP_PR_REMAINING = "PR remaining";
-const PR_STATUS_OPTIONS = ["None", "All merged", "All draft", "All open", "All closed", "Remaining"];
+const PROP_PR_DONE = "PR done";
+/** Ancien nom — on continue de le remplir si la colonne existe encore. */
+const PROP_PR_REMAINING_LEGACY = "PR remaining";
+const PR_STATUS_OPTIONS = ["None", "All merged", "All draft", "All open", "All closed", "All done", "Remaining"];
+const DONE_PR_STATUSES = new Set(["Merged", "Closed"]);
 
 function fail(message, code = 1) {
   console.error(`❌ ${message}`);
@@ -185,17 +188,19 @@ function richTextContentWithPrLinks(text, prInfos) {
 
 function computeGlobalPrStatus(prs) {
   const total = prs.length;
-  if (total === 0) return { status: "None", remaining: "0/0" };
+  if (total === 0) return { status: "None", done: "0/0" };
 
-  const remainingCount = prs.filter(p => p.status === "Open" || p.status === "Draft").length;
-  const remaining = `${remainingCount}/${total}`;
+  const doneCount = prs.filter(p => DONE_PR_STATUSES.has(p.status)).length;
+  const done = `${doneCount}/${total}`;
 
   const all = status => prs.every(p => p.status === status);
-  if (all("Merged")) return { status: "All merged", remaining };
-  if (all("Draft")) return { status: "All draft", remaining };
-  if (all("Open")) return { status: "All open", remaining };
-  if (all("Closed")) return { status: "All closed", remaining };
-  return { status: "Remaining", remaining };
+  if (all("Merged")) return { status: "All merged", done };
+  if (all("Closed")) return { status: "All closed", done };
+  // Tout terminé (Merged et/ou Closed mélangés)
+  if (prs.every(p => DONE_PR_STATUSES.has(p.status))) return { status: "All done", done };
+  if (all("Draft")) return { status: "All draft", done };
+  if (all("Open")) return { status: "All open", done };
+  return { status: "Remaining", done };
 }
 
 function notionHeaders(extra = {}) {
@@ -597,7 +602,7 @@ async function findPageByUniqueId(ticket) {
   return null;
 }
 
-/** Crée PR status / PR remaining (+ options) si absents. */
+/** Crée PR status / PR done (+ options) si absents. */
 async function ensurePrSchema(dataSourceId) {
   const ds = await notionFetch(`/data_sources/${dataSourceId}`);
   const props = ds.properties || {};
@@ -622,12 +627,12 @@ async function ensurePrSchema(dataSourceId) {
     }
   }
 
-  if (!props[PROP_PR_REMAINING]) {
-    patch[PROP_PR_REMAINING] = { rich_text: {} };
+  if (!props[PROP_PR_DONE]) {
+    patch[PROP_PR_DONE] = { rich_text: {} };
   }
 
   if (Object.keys(patch).length === 0) {
-    console.log(`🧾 Schéma OK (${PROP_PR_STATUS}, ${PROP_PR_REMAINING})`);
+    console.log(`🧾 Schéma OK (${PROP_PR_STATUS}, ${PROP_PR_DONE})`);
     return;
   }
 
@@ -823,19 +828,28 @@ async function rebuildGithubPrsSection(pageId, prInfos, ticketKeys) {
 }
 
 async function updatePageGlobalProperties(pageId, prInfos) {
-  const { status, remaining } = computeGlobalPrStatus(prInfos);
+  const { status, done } = computeGlobalPrStatus(prInfos);
+  const richDone = { rich_text: [{ type: "text", text: { content: done } }] };
+  const properties = {
+    [PROP_PR_STATUS]: { select: { name: status } },
+    [PROP_PR_DONE]: richDone,
+  };
+
+  // Compat : ancienne colonne « PR remaining » si encore présente
+  try {
+    const page = await notionFetch(`/pages/${pageId}`);
+    if (page.properties?.[PROP_PR_REMAINING_LEGACY]) {
+      properties[PROP_PR_REMAINING_LEGACY] = richDone;
+    }
+  } catch (err) {
+    console.warn(`⚠️  Lecture props page ${pageId}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   await notionFetch(`/pages/${pageId}`, {
     method: "PATCH",
-    body: {
-      properties: {
-        [PROP_PR_STATUS]: { select: { name: status } },
-        [PROP_PR_REMAINING]: {
-          rich_text: [{ type: "text", text: { content: remaining } }],
-        },
-      },
-    },
+    body: { properties },
   });
-  console.log(`🧾 ${PROP_PR_STATUS}=${status} · ${PROP_PR_REMAINING}=${remaining}`);
+  console.log(`🧾 ${PROP_PR_STATUS}=${status} · ${PROP_PR_DONE}=${done}`);
 }
 
 async function discoverPrNumbersOnPage(pageId) {
