@@ -1,19 +1,11 @@
-# POC : l’état des PRs GitHub est écrit *dans le contenu* du ticket Notion
-# (section « GitHub PRs », plusieurs PR possibles par ticket).
+# POC : refresh complet du ticket Notion à chaque event PR.
+# - tags flexibles (#PR50, PR #50, …) → label statut
+# - section « GitHub PRs » (titre + lien + commits liés au ticket)
+# - colonnes « PR status » / « PR remaining » (schéma auto si absent)
 #
-# Détection du ticket :
-# - URL Notion dans la description de la PR, OU
-# - ID ticket (ex. TAS-12) dans le titre, la description, la branche ou les commits
-#   → lookup sur la propriété Notion « ID » (unique_id)
-#
-# Secret GitHub requis :
-# - NOTION_API_VR  PAT Notion (Développeur)
-#
-# Bases tickets : tableau NOTION_TICKET_SOURCES dans
-# .github/scripts/sync-notion-pr-status.mjs (databaseId + dataSourceId).
-#
-# Optionnel (env ci-dessous) :
-# - NOTION_ID_PREFIX=TAS  pour n’accepter que TAS-123 (ignorer d’autres PREFIX-n)
+# Détection ticket : URL Notion ou ID (ex. VR-3) dans titre/body/branche/commits.
+# Secret : NOTION_API_VR
+# Bases : NOTION_TICKET_SOURCES dans sync-notion-pr-status.mjs
 name: Notion PR status
 
 on:
