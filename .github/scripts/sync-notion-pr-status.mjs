@@ -53,8 +53,11 @@ const FLEX_PR_TAG_RE = /#PR\s*(\d+)\b|PR\s*#\s*(\d+)\b|#\s*(\d+)\s*PR\b|(\d+)\s*
 const PR_LABEL_RE = /(?:[🟢🆑💟📝]\s*)?PR\s*#(\d+)(?:\s*·\s*(?:Open|Closed|Merged|Draft))?/gi;
 /** Commit sous une PR dans la section. */
 const SECTION_COMMIT_LINE_RE = /^[a-f0-9]{7}\s*·/i;
-/** Ligne section complète : « 🟢 PR #50 · Open · titre » (≥ 2 ·) — pas le tag court « 🟢 PR #50 ». */
-const SECTION_PR_FULL_LINE_RE = /^(?:[🟢🆑💟📝]\s*)?(?:PR\s*#|#PR)\s*\d+\s*·\s*(?:Open|Closed|Merged|Draft)\s*·/i;
+/**
+ * Ligne section complète : « 🟢 PR #50 · Open · titre/date » (≥ 2 séparateurs · après le n°)
+ * — pas le tag court contenu « 🟢 PR #50 ».
+ */
+const SECTION_PR_FULL_LINE_RE = /(?:PR\s*#|#PR)\s*\d+\s*·\s*(?:Open|Closed|Merged|Draft)\s*·\s*\S/i;
 
 const SECTION_TITLE = "GitHub PRs";
 const PROP_PR_STATUS = "PR status";
@@ -385,7 +388,7 @@ function replaceAllPrTagsInText(text, prInfos) {
 }
 
 function isGithubPrSectionManagedLine(text) {
-  const t = text.trim();
+  const t = normalizeSectionPlain(text);
   return SECTION_COMMIT_LINE_RE.test(t) || SECTION_PR_FULL_LINE_RE.test(t);
 }
 
