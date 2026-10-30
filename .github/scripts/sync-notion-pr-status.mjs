@@ -140,6 +140,16 @@ function richTextToPlain(parts) {
   return (parts || []).map(p => p?.text?.content || "").join("");
 }
 
+/** Normalise pour comparer Notion ↔ attendu (espaces, variation selectors emoji). */
+function normalizeSectionPlain(text) {
+  return String(text || "")
+    .normalize("NFC")
+    .replace(/\uFE0F/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** rich_text section : « 🟢 PR #50 · Open · titre · 10/12/26 - 10h23 » (lien sur « PR #50 »). */
 function richTextPrSectionLine({ prNumber, status, title, url, updatedAt }) {
   const titlePart = safePrTitle(title);
@@ -190,7 +200,13 @@ function buildExpectedSectionEntries(prInfos, ticketKeys) {
 }
 
 function sectionFingerprint(entries) {
-  return entries.map(e => `${e.linePlain}\n${e.commits.map(c => c.linePlain).join("\n")}`).join("\n---\n");
+  return entries
+    .map(e => {
+      const line = normalizeSectionPlain(e.linePlain);
+      const commits = (e.commits || []).map(c => normalizeSectionPlain(c.linePlain)).join("\n");
+      return `${line}\n${commits}`;
+    })
+    .join("\n---\n");
 }
 
 /**
@@ -811,7 +827,7 @@ async function syncCommitLines(prBlockId, expectedCommits, currentCommits) {
     const exp = expectedCommits[i];
     const cur = currentCommits[i];
     if (exp && cur) {
-      if (cur.linePlain !== exp.linePlain) {
+      if (normalizeSectionPlain(cur.linePlain) !== normalizeSectionPlain(exp.linePlain)) {
         await notionFetch(`/blocks/${cur.id}`, {
           method: "PATCH",
           body: { bulleted_list_item: { rich_text: exp.lineRich } },
@@ -923,7 +939,7 @@ async function rebuildGithubPrsSection(pageId, prInfos, ticketKeys) {
     const cur = byPr.get(entry.prNumber);
     if (cur) {
       byPr.delete(entry.prNumber);
-      if (cur.linePlain !== entry.linePlain) {
+      if (normalizeSectionPlain(cur.linePlain) !== normalizeSectionPlain(entry.linePlain)) {
         await notionFetch(`/blocks/${cur.id}`, {
           method: "PATCH",
           body: { bulleted_list_item: { rich_text: entry.lineRich } },
