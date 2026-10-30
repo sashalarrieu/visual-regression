@@ -239,14 +239,20 @@ function collectPrNumbersFromText(text, into = new Set()) {
 
 function replacePrTagsInText(text, prNumber, label) {
   const n = String(prNumber);
-  const labelForN = new RegExp(`(?:[🔵⏹️✅📝]\\s*)?PR\\s*#${n}\\s*·\\s*(?:${PR_LABEL_STATUS})\\b`, "gi");
-  // Formes flexibles pour ce numéro uniquement
+  // Placeholder : évite que « PR #50 » dans un label déjà sync soit re-matché par le flex
+  const ph = `\u0000PR${n}\u0000`;
+  // Accepte aussi les labels doublonnés (🔵 🔵 PR #n · Open · Open)
+  const labelForN = new RegExp(
+    `(?:[🔵⏹️✅📝]\\s*)*PR\\s*#${n}\\s*·\\s*(?:${PR_LABEL_STATUS})(?:\\s*·\\s*(?:${PR_LABEL_STATUS}))*`,
+    "gi",
+  );
   const flexForN = new RegExp(`#PR\\s*${n}\\b|PR\\s*#\\s*${n}\\b|#\\s*${n}\\s*PR\\b|${n}\\s*#PR\\b`, "gi");
-  let next = text.replace(labelForN, label).replace(flexForN, label);
+  let next = text.replace(labelForN, ph);
+  next = next.replace(flexForN, ph);
   if (new RegExp(`^PR\\s*#?${n}\\s*$`, "i").test(next.trim())) {
-    next = label;
+    next = ph;
   }
-  return next;
+  return next.split(ph).join(label);
 }
 
 function replaceAllPrTagsInText(text, prInfos) {
