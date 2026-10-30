@@ -12,24 +12,19 @@
  *   colonnes « PR status » / « PR done » (terminées/total)
  *
  * Tags acceptés : #PR50, #PR 50, PR #50, PR#50, #50PR, #50 PR, 50#PR, 50 #PR
- * → hors section : « 🔵 PR #50 » (icône = état, sans texte) + lien sur « PR #50 »
- * → section « GitHub PRs » : « 🔵 PR #50 · Open · titre · JJ/MM/AA - HHhMM »
+ * → hors section : « 🟢 PR #50 » (icône = état, sans texte) + lien sur « PR #50 »
+ * → section « GitHub PRs » : « 🟢 PR #50 · Open · titre · JJ/MM/AA - HHhMM »
  *   commits : « sha · message · JJ/MM/AA - HHhMM » (sha + PR #N = liens)
  *
  * Secrets GitHub : NOTION_API_VR
- * Bases : NOTION_TICKET_SOURCES ci-dessous
+ * Data sources : NOTION_DATA_SOURCE_IDS ci-dessous
  *
  * Env optionnelles :
  * - NOTION_ID_PROPERTY, NOTION_ID_PREFIX, NOTION_VERSION
  */
 
-const NOTION_TICKET_SOURCES = [
-  {
-    // https://app.notion.com/p/4080420568508059b9b9c055311377cc
-    databaseId: "40804205-6850-8059-b9b9-c055311377cc",
-    dataSourceId: "40804205-6850-806d-b489-000b8b09ba97",
-  },
-];
+// https://app.notion.com/p/4080420568508059b9b9c055311377cc
+const NOTION_DATA_SOURCE_IDS = ["40804205-6850-806d-b489-000b8b09ba97"];
 
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const NOTION_ID_PROPERTY = process.env.NOTION_ID_PROPERTY || "ID";
@@ -54,11 +49,11 @@ const PR_LABEL_STATUS = "Open|Closed|Merged|Draft";
 /** Formes flexibles de tag PR (capture le numéro). */
 const FLEX_PR_TAG_RE = /#PR\s*(\d+)\b|PR\s*#\s*(\d+)\b|#\s*(\d+)\s*PR\b|(\d+)\s*#PR\b/gi;
 /** Label sync contenu (avec ou sans ancien « · Open ») ou section. */
-const PR_LABEL_RE = /(?:[🔵⏹️✅📝]\s*)?PR\s*#(\d+)(?:\s*·\s*(?:Open|Closed|Merged|Draft))?/gi;
+const PR_LABEL_RE = /(?:[🟢🆑💟📝]\s*)?PR\s*#(\d+)(?:\s*·\s*(?:Open|Closed|Merged|Draft))?/gi;
 /** Commit sous une PR dans la section. */
 const SECTION_COMMIT_LINE_RE = /^[a-f0-9]{7}\s*·/i;
-/** Ligne section complète : « 🔵 PR #50 · Open · titre » (≥ 2 ·) — pas le tag court « 🔵 PR #50 ». */
-const SECTION_PR_FULL_LINE_RE = /^(?:[🔵⏹️✅📝]\s*)?(?:PR\s*#|#PR)\s*\d+\s*·\s*(?:Open|Closed|Merged|Draft)\s*·/i;
+/** Ligne section complète : « 🟢 PR #50 · Open · titre » (≥ 2 ·) — pas le tag court « 🟢 PR #50 ». */
+const SECTION_PR_FULL_LINE_RE = /^(?:[🟢🆑💟📝]\s*)?(?:PR\s*#|#PR)\s*\d+\s*·\s*(?:Open|Closed|Merged|Draft)\s*·/i;
 
 const SECTION_TITLE = "GitHub PRs";
 const PROP_PR_STATUS = "PR status";
@@ -86,10 +81,10 @@ function statusFromGithubPr(pr) {
 }
 
 function statusEmoji(status) {
-  if (status === "Merged") return "✅";
-  if (status === "Closed") return "⏹️";
+  if (status === "Merged") return "💟";
+  if (status === "Closed") return "🆑";
   if (status === "Draft") return "📝";
-  return "🔵";
+  return "🟢";
 }
 
 function formatPrTagLabel({ prNumber, status }) {
@@ -140,7 +135,7 @@ function textSeg(content, url) {
   return { type: "text", text: { content } };
 }
 
-/** rich_text section : « 🔵 PR #50 · Open · titre · 10/12/26 - 10h23 » (lien sur « PR #50 »). */
+/** rich_text section : « 🟢 PR #50 · Open · titre · 10/12/26 - 10h23 » (lien sur « PR #50 »). */
 function richTextPrSectionLine({ prNumber, status, title, url, updatedAt }) {
   const titlePart = safePrTitle(title);
   const when = formatFrDateTime(updatedAt);
@@ -314,9 +309,9 @@ function replacePrTagsInText(text, prNumber, label) {
   const n = String(prNumber);
   // Placeholder : évite que « PR #50 » dans un label déjà sync soit re-matché par le flex
   const ph = `\u0000PR${n}\u0000`;
-  // Labels sync : « 🔵 PR #n » ou ancien « 🔵 PR #n · Open » (doublons inclus)
+  // Labels sync : « 🟢 PR #n » ou ancien « 🟢 PR #n · Open » (doublons inclus)
   const labelForN = new RegExp(
-    `(?:[🔵⏹️✅📝]\\s*)*PR\\s*#${n}(?:\\s*·\\s*(?:${PR_LABEL_STATUS})(?:\\s*·\\s*(?:${PR_LABEL_STATUS}))*)?\\b`,
+    `(?:[🟢🆑💟📝]\\s*)*PR\\s*#${n}(?:\\s*·\\s*(?:${PR_LABEL_STATUS})(?:\\s*·\\s*(?:${PR_LABEL_STATUS}))*)?\\b`,
     "gi",
   );
   const flexForN = new RegExp(`#PR\\s*${n}\\b|PR\\s*#\\s*${n}\\b|#\\s*${n}\\s*PR\\b|${n}\\s*#PR\\b`, "gi");
@@ -395,12 +390,12 @@ async function fetchPrInfo(prNumber) {
   };
 }
 
-function formatDatabaseId(raw) {
-  const dbId = String(raw).replace(/-/g, "");
-  if (dbId.length !== 32) {
+function formatNotionId(raw) {
+  const id = String(raw).replace(/-/g, "");
+  if (id.length !== 32) {
     throw new Error(`UUID Notion invalide: "${raw}" (attendu 32 hex)`);
   }
-  return `${dbId.slice(0, 8)}-${dbId.slice(8, 12)}-${dbId.slice(12, 16)}-${dbId.slice(16, 20)}-${dbId.slice(20)}`;
+  return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
 }
 
 function readIdPayload(prop) {
@@ -419,23 +414,6 @@ function pickPageForTicket(results, ticket, idPropertyName) {
     return !pagePrefix || pagePrefix === ticket.prefix;
   });
   return match?.id ?? null;
-}
-
-async function resolveDataSource(source) {
-  const databaseId = formatDatabaseId(source.databaseId);
-  if (source.dataSourceId) {
-    const dataSourceId = formatDatabaseId(source.dataSourceId);
-    console.log(`📚 data_source=${dataSourceId} (hardcodé, base ${databaseId})`);
-    return { dataSourceId, databaseId };
-  }
-  const db = await notionFetch(`/databases/${databaseId}`);
-  const sources = db.data_sources || [];
-  if (sources.length > 0) {
-    console.log(`📚 data_source=${sources[0].id} (base ${databaseId})`);
-    return { dataSourceId: sources[0].id, databaseId };
-  }
-  console.log(`📚 Pas de data_sources[] — fallback ${databaseId}`);
-  return { dataSourceId: databaseId, databaseId };
 }
 
 function findIdPropertyMeta(properties) {
@@ -545,14 +523,15 @@ async function findPageByScanning(dataSourceId, ticket, idPropertyName) {
 }
 
 async function findPageByUniqueId(ticket) {
-  if (!NOTION_TICKET_SOURCES.length) {
-    throw new Error("NOTION_TICKET_SOURCES est vide — ajoute au moins une base dans le script.");
+  if (!NOTION_DATA_SOURCE_IDS.length) {
+    throw new Error("NOTION_DATA_SOURCE_IDS est vide — ajoute au moins un data_source_id dans le script.");
   }
 
   let lastError = null;
-  for (const source of NOTION_TICKET_SOURCES) {
+  for (const rawId of NOTION_DATA_SOURCE_IDS) {
+    const dataSourceId = formatNotionId(rawId);
     try {
-      const { dataSourceId } = await resolveDataSource(source);
+      console.log(`📚 data_source=${dataSourceId}`);
       let properties = {};
       try {
         const ds = await notionFetch(`/data_sources/${dataSourceId}`);
@@ -587,7 +566,7 @@ async function findPageByUniqueId(ticket) {
       if (scannedId) return scannedId;
     } catch (err) {
       lastError = err;
-      console.warn(`⚠️  Source ${source.databaseId}: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`⚠️  data_source ${dataSourceId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -637,12 +616,12 @@ async function ensurePrSchema(dataSourceId) {
 }
 
 async function ensurePrSchemaForAllSources() {
-  for (const source of NOTION_TICKET_SOURCES) {
+  for (const rawId of NOTION_DATA_SOURCE_IDS) {
+    const dataSourceId = formatNotionId(rawId);
     try {
-      const { dataSourceId } = await resolveDataSource(source);
       await ensurePrSchema(dataSourceId);
     } catch (err) {
-      console.warn(`⚠️  ensure schema ${source.databaseId}: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`⚠️  ensure schema ${dataSourceId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }
@@ -944,7 +923,7 @@ async function main() {
     await syncPage(pageId, source);
   }
 
-  console.log(`✅ Sync terminée (${targets.size} page(s) Notion)`);
+  console.log(`💟 Sync terminée (${targets.size} page(s) Notion)`);
 }
 
 main().catch(err => {
