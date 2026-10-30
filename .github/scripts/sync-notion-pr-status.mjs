@@ -15,6 +15,7 @@
  * → hors section : « 🟢 PR #50 » (icône = état, sans texte) + lien sur « PR #50 »
  * → section « GitHub PRs » : « 🟢 PR #50 · Open · titre · JJ/MM/AA - HHhMM »
  *   commits : « sha · message · JJ/MM/AA - HHhMM » (sha + PR #N = liens)
+ *   skip si fingerprint identique (dates incluses), sinon upsert ligne par ligne
  *
  * Secrets GitHub : NOTION_API_VR
  * Data sources : NOTION_DATA_SOURCE_IDS ci-dessous
@@ -135,6 +136,10 @@ function textSeg(content, url) {
   return { type: "text", text: { content } };
 }
 
+function richTextToPlain(parts) {
+  return (parts || []).map(p => p?.text?.content || "").join("");
+}
+
 /** rich_text section : « 🟢 PR #50 · Open · titre · 10/12/26 - 10h23 » (lien sur « PR #50 »). */
 function richTextPrSectionLine({ prNumber, status, title, url, updatedAt }) {
   const titlePart = safePrTitle(title);
@@ -156,6 +161,36 @@ function richTextCommitLine({ sha, message, url, date }) {
   if (when) rest += ` · ${when}`;
   if (rest) parts.push(textSeg(rest));
   return parts;
+}
+
+function extractPrNumberFromSectionLine(text) {
+  const m = String(text || "").match(/(?:PR\s*#|#PR)\s*(\d+)/i);
+  return m ? Number(m[1]) : null;
+}
+
+function buildExpectedSectionEntries(prInfos, ticketKeys) {
+  return [...prInfos]
+    .sort((a, b) => a.prNumber - b.prNumber)
+    .map(pr => {
+      const lineRich = richTextPrSectionLine(pr);
+      const commits = (pr.commits || []).filter(c => textMentionsTicket(c.message, ticketKeys));
+      return {
+        prNumber: pr.prNumber,
+        linePlain: richTextToPlain(lineRich),
+        lineRich,
+        commits: commits.map(c => {
+          const lineRichCommit = richTextCommitLine(c);
+          return {
+            linePlain: richTextToPlain(lineRichCommit),
+            lineRich: lineRichCommit,
+          };
+        }),
+      };
+    });
+}
+
+function sectionFingerprint(entries) {
+  return entries.map(e => `${e.linePlain}\n${e.commits.map(c => c.linePlain).join("\n")}`).join("\n---\n");
 }
 
 /**
@@ -710,97 +745,230 @@ async function deleteBlock(blockId) {
   await notionFetch(`/blocks/${blockId}`, { method: "DELETE" });
 }
 
-/**
- * Reconstruit la section « GitHub PRs » :
- * - une puce par PR (« PR #N » = lien, statut, titre) — tags manuels absorbés / lignes upsert
- * - sous-puces = commits qui mentionnent le ticket (sha = lien)
- */
-async function rebuildGithubPrsSection(pageId, prInfos, ticketKeys) {
-  const children = await listAllChildren(pageId);
-  let headingIdx = children.findIndex(
+async function ensureGithubPrsHeading(pageId, children) {
+  const headingIdx = children.findIndex(
     b => (b.type === "heading_2" || b.type === "heading_3") && blockPlainText(b).trim() === SECTION_TITLE,
   );
-  let afterId = null;
-
   if (headingIdx >= 0) {
-    afterId = children[headingIdx].id;
-    const toDelete = [];
-    for (let i = headingIdx + 1; i < children.length; i++) {
-      const b = children[i];
-      if (b.type === "heading_2" || b.type === "heading_3") break;
-      toDelete.push(b.id);
-    }
-    for (const id of toDelete) {
-      try {
-        await deleteBlock(id);
-      } catch (err) {
-        console.warn(`⚠️  Delete block ${id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-  } else {
-    const createdHeading = await notionFetch(`/blocks/${pageId}/children`, {
-      method: "PATCH",
-      body: {
-        children: [
-          {
-            object: "block",
-            type: "heading_2",
-            heading_2: {
-              rich_text: [{ type: "text", text: { content: SECTION_TITLE } }],
-            },
-          },
-        ],
-      },
-    });
-    afterId = createdHeading.results?.[0]?.id || null;
+    return { headingId: children[headingIdx].id, headingIdx, children };
   }
-
-  const sorted = [...prInfos].sort((a, b) => a.prNumber - b.prNumber);
-  for (const pr of sorted) {
-    const body = {
+  const createdHeading = await notionFetch(`/blocks/${pageId}/children`, {
+    method: "PATCH",
+    body: {
       children: [
         {
           object: "block",
-          type: "bulleted_list_item",
-          bulleted_list_item: {
-            rich_text: richTextPrSectionLine(pr),
+          type: "heading_2",
+          heading_2: {
+            rich_text: [{ type: "text", text: { content: SECTION_TITLE } }],
           },
         },
       ],
-    };
-    if (afterId) {
-      body.position = { type: "after_block", after_block: { id: afterId } };
+    },
+  });
+  const headingId = createdHeading.results?.[0]?.id || null;
+  const refreshed = await listAllChildren(pageId);
+  const idx = refreshed.findIndex(b => b.id === headingId);
+  return { headingId, headingIdx: idx, children: refreshed };
+}
+
+function collectSectionTopLevelBlocks(children, headingIdx) {
+  const out = [];
+  if (headingIdx < 0) return out;
+  for (let i = headingIdx + 1; i < children.length; i++) {
+    const b = children[i];
+    if (b.type === "heading_2" || b.type === "heading_3") break;
+    out.push(b);
+  }
+  return out;
+}
+
+async function readCurrentSectionEntries(sectionBlocks) {
+  const entries = [];
+  for (const block of sectionBlocks) {
+    const linePlain = blockPlainText(block);
+    const prNumber = extractPrNumberFromSectionLine(linePlain);
+    let commitBlocks = [];
+    if (block.has_children) {
+      commitBlocks = await listAllChildren(block.id);
     }
-    const created = await notionFetch(`/blocks/${pageId}/children`, {
-      method: "PATCH",
-      body,
+    entries.push({
+      id: block.id,
+      prNumber,
+      linePlain,
+      commits: commitBlocks.map(c => ({ id: c.id, linePlain: blockPlainText(c) })),
     });
-    const prBlockId = created.results?.[0]?.id;
-    if (prBlockId) afterId = prBlockId;
+  }
+  return entries;
+}
 
-    const ticketCommits = (pr.commits || []).filter(c => textMentionsTicket(c.message, ticketKeys));
-    if (!prBlockId || !ticketCommits.length) continue;
+async function syncCommitLines(prBlockId, expectedCommits, currentCommits) {
+  let updated = 0;
+  let afterId = null;
+  const max = Math.max(expectedCommits.length, currentCommits.length);
 
+  for (let i = 0; i < max; i++) {
+    const exp = expectedCommits[i];
+    const cur = currentCommits[i];
+    if (exp && cur) {
+      if (cur.linePlain !== exp.linePlain) {
+        await notionFetch(`/blocks/${cur.id}`, {
+          method: "PATCH",
+          body: { bulleted_list_item: { rich_text: exp.lineRich } },
+        });
+        updated += 1;
+      }
+      afterId = cur.id;
+    } else if (exp && !cur) {
+      const body = {
+        children: [
+          {
+            object: "block",
+            type: "bulleted_list_item",
+            bulleted_list_item: { rich_text: exp.lineRich },
+          },
+        ],
+      };
+      if (afterId) body.position = { type: "after_block", after_block: { id: afterId } };
+      const created = await notionFetch(`/blocks/${prBlockId}/children`, { method: "PATCH", body });
+      afterId = created.results?.[0]?.id || afterId;
+      updated += 1;
+    } else if (!exp && cur) {
+      try {
+        await deleteBlock(cur.id);
+        updated += 1;
+      } catch (err) {
+        console.warn(`⚠️  Delete commit ${cur.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+  return updated;
+}
+
+async function appendPrSectionBlock(pageId, afterId, entry) {
+  const body = {
+    children: [
+      {
+        object: "block",
+        type: "bulleted_list_item",
+        bulleted_list_item: { rich_text: entry.lineRich },
+      },
+    ],
+  };
+  if (afterId) body.position = { type: "after_block", after_block: { id: afterId } };
+  const created = await notionFetch(`/blocks/${pageId}/children`, { method: "PATCH", body });
+  const prBlockId = created.results?.[0]?.id || null;
+  if (prBlockId && entry.commits.length) {
     await notionFetch(`/blocks/${prBlockId}/children`, {
       method: "PATCH",
       body: {
-        children: ticketCommits.map(c => ({
+        children: entry.commits.map(c => ({
           object: "block",
           type: "bulleted_list_item",
-          bulleted_list_item: {
-            rich_text: richTextCommitLine(c),
-          },
+          bulleted_list_item: { rich_text: c.lineRich },
         })),
       },
     });
-    console.log(`📝 PR #${pr.prNumber}: ${ticketCommits.length} commit(s) ticket`);
+  }
+  return prBlockId;
+}
+
+/**
+ * Section « GitHub PRs » : skip si fingerprint identique (texte + dates),
+ * sinon upsert ligne par ligne (PR + commits).
+ */
+async function rebuildGithubPrsSection(pageId, prInfos, ticketKeys) {
+  const expected = buildExpectedSectionEntries(prInfos, ticketKeys);
+  const expectedFp = sectionFingerprint(expected);
+
+  let children = await listAllChildren(pageId);
+  const ensured = await ensureGithubPrsHeading(pageId, children);
+  const headingId = ensured.headingId;
+  children = ensured.children;
+  const headingIdx = ensured.headingIdx;
+
+  if (!headingId || headingIdx < 0) {
+    console.warn(`⚠️  Impossible de créer/trouver le heading « ${SECTION_TITLE} »`);
+    return;
   }
 
-  console.log(`📚 Section « ${SECTION_TITLE} » reconstruite (${sorted.length} PR)`);
+  const sectionBlocks = collectSectionTopLevelBlocks(children, headingIdx);
+  const current = await readCurrentSectionEntries(sectionBlocks);
+  const currentFp = sectionFingerprint(
+    current.map(c => ({
+      linePlain: c.linePlain,
+      commits: c.commits.map(x => ({ linePlain: x.linePlain })),
+    })),
+  );
+
+  if (currentFp === expectedFp && expected.length === current.length) {
+    console.log(`📚 Section « ${SECTION_TITLE} » inchangée (${expected.length} PR) — skip`);
+    return;
+  }
+
+  const byPr = new Map();
+  const orphans = [];
+  for (const cur of current) {
+    if (cur.prNumber != null && Number.isFinite(cur.prNumber) && !byPr.has(cur.prNumber)) {
+      byPr.set(cur.prNumber, cur);
+    } else {
+      orphans.push(cur);
+    }
+  }
+
+  let afterId = headingId;
+  let touched = 0;
+
+  for (const entry of expected) {
+    const cur = byPr.get(entry.prNumber);
+    if (cur) {
+      byPr.delete(entry.prNumber);
+      if (cur.linePlain !== entry.linePlain) {
+        await notionFetch(`/blocks/${cur.id}`, {
+          method: "PATCH",
+          body: { bulleted_list_item: { rich_text: entry.lineRich } },
+        });
+        touched += 1;
+      }
+      const commitTouched = await syncCommitLines(cur.id, entry.commits, cur.commits);
+      touched += commitTouched;
+      afterId = cur.id;
+    } else {
+      const createdId = await appendPrSectionBlock(pageId, afterId, entry);
+      if (createdId) afterId = createdId;
+      touched += 1;
+      if (entry.commits.length) {
+        console.log(`📝 PR #${entry.prNumber}: ${entry.commits.length} commit(s) ticket`);
+      }
+    }
+  }
+
+  for (const leftover of [...byPr.values(), ...orphans]) {
+    try {
+      await deleteBlock(leftover.id);
+      touched += 1;
+    } catch (err) {
+      console.warn(`⚠️  Delete block ${leftover.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  console.log(`📚 Section « ${SECTION_TITLE} » sync ligne à ligne (${expected.length} PR, ${touched} écriture(s))`);
 }
 
 async function updatePageGlobalProperties(pageId, prInfos) {
   const { status, done } = computeGlobalPrStatus(prInfos);
+  try {
+    const page = await notionFetch(`/pages/${pageId}`);
+    const curStatus = page.properties?.[PROP_PR_STATUS]?.select?.name || "";
+    const curDone = (page.properties?.[PROP_PR_DONE]?.rich_text || []).map(t => t.plain_text || "").join("");
+    if (curStatus === status && curDone === done) {
+      console.log(`🧾 ${PROP_PR_STATUS}/${PROP_PR_DONE} inchangés (${status} · ${done}) — skip`);
+      return;
+    }
+  } catch (err) {
+    console.warn(`⚠️  Lecture props: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   await notionFetch(`/pages/${pageId}`, {
     method: "PATCH",
     body: {
