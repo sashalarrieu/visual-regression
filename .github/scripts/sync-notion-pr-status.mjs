@@ -7,12 +7,13 @@
  * 2. ID ticket (ex. VR-3) dans : titre PR, description, branche, messages de commit
  *
  * Sur chaque ticket résolu (refresh complet) :
- * - découvrir toutes les PR liées (tags flexibles + section [[vr-pr:N]] + PR courante)
+ * - découvrir toutes les PR liées (tags flexibles + lignes « PR #N » + PR courante)
  * - fetch GitHub de chaque PR → tags contenu, section « GitHub PRs » (+ commits ticket),
  *   colonnes « PR status » / « PR remaining »
  *
  * Tags acceptés : #PR50, #PR 50, PR #50, PR#50, #50PR, #50 PR, 50#PR, 50 #PR
- * → remplacés par « 🔵 PR #50 · Open » (sans lien)
+ * → hors section : « 🔵 PR #50 · Open » (sans lien)
+ * → section « GitHub PRs » : « 🔵 PR #50 · Open · titre » avec « PR #50 » = lien GitHub
  *
  * Secrets GitHub : NOTION_API_VR
  * Bases : NOTION_TICKET_SOURCES ci-dessous
@@ -48,12 +49,14 @@ const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY || "";
 
 const NOTION_URL_RE = /https?:\/\/(?:[a-z0-9-]+\.)*(?:notion\.so|notion\.site|notion\.com)\/[^\s)>\]"']+/gi;
 const TICKET_ID_RE = /\b([A-Za-z][A-Za-z0-9]{0,15})-(\d+)\b/g;
-const PR_LINE_RE = n => new RegExp(`\\[\\[vr-pr:${n}\\]\\]`);
-const PR_MARKER_RE = /\[\[vr-pr:(\d+)\]\]/gi;
 const PR_LABEL_STATUS = "Open|Closed|Merged|Draft";
 /** Formes flexibles de tag PR (capture le numéro). */
 const FLEX_PR_TAG_RE = /#PR\s*(\d+)\b|PR\s*#\s*(\d+)\b|#\s*(\d+)\s*PR\b|(\d+)\s*#PR\b/gi;
 const PR_LABEL_RE = /(?:[🔵⏹️✅📝]\s*)?PR\s*#(\d+)\s*·\s*(?:Open|Closed|Merged|Draft)\b/gi;
+/** Commit sous une PR dans la section. */
+const SECTION_COMMIT_LINE_RE = /^[a-f0-9]{7}\s*·/i;
+/** Ligne section complète : « 🔵 PR #50 · Open · titre » (≥ 2 ·) — pas le tag court « 🔵 PR #50 · Open ». */
+const SECTION_PR_FULL_LINE_RE = /^(?:[🔵⏹️✅📝]\s*)?(?:PR\s*#|#PR)\s*\d+\s*·\s*(?:Open|Closed|Merged|Draft)\s*·/i;
 
 const SECTION_TITLE = "GitHub PRs";
 const PROP_PR_STATUS = "PR status";
@@ -90,23 +93,47 @@ function formatPrTagLabel({ prNumber, status }) {
   return `${statusEmoji(status)} PR #${prNumber} · ${status}`;
 }
 
-function formatPrSectionLine({ prNumber, status, title, url }) {
-  const safeTitle = String(title || "")
+function safePrTitle(title) {
+  return String(title || "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 120);
-  const titlePart = safeTitle ? ` · ${safeTitle}` : "";
-  return `${statusEmoji(status)} #PR${prNumber} · ${status}${titlePart} · ${url} [[vr-pr:${prNumber}]]`;
 }
 
-function formatCommitLine({ sha, message, url }) {
-  const short = String(sha || "").slice(0, 7);
-  const msg = String(message || "")
+function safeCommitMessage(message) {
+  return String(message || "")
     .split("\n")[0]
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 100);
-  return `${short} · ${msg} · ${url}`;
+}
+
+/** rich_text section : « 🔵 PR #50 · Open · titre » avec lien sur « PR #50 ». */
+function richTextPrSectionLine({ prNumber, status, title, url }) {
+  const titlePart = safePrTitle(title);
+  const suffix = ` · ${status}${titlePart ? ` · ${titlePart}` : ""}`;
+  const prLabel = url
+    ? { type: "text", text: { content: `PR #${prNumber}`, link: { url } } }
+    : { type: "text", text: { content: `PR #${prNumber}` } };
+  return [
+    { type: "text", text: { content: `${statusEmoji(status)} ` } },
+    prLabel,
+    { type: "text", text: { content: suffix } },
+  ];
+}
+
+/** rich_text commit : sha court cliquable + message (sans URL affichée). */
+function richTextCommitLine({ sha, message, url }) {
+  const short = String(sha || "").slice(0, 7);
+  const msg = safeCommitMessage(message);
+  const parts = [
+    {
+      type: "text",
+      text: url ? { content: short, link: { url } } : { content: short },
+    },
+  ];
+  if (msg) parts.push({ type: "text", text: { content: ` · ${msg}` } });
+  return parts;
 }
 
 function computeGlobalPrStatus(prs) {
@@ -229,8 +256,9 @@ function collectPrNumbersFromText(text, into = new Set()) {
     const n = Number(m[1]);
     if (Number.isFinite(n)) into.add(n);
   }
-  PR_MARKER_RE.lastIndex = 0;
-  for (const m of text.matchAll(PR_MARKER_RE)) {
+  // Ancien marqueur [[vr-pr:N]] encore présent sur des pages déjà sync
+  const legacyMarker = /\[\[vr-pr:(\d+)\]\]/gi;
+  for (const m of text.matchAll(legacyMarker)) {
     const n = Number(m[1]);
     if (Number.isFinite(n)) into.add(n);
   }
@@ -266,7 +294,8 @@ function replaceAllPrTagsInText(text, prInfos) {
 }
 
 function isGithubPrSectionManagedLine(text) {
-  return /\[\[vr-pr:\d+\]\]/i.test(text) || /^[a-f0-9]{7}\s*·/i.test(text.trim());
+  const t = text.trim();
+  return SECTION_COMMIT_LINE_RE.test(t) || SECTION_PR_FULL_LINE_RE.test(t) || /\[\[vr-pr:\d+\]\]/i.test(t);
 }
 
 async function fetchPrCommitMessages() {
@@ -609,22 +638,6 @@ async function walkAllBlocks(pageId) {
   return out;
 }
 
-function richTextWithOptionalLink(content) {
-  const chunk = content.slice(0, 1900);
-  const urlMatch = chunk.match(/https?:\/\/\S+/);
-  if (!urlMatch) {
-    return [{ type: "text", text: { content: chunk } }];
-  }
-  const url = urlMatch[0].replace(/\s*\[\[vr-pr:.*$/, "").trim();
-  const before = chunk.slice(0, urlMatch.index);
-  const after = chunk.slice(urlMatch.index + urlMatch[0].length);
-  const parts = [];
-  if (before) parts.push({ type: "text", text: { content: before } });
-  parts.push({ type: "text", text: { content: url, link: { url } } });
-  if (after) parts.push({ type: "text", text: { content: after } });
-  return parts;
-}
-
 function blockRichTextPayload(block) {
   const payload = block?.[block.type];
   if (!payload || !Array.isArray(payload.rich_text)) return null;
@@ -670,8 +683,8 @@ async function deleteBlock(blockId) {
 
 /**
  * Reconstruit la section « GitHub PRs » :
- * - une puce par PR (tag + statut + titre + lien)
- * - sous-puces = commits qui mentionnent le ticket
+ * - une puce par PR (« PR #N » = lien, statut, titre) — tags manuels absorbés / lignes upsert
+ * - sous-puces = commits qui mentionnent le ticket (sha = lien)
  */
 async function rebuildGithubPrsSection(pageId, prInfos, ticketKeys) {
   const children = await listAllChildren(pageId);
@@ -715,14 +728,13 @@ async function rebuildGithubPrsSection(pageId, prInfos, ticketKeys) {
 
   const sorted = [...prInfos].sort((a, b) => a.prNumber - b.prNumber);
   for (const pr of sorted) {
-    const line = formatPrSectionLine(pr);
     const body = {
       children: [
         {
           object: "block",
           type: "bulleted_list_item",
           bulleted_list_item: {
-            rich_text: richTextWithOptionalLink(line),
+            rich_text: richTextPrSectionLine(pr),
           },
         },
       ],
@@ -747,7 +759,7 @@ async function rebuildGithubPrsSection(pageId, prInfos, ticketKeys) {
           object: "block",
           type: "bulleted_list_item",
           bulleted_list_item: {
-            rich_text: richTextWithOptionalLink(formatCommitLine(c)),
+            rich_text: richTextCommitLine(c),
           },
         })),
       },
